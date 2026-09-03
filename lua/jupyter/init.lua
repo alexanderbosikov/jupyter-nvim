@@ -41,7 +41,13 @@ local augroup
 
 ---@param opts? jupyter.Config
 function M.setup(opts)
-    M.config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
+    opts = opts or {}
+    M.config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts)
+    -- keys заменяется целиком, а не сливается: частичное переопределение иначе молча
+    -- оставило бы дефолты на остальные действия, а они могут конфликтовать с чужими мапами.
+    if opts.keys ~= nil then
+        M.config.keys = opts.keys
+    end
     augroup = vim.api.nvim_create_augroup("jupyter.nvim", { clear = true })
 
     require("jupyter.commands").setup(M)

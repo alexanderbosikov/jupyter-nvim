@@ -187,3 +187,28 @@ describe("шаг 3 целиком", function()
         end
     end)
 end)
+
+describe("конфиг", function()
+    after_each(function()
+        jupyter.setup({})
+    end)
+
+    it("keys заменяется целиком, а не сливается с дефолтами", function()
+        jupyter.setup({ keys = { run_cell = "<leader>nc" } })
+
+        assert.same({ run_cell = "<leader>nc" }, jupyter.config.keys)
+    end)
+
+    it("keys = false выключает мапы совсем", function()
+        jupyter.setup({ keys = false })
+
+        assert.is_false(jupyter.config.keys)
+    end)
+
+    it("остальные опции по-прежнему сливаются", function()
+        jupyter.setup({ output = { size = 30 } })
+
+        assert.equals(30, jupyter.config.output.size)
+        assert.equals("bottom", jupyter.config.output.position, "не заданное берётся из дефолтов")
+    end)
+end)
