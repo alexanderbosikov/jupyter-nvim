@@ -7,16 +7,24 @@ Notebook-workflow для nvim: ячейки в тексте, ядро в отд�
 
 ## Состояние
 
-Шаги 1 и 2 из `ARCHITECTURE.md` §10 сделаны: сайдкар работает целиком, без nvim.
-`rpc`, `router`, `stream`, `outdir`, `kernel`, `mime`, `frames`, CLI. 85 тестов, из них 23 против
-живого `ipykernel`.
+Шаги 1–2 из `ARCHITECTURE.md` §10 сделаны целиком: сайдкар работает без nvim.
+Шаг 3 наполовину: есть `sidecar`, `cells`, `kernel`; осталось `exec` и `ui/output`.
 
-Дальше — шаг 3: Lua-минимум (`sidecar`, `kernel`, `cells`, `exec`, `ui/output`).
+Дальше — первый момент, когда `%%sql` даёт текст в буфере.
 
 ## Тесты
 
 Зависимости не ставятся — берётся venv `jupyter-utils`:
 
+Сайдкар — pytest, зависимости берутся из venv `jupyter-utils`, ставить ничего не нужно:
+
 ```sh
 cd sidecar && PYTHONPATH=. ~/work/jupyter-utils/.venv/bin/python -m pytest -q
+```
+
+Lua — plenary в headless nvim (часть тестов поднимает настоящий сайдкар):
+
+```sh
+./tests/run.sh                       # всё
+./tests/run.sh tests/cells_spec.lua  # один файл
 ```
