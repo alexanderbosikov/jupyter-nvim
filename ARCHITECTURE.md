@@ -188,7 +188,7 @@ FIFO выводов нет нигде — ни в Lua, ни в Python. Имен�
 | `store.lua` | состояние вывода по буферу: `cell_id → {runs[]}`, лимит истории, чтение `.jupyter-out` при открытии файла | `get(buf,cell_id)`, `history`, `last` | |
 | `ui/common.lua` ✔ | сантехника: scratch-буфер, `vim.bo`/`vim.wo`, **actions→keymaps** через langmapper-врапперы | `create_buf`, `apply_keys(actions, keys)` | ни одной захардкоженной клавиши |
 | `ui/output.lua` ✔ | drawer: вывод focused-ячейки, скролл, поиск, янк, `actions` | `open`, `close`, `focus(cell_id)`, `get_actions()` | |
-| `ui/table.lua` | постраничный просмотр parquet через `table.page`, выравнивание колонок, `actions` (`H/L/[[/]]/R/q`) | `open(path)`, `get_actions()` | не читает parquet сам |
+| `ui/table.lua` ✔ | постраничный просмотр parquet через `table.page`, выравнивание колонок, `actions` (`H/L/[[/]]/R/q`) | `open(path)`, `get_actions()` | не читает parquet сам |
 | `ui/status.lua` | однострочный virt_text под ячейкой: `⏳ выполняется` / `✓ 12.3 с · 1240 строк` / `✗ ValueError` | `set(cell_id, state)` | |
 | `images.lua` | позиция + передача пути в image.nvim | `show(cell_id, path)`, `clear` | своего рендера нет |
 | `commands.lua` ✔ | `:Jupyter*`, `<Plug>`-мапы | | |
@@ -322,7 +322,7 @@ ipywidgets, itables, интерактивный plotly, `tqdm.notebook`; экс�
 **Сайдкар — headless pytest против настоящего `ipykernel`**, без nvim. Это и есть причина выбора JSON-lines
 (§1). Из тест-листа §10 идеи автоматизируется большинство:
 
-Состояние на 03.09.2026: **88 тестов, 23 против живого ядра и 3 сквозных через процесс, полный прогон ~20 с.**
+Состояние на 03.09.2026: **91 тест, 25 против живого ядра и 4 сквозных через процесс, полный прогон ~24 с.**
 
 | проверка | как | статус |
 |---|---|---|
@@ -370,9 +370,9 @@ ipywidgets, itables, интерактивный plotly, `tqdm.notebook`; экс�
 **Флаки — не шум по умолчанию.** Полезное правило по итогу: тест с живым ядром, падающий 1 раз на 5,
 сначала считается багом кода и только потом — багом теста. Из пяти случаев выше четыре были кодом.
 
-**Lua — plenary/busted в headless nvim**, `tests/run.sh`. Состояние: **81 тест** —
-`output_spec` 20, `cells_spec` 18, `exec_spec` 15, `sidecar_codec_spec` 9, `integration_spec` 7,
-`sidecar_live_spec` 6, `kernel_spec` 6. Вместе с сайдкаром — 169.
+**Lua — plenary/busted в headless nvim**, `tests/run.sh`. Состояние: **114 тестов** —
+`integration_spec` 24, `output_spec` 24, `cells_spec` 19, `exec_spec` 16, `table_spec` 10,
+`sidecar_codec_spec` 9, `sidecar_live_spec` 6, `kernel_spec` 6. Вместе с сайдкаром — 205.
 
 `integration_spec` — сквозной: настоящий файл в буфере, настоящее ядро, вывод в drawer'е.
 То есть «`%%sql` даёт текст в буфере» проверяется автоматически, без человека.
@@ -405,7 +405,10 @@ langmapper в русской раскладке, внешняя правка ф�
    значит можно сразу показывать историю прогонов. Так в шаг 3 втянется вся сложность шага 5 и он
    перестанет быть «увидеть `%%sql` в буфере сегодня». Пока — только сфокусированная ячейка,
    привязка по номерам строк, без id в тексте.
-4. **`ui/table`** на `table.page` — вместо `molten_table.lua`. Таймер и `filereadable` не переезжают.
+4. ~~**`ui/table`** на `table.page`.~~ **Сделано 03.09.2026.** Отдельная вкладка, `H`/`L`
+   страницы, `[[`/`]]` края, `R` обновить, `q` закрыть — UX перенесён из `molten_table.lua`,
+   но таймер с `filereadable` не переехал: страницу присылает сайдкар ответом. Выравнивание
+   колонок считает Lua через `strdisplaywidth` — по байтам кириллица разъезжается.
 5. **`cellid` + `marks` + `store`** — стабильные id, история прогонов, чтение `.jupyter-out` при открытии.
 6. **`ui/status`, `images`, `health`, `commands`.**
 7. Дальше по факту использования: cell mode (§8 идеи), textobjects, фичи из §13 идеи.
