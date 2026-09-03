@@ -18,7 +18,7 @@ M.defaults = {
     python = nil, -- путь к интерпретатору сайдкара; по умолчанию vim.g.jupyter_python
     env = {},
     filetypes = { "python", "markdown" },
-    output = { position = "bottom", size = 15 },
+    output = { position = "bottom", size = 15, follow_cursor = true },
     -- Клавиши: false — не ставить вовсе, дальше пользователь делает это сам.
     keys = {
         run_cell = "<leader>jc",
@@ -155,6 +155,16 @@ function M.session(buf)
         end
     end
 
+    if M.config.output.follow_cursor ~= false then
+        vim.api.nvim_create_autocmd("CursorMoved", {
+            group = augroup or vim.api.nvim_create_augroup("jupyter.nvim", { clear = false }),
+            buffer = buf,
+            callback = function()
+                M.follow_cursor(buf)
+            end,
+        })
+    end
+
     vim.api.nvim_create_autocmd({ "BufUnload" }, {
         group = augroup or vim.api.nvim_create_augroup("jupyter.nvim", { clear = false }),
         buffer = buf,
@@ -163,6 +173,34 @@ function M.session(buf)
         end,
     })
     return found
+end
+
+---Показать в drawer'е вывод ячейки под курсором.
+---
+---Правила ровно два, и второе важнее первого: (1) переключаемся, только если у ячейки под
+---курсором есть прогон — пустое окно вместо чужого вывода никому не нужно; (2) не уводим
+---окно с прогона, который ещё идёт, иначе долгий запрос пропадает из вида, стоит подвинуть
+---курсор. Пока нет статуса под ячейкой (шаг 6), drawer — единственное место, где видно,
+---что ячейка выполняется.
+---@param buf integer
+function M.follow_cursor(buf)
+    local s = sessions[buf]
+    if not s or not s.output:is_open() then
+        return
+    end
+    local shown = s.output.run
+    if shown and shown.status == "running" then
+        return
+    end
+
+    local cell = cells.at(buf, vim.api.nvim_win_get_cursor(0)[1])
+    if not cell then
+        return
+    end
+    local run = s.exec:run_for(exec.cell_id(cell))
+    if run and (not shown or shown.cell_id ~= run.cell_id) then
+        s.output:show(run)
+    end
 end
 
 ---Поднять ядро, если оно ещё не поднято.

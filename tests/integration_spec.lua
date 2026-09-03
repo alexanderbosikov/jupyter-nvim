@@ -353,3 +353,89 @@ describe("повторный запуск при закрытом окне", fun
         assert.same({ "первый прогон" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
     end)
 end)
+
+describe("окно следует за курсором", function()
+    local buf, session
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    local function run_cell_at(row, cell_id)
+        vim.api.nvim_win_set_cursor(0, { row, 0 })
+        jupyter.run_cell()
+        session = session or jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cell_id)
+            return r and r.status == "ok"
+        end, 60000, "прогон " .. cell_id)
+    end
+
+    it("переключается на вывод ячейки под курсором", function()
+        local _, b = notebook({ "# %%", 'print("первая")', "# %%", 'print("вторая")' })
+        buf, session = b, nil
+
+        run_cell_at(2, "0001")
+        run_cell_at(4, "0002")
+        assert.same({ "вторая" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
+
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+        jupyter.follow_cursor(buf)
+
+        assert.equals("0001", session.output.run.cell_id)
+        assert.same({ "первая" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
+    end)
+
+    it("не уводит окно с идущего прогона", function()
+        local _, b = notebook({ "# %%", 'print("готово")', "# %%", "import time", "time.sleep(3)" })
+        buf, session = b, nil
+
+        run_cell_at(2, "0001")
+
+        vim.api.nvim_win_set_cursor(0, { 4, 0 })
+        jupyter.run_cell()
+        assert.equals("0002", session.output.run.cell_id)
+
+        -- курсор уехал на первую ячейку, но вторая ещё выполняется
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+        jupyter.follow_cursor(buf)
+
+        assert.equals("0002", session.output.run.cell_id, "окно не должно уходить с идущего прогона")
+        wait(function()
+            local r = session.exec:run_for("0002")
+            return r and r.status == "ok"
+        end, 60000, "вторая ячейка")
+    end)
+
+    it("ячейка без прогона окно не трогает", function()
+        local _, b = notebook({ "# %%", 'print("есть вывод")', "# %%", "x = 1" })
+        buf, session = b, nil
+
+        run_cell_at(2, "0001")
+
+        vim.api.nvim_win_set_cursor(0, { 4, 0 })
+        jupyter.follow_cursor(buf)
+
+        assert.equals("0001", session.output.run.cell_id)
+    end)
+
+    it("при закрытом окне ничего не делает", function()
+        local _, b = notebook({ "# %%", 'print("вывод")' })
+        buf, session = b, nil
+
+        run_cell_at(2, "0001")
+        session.output:close()
+
+        jupyter.follow_cursor(buf)
+
+        assert.is_false(session.output:is_open())
+    end)
+end)
