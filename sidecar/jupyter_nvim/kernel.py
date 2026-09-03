@@ -240,7 +240,7 @@ class KernelSession:
 
         if begin_settle:
             self._send_hidden(frames.HELPER_SOURCE)
-            self._spawn("jn-stdin", self._settle_stdin, self._pump_stop)
+            self._spawn("jn-stdin-settle", self._settle_stdin, self._pump_stop)
             return
 
         if self._stdin_live and self._state == KernelState.STARTING:
