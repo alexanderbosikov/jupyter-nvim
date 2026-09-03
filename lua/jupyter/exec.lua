@@ -82,8 +82,9 @@ end
 
 ---@param buf integer
 ---@param cell jupyter.Cell
+---@param opts? table result_expr — что сериализовать вместо вычисленного по магике
 ---@return jupyter.Run|nil
-function Exec:run(buf, cell)
+function Exec:run(buf, cell, opts)
     local code = cells.text(buf, cell)
     if not code:match("%S") then
         return nil -- пустая ячейка: ядру отправлять нечего
@@ -110,7 +111,7 @@ function Exec:run(buf, cell)
         cell_id = cell_id,
         run_id = run.run_id,
         code = code,
-        result_expr = M.result_expr(code),
+        result_expr = (opts and opts.result_expr) or M.result_expr(code),
     }, function(err)
         if err then
             run.status = "error"
@@ -205,6 +206,10 @@ function Exec:_apply_result(run, data)
     elseif data.kind == "html" then
         table.insert(run.lines, "[html] " .. (data.path or ""))
     elseif data.text then
+        -- ячейка напечатала результат сама: у обычного датафрейма polars отдаёт свой repr
+        -- через execute_result, и дублировать его предпросмотром не нужно. У %%sql-ячейки
+        -- такого вывода нет — там предпросмотр остаётся единственным способом увидеть таблицу
+        run.has_text_result = true
         vim.list_extend(run.lines, vim.split(data.text, "\n", { plain = true }))
     end
 end

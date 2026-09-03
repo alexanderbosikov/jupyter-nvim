@@ -26,7 +26,8 @@ M.defaults = {
     out_dir = ".jupyter-out",
     -- false — не определять группы подсветки, если хочешь задать их сам
     highlight = true,
-    output = { position = "bottom", size = 15, follow_cursor = true },
+    -- preview_rows = 0 — не показывать таблицу в окне вывода, только строку-сводку
+    output = { position = "bottom", size = 15, follow_cursor = true, preview_rows = 10 },
     table = { page_size = 50, max_col = 40 },
     -- статус строкой под ячейкой: enabled = false выключает, position = "eol" ставит в конец строки
     status = { enabled = true, position = "below" },
@@ -146,6 +147,20 @@ function M.session(buf)
         stale = function(run)
             return M.is_stale(buf, run)
         end,
+        preview = function(run, limit, cb)
+            sc:request("table.page", { path = run.table.path, offset = 0, limit = limit }, function(err, page)
+                if err then
+                    return cb({ "(не удалось прочитать таблицу: " .. (err.msg or err.code or "?") .. ")" })
+                end
+                local lines = table_view.format(page.header, page.rows, { max_col = M.config.table.max_col })
+                local shown = #page.rows
+                if page.total_rows > shown then
+                    table.insert(lines, (" … ещё %d строк · :JupyterTable"):format(page.total_rows - shown))
+                end
+                cb(lines)
+            end)
+        end,
+        preview_rows = M.config.output.preview_rows,
     }))
     ex = exec.new({
         kernel = k,

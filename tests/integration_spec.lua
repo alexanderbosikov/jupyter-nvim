@@ -843,3 +843,97 @@ describe("статус под ячейками", function()
         assert.is_truthy(text:find("⟲"), "статус из истории помечается знаком: " .. text)
     end)
 end)
+
+describe("таблица в окне вывода", function()
+    local buf, session
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+            session = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("свой repr ячейки не дублируется предпросмотром", function()
+        -- обычная ячейка-датафрейм печатает таблицу сама, через execute_result
+        local _, b = notebook({
+            "# %%",
+            "import polars as pl",
+            "pl.DataFrame({'n': range(50), 'имя': [f'стр-{i}' for i in range(50)]})",
+        })
+        buf, session = b, nil
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok"
+        end, 60000, "прогон")
+
+        local run = session.exec:run_for(cid(buf, 2))
+        assert.is_true(run.has_text_result, "polars отдаёт свой repr через execute_result")
+        assert.is_nil(run._preview, "предпросмотр дублировать repr не должен")
+
+        local text = table.concat(vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false), "\n")
+        assert.is_truthy(text:find("имя", 1, true), "таблица polars видна в окне")
+        assert.is_truthy(text:find("%[таблица%] 50 строк"), "сводка тоже на месте")
+        assert.is_false(session.table:is_open(), "отдельная вкладка не открывается")
+    end)
+
+    it("ячейка без своего repr получает предпросмотр из parquet", function()
+        -- это форма %%sql: результат кладётся в переменную, текстового вывода нет
+        local _, b = notebook({
+            "# %%",
+            "import polars as pl",
+            "df = pl.DataFrame({'n': range(50), 'имя': [f'стр-{i}' for i in range(50)]})",
+            "print('готово')",
+        })
+        buf, session = b, nil
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        session = jupyter.ensure_started(buf)
+        wait(function() return session.kernel:is_usable() end, 60000, "готовность ядра")
+        local cell = require("jupyter.cells").at(buf, 2)
+        session.exec:run(buf, cell, { result_expr = "df" })
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok" and r._preview ~= nil
+        end, 60000, "предпросмотр таблицы")
+
+        local text = table.concat(vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false), "\n")
+
+        assert.is_truthy(text:find("%[таблица%] 50 строк"), "сводка остаётся")
+        assert.is_truthy(text:find("имя", 1, true), "заголовок колонки виден")
+        assert.is_truthy(text:find("стр%-0"), "первая строка данных видна")
+        assert.is_truthy(text:find("ещё 40 строк", 1, true), "подсказка про остаток")
+        assert.is_falsy(text:find("стр%-49"), "весь датафрейм в окно не грузится")
+    end)
+
+    it("таблица из истории тоже показывается в окне", function()
+        local _, b = notebook({ "# %%", "import polars as pl", "pl.DataFrame({'a': [1, 2, 3]})" })
+        buf, session = b, nil
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok"
+        end, 60000, "прогон")
+        session.store:load()
+
+        local from_disk = session.store:last_run(cid(buf, 2))
+        session.output:show(from_disk)
+        wait(function() return from_disk._preview ~= nil end, 30000, "предпросмотр из истории")
+
+        local text = table.concat(vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false), "\n")
+        assert.is_truthy(text:find(" a"), "заголовок колонки: " .. text)
+    end)
+end)

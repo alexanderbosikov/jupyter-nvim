@@ -281,3 +281,76 @@ describe("устаревший вывод", function()
         out:close()
     end)
 end)
+
+describe("предпросмотр таблицы", function()
+    local function table_run()
+        return run({
+            status = "ok",
+            duration_ms = 700,
+            lines = { "[таблица] 1240 строк × 2 колонок" },
+            table = { path = "/tmp/df.parquet", rows = 1240, cols = 2 },
+        })
+    end
+
+    it("запрашивается один раз и дописывается к выводу", function()
+        local asked = 0
+        local out = output.new({
+            size = 8,
+            preview_rows = 3,
+            preview = function(_, limit, cb)
+                asked = asked + 1
+                cb({ (" id  имя"), (" ──  ───"), (" 1   раз"), (" … ещё %d строк"):format(1237) })
+            end,
+        })
+
+        out:show(table_run())
+        out:render()
+        out:render()
+
+        assert.equals(1, asked, "предпросмотр должен запрашиваться один раз на прогон")
+        local shown = vim.api.nvim_buf_get_lines(out.buf, 0, -1, false)
+        assert.equals("[таблица] 1240 строк × 2 колонок", shown[1])
+        assert.equals("", shown[2], "пустая строка отделяет сводку от таблицы")
+        assert.is_truthy(shown[3]:find("имя", 1, true))
+        assert.is_truthy(shown[#shown]:find("ещё 1237", 1, true))
+        out:close()
+    end)
+
+    it("preview_rows = 0 выключает предпросмотр", function()
+        local asked = false
+        local out = output.new({
+            size = 8,
+            preview_rows = 0,
+            preview = function() asked = true end,
+        })
+
+        out:show(table_run())
+
+        assert.is_false(asked)
+        assert.same({ "[таблица] 1240 строк × 2 колонок" }, vim.api.nvim_buf_get_lines(out.buf, 0, -1, false))
+        out:close()
+    end)
+
+    it("прогон без таблицы предпросмотр не запрашивает", function()
+        local asked = false
+        local out = output.new({ size = 8, preview = function() asked = true end })
+
+        out:show(run({ status = "ok", lines = { "просто текст" } }))
+
+        assert.is_false(asked)
+        out:close()
+    end)
+
+    it("ошибка чтения показывается вместо таблицы, а не роняет окно", function()
+        local out = output.new({
+            size = 8,
+            preview = function(_, _, cb) cb({ "(не удалось прочитать таблицу: нет файла)" }) end,
+        })
+
+        out:show(table_run())
+
+        local shown = vim.api.nvim_buf_get_lines(out.buf, 0, -1, false)
+        assert.is_truthy(shown[#shown]:find("не удалось", 1, true))
+        out:close()
+    end)
+end)

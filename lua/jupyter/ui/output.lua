@@ -40,6 +40,10 @@ function M.new(opts)
         -- функция «код ячейки изменился с момента этого прогона»: главный признак,
         -- что показанный вывод к тексту на экране уже не относится
         stale = opts.stale,
+        -- функция предпросмотра таблицы: результат-датафрейм и есть вывод ячейки,
+        -- поэтому первые строки показываем здесь, а не только в отдельной вкладке
+        preview = opts.preview,
+        preview_rows = opts.preview_rows or 10,
         position = opts.position or "bottom",
         size = opts.size or 15,
         keys = opts.keys or M.DEFAULT_KEYS,
@@ -127,16 +131,45 @@ function Output:update(run)
     return true
 end
 
+---Запросить предпросмотр таблицы, если он ещё не собран. Асинхронно: страницу нарезает
+---сайдкар, поэтому окно сначала показывает строку-сводку, а через миг — первые строки.
+function Output:_want_preview()
+    local run = self.run
+    if not run or not run.table or not run.table.path then
+        return
+    end
+    if run._preview or run._preview_asked or not self.preview or self.preview_rows <= 0 then
+        return
+    end
+    if run.has_text_result then
+        return -- ячейка уже напечатала таблицу сама
+    end
+    run._preview_asked = true
+    self.preview(run, self.preview_rows, function(lines)
+        run._preview = lines or {}
+        if self.run == run then
+            self:render()
+        end
+    end)
+end
+
 function Output:render()
     local buf = self:_ensure_buf()
-    local lines = self.run and self.run.lines or {}
+    self:_want_preview()
+
+    local lines = vim.list_slice(self.run and self.run.lines or {})
+    if self.run and self.run._preview and #self.run._preview > 0 then
+        table.insert(lines, "")
+        vim.list_extend(lines, self.run._preview)
+    end
     if #lines == 0 then
         lines = { "" }
     end
     common.set_lines(buf, lines)
     self:_render_winbar()
 
-    if self.follow and self:is_open() then
+    -- к концу прокручиваем только текст: у таблицы интереснее начало
+    if self.follow and self:is_open() and not (self.run and self.run._preview) then
         local count = vim.api.nvim_buf_line_count(buf)
         pcall(vim.api.nvim_win_set_cursor, self.win, { count, 0 })
     end
