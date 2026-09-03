@@ -189,6 +189,7 @@ FIFO выводов нет нигде — ни в Lua, ни в Python. Имен�
 | `ui/common.lua` ✔ | сантехника: scratch-буфер, `vim.bo`/`vim.wo`, **actions→keymaps** через langmapper-врапперы | `create_buf`, `apply_keys(actions, keys)` | ни одной захардкоженной клавиши |
 | `ui/output.lua` ✔ | drawer: вывод focused-ячейки, скролл, поиск, янк, `actions` | `open`, `close`, `focus(cell_id)`, `get_actions()` | |
 | `ui/table.lua` ✔ | постраничный просмотр parquet через `table.page`, выравнивание колонок, `actions` (`H/L/[[/]]/R/q`) | `open(path)`, `get_actions()` | не читает parquet сам |
+| `highlight.lua` ✔ | группы подсветки winbar'ов: контраст от `Normal`, смысл от `Diagnostic*`, переопределение на `ColorScheme` без затирания пользовательских |
 | `ui/status.lua` | однострочный virt_text под ячейкой: `⏳ выполняется` / `✓ 12.3 с · 1240 строк` / `✗ ValueError` | `set(cell_id, state)` | |
 | `images.lua` | позиция + передача пути в image.nvim | `show(cell_id, path)`, `clear` | своего рендера нет |
 | `commands.lua` ✔ | `:Jupyter*`, `<Plug>`-мапы | | |
@@ -413,7 +414,7 @@ ipywidgets, itables, интерактивный plotly, `tqdm.notebook`; экс�
 **Флаки — не шум по умолчанию.** Полезное правило по итогу: тест с живым ядром, падающий 1 раз на 5,
 сначала считается багом кода и только потом — багом теста. Из пяти случаев выше четыре были кодом.
 
-**Lua — plenary/busted в headless nvim**, `tests/run.sh`. Состояние: **150 тестов** —
+**Lua — plenary/busted в headless nvim**, `tests/run.sh`. Состояние: **158 тестов** —
 `integration_spec` 25, `output_spec` 24, `cells_spec` 19, `exec_spec` 16, `cellid_spec` 15,
 `table_spec` 10, `sidecar_codec_spec` 9, `store_spec` 8, `sidecar_live_spec` 6, `kernel_spec` 6,
 `jupytext_roundtrip_spec` 2. Вместе с сайдкаром — 232.

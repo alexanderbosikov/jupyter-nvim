@@ -8,6 +8,7 @@
 -- ровно тем, что напечатала ячейка, и его можно яркнуть целиком.
 
 local common = require("jupyter.ui.common")
+local hl = require("jupyter.highlight")
 
 local M = {}
 
@@ -194,13 +195,19 @@ function Output:_render_winbar()
     local cell = self.run and self.run.cell_id or "—"
     local pending = self.pending and self.pending() or 0
     vim.wo[self.win].winbar = table.concat({
-        " ",
-        common.escape_status("ячейка " .. cell),
+        hl.wrap("JupyterWinBar", " " .. common.escape_status("ячейка " .. cell)),
         "%=",
-        common.escape_status(self:status()),
-        pending > 0 and common.escape_status((" · ⏳ ещё %d"):format(pending)) or "",
-        self:is_stale() and common.escape_status(" · ⚠ код изменился") or "",
-        " ",
+        hl.wrap(
+            hl.for_status(self.run and self.run.status),
+            common.escape_status(self:status())
+        ),
+        pending > 0
+                and hl.wrap("JupyterWinBarInfo", common.escape_status((" · ⏳ ещё %d"):format(pending)))
+            or "",
+        self:is_stale()
+                and hl.wrap("JupyterWinBarWarn", common.escape_status(" · ⚠ код изменился"))
+            or "",
+        hl.wrap("JupyterWinBar", " "),
     })
 end
 

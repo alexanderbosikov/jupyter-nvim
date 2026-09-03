@@ -8,6 +8,7 @@
 -- Ширина считается через strdisplaywidth, а не по байтам, иначе кириллица разъезжается.
 
 local common = require("jupyter.ui.common")
+local hl = require("jupyter.highlight")
 
 local M = {}
 
@@ -208,11 +209,10 @@ function View:_render_winbar()
         return
     end
     vim.wo[self.win].winbar = table.concat({
-        " ",
-        common.escape_status(self.label or "таблица"),
+        hl.wrap("JupyterWinBar", " " .. common.escape_status(self.label or "таблица")),
         "%=",
-        common.escape_status(self:status()),
-        " ",
+        hl.wrap("JupyterWinBarInfo", common.escape_status(self:status())),
+        hl.wrap("JupyterWinBar", " "),
     })
 end
 

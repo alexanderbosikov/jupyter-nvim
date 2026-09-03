@@ -8,6 +8,7 @@ local cellid = require("jupyter.cellid")
 local cells = require("jupyter.cells")
 local common = require("jupyter.ui.common")
 local exec = require("jupyter.exec")
+local highlight = require("jupyter.highlight")
 local kernel = require("jupyter.kernel")
 local output = require("jupyter.ui.output")
 local store = require("jupyter.store")
@@ -22,6 +23,8 @@ M.defaults = {
     env = {},
     filetypes = { "python", "markdown" },
     out_dir = ".jupyter-out",
+    -- false — не определять группы подсветки, если хочешь задать их сам
+    highlight = true,
     output = { position = "bottom", size = 15, follow_cursor = true },
     table = { page_size = 50, max_col = 40 },
     -- Клавиши: false — не ставить вовсе, дальше пользователь делает это сам.
@@ -61,6 +64,9 @@ function M.setup(opts)
     augroup = vim.api.nvim_create_augroup("jupyter.nvim", { clear = true })
 
     require("jupyter.commands").setup(M)
+    if M.config.highlight ~= false then
+        highlight.attach(augroup)
+    end
 
     vim.api.nvim_create_autocmd("VimLeavePre", {
         group = augroup,
