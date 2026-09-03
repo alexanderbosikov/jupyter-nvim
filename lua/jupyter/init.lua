@@ -72,17 +72,21 @@ function M.setup(opts)
     end
 end
 
+---Поставить буфер-локальные мапы. Значением действия может быть как одна клавиша,
+---так и список: `next_cell = { "<C-j>", "]n" }` — привычная и идиоматичная разом.
 ---@param buf? integer
 function M.set_keys(buf)
     buf = buf or vim.api.nvim_get_current_buf()
-    for action, key in pairs(M.config.keys or {}) do
+    for action, keys in pairs(M.config.keys or {}) do
         local fn = M[action]
-        if fn and key then
-            common.map("n", key, function() fn() end, {
-                buffer = buf,
-                silent = true,
-                desc = "jupyter: " .. action,
-            })
+        if fn and keys then
+            for _, key in ipairs(type(keys) == "table" and keys or { keys }) do
+                common.map("n", key, function() fn() end, {
+                    buffer = buf,
+                    silent = true,
+                    desc = "jupyter: " .. action,
+                })
+            end
         end
     end
 end

@@ -448,3 +448,39 @@ describe("окно следует за курсором", function()
         assert.is_false(session.output:is_open())
     end)
 end)
+
+describe("клавиши", function()
+    local function lhs_of(buf)
+        local set = {}
+        for _, map in ipairs(vim.api.nvim_buf_get_keymap(buf, "n")) do
+            set[map.lhs] = map.desc
+        end
+        return set
+    end
+
+    after_each(function()
+        jupyter.setup({})
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("на одно действие можно повесить несколько клавиш", function()
+        jupyter.setup({ keys = { next_cell = { "<C-j>", "]n" }, prev_cell = "<C-k>" } })
+        local buf = vim.api.nvim_create_buf(false, true)
+
+        jupyter.set_keys(buf)
+        local maps = lhs_of(buf)
+
+        assert.equals("jupyter: next_cell", maps["<C-J>"] or maps["<C-j>"])
+        assert.equals("jupyter: next_cell", maps["]n"])
+        assert.equals("jupyter: prev_cell", maps["<C-K>"] or maps["<C-k>"])
+    end)
+
+    it("неизвестное действие в keys игнорируется, а не падает", function()
+        jupyter.setup({ keys = { нет_такого = "<C-x>" } })
+        local buf = vim.api.nvim_create_buf(false, true)
+
+        jupyter.set_keys(buf)
+
+        assert.is_nil(lhs_of(buf)["<C-X>"])
+    end)
+end)
