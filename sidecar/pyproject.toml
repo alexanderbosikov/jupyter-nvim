@@ -1,0 +1,12 @@
+[project]
+name = "jupyter-nvim-sidecar"
+version = "0.0.1"
+description = "Сайдкар jupyter.nvim: протокол ядра Jupyter поверх JSON-lines"
+requires-python = ">=3.11"
+dependencies = ["jupyter_client>=8", "polars>=1"]
+
+[project.scripts]
+jupyter-out = "jupyter_nvim.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
