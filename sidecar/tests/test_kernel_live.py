@@ -452,3 +452,31 @@ def test_huge_result_is_paged_not_rendered(live):
 
     beyond = session.table_page(table["data"]["path"], offset=10**9, limit=50)
     assert beyond["rows"] == [] and beyond["offset"] == 100_000
+
+
+def test_relative_kernelspec_resolves_to_our_interpreter(live):
+    """kernelspec с относительным argv не должен зависеть от внешнего PATH.
+
+    У venv'ного `python3` в argv стоит просто "python": в чистом PATH такого бинарника
+    может не быть вовсе, и ячейка падает ModuleNotFoundError на первом импорте. Ядро
+    обязано подниматься тем же интерпретатором, что и сайдкар.
+    """
+    import sys as _sys
+
+    session, sink, _ = live()
+    session.execute("a3f9", 1, "import sys\nprint(sys.executable)")
+
+    msgs = sink.wait(done_for("a3f9"))
+
+    assert stream_text(msgs, "a3f9") == _sys.executable
+
+
+def test_polars_is_importable_in_the_kernel(live):
+    """Следствие предыдущего: ядро видит те же пакеты, что и сайдкар."""
+    session, sink, _ = live()
+    session.execute("a3f9", 1, "import polars as pl\nprint(pl.__version__)")
+
+    msgs = sink.wait(done_for("a3f9"))
+
+    assert pick(msgs, Ev.EXEC_ERROR, "a3f9") == []
+    assert stream_text(msgs, "a3f9") != ""

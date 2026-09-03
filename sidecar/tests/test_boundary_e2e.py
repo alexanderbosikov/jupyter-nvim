@@ -5,6 +5,7 @@
 """
 
 import json
+import pathlib
 import subprocess
 import sys
 import threading
@@ -20,7 +21,7 @@ class Sidecar:
             [sys.executable, "-m", "jupyter_nvim"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
         )
@@ -132,6 +133,34 @@ def test_unknown_op_does_not_kill_the_process(sidecar):
 
     assert sidecar.call("ping") == {}
     assert sidecar.proc.poll() is None
+
+
+def test_kernel_banner_does_not_pollute_our_stderr(tmp_path):
+    """stderr сайдкара — только под его собственные падения.
+
+    ipykernel печатает баннер про TCP без шифрования на каждом старте. Если наследовать
+    наш stderr, этот баннер доезжает до пользователя красным уведомлением при каждом
+    запуске ядра, а настоящие ошибки тонут в шуме.
+    """
+    s = Sidecar()
+    notebook = tmp_path / "отчёт.md"
+    started = s.call("kernel.start", kernel_name="python3", notebook=str(notebook))
+    s.wait(
+        lambda ms: any(
+            m.get("ev") == Ev.KERNEL_STATE and m["data"].get("state") == KernelState.READY
+            for m in ms
+        ),
+        what="ready",
+    )
+    s.close()
+
+    stderr = s.proc.stderr.read()
+    assert "encryption" not in stderr, f"баннер ядра попал в наш stderr: {stderr[:300]}"
+    assert stderr.strip() == "", f"в stderr сайдкара мусор: {stderr[:300]}"
+
+    log = pathlib.Path(started["kernel_log"])
+    assert log.exists(), "лог ядра должен лежать рядом с выводами"
+    assert log.parent == notebook.parent / ".jupyter-out" / "отчёт"
 
 
 def test_process_exits_cleanly_on_eof(tmp_path):

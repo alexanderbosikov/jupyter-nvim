@@ -212,3 +212,101 @@ describe("конфиг", function()
         assert.equals("bottom", jupyter.config.output.position, "не заданное берётся из дефолтов")
     end)
 end)
+
+describe("диагностика", function()
+    local buf
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("журнал копит переходы состояний и вывод ядра", function()
+        local _, b = notebook({ "# %%", 'print("для журнала")' })
+        buf = b
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        local session = jupyter.session(buf)
+        wait(function()
+            local run = session.exec:run_for("0001")
+            return run and run.status == "ok"
+        end, 60000, "выполнение")
+
+        local levels = {}
+        for _, entry in ipairs(jupyter.log(buf)) do
+            levels[entry.level] = (levels[entry.level] or 0) + 1
+            assert.is_truthy(entry.at:match("^%d%d:%d%d:%d%d$"), "время записи: " .. entry.at)
+        end
+        assert.is_truthy(levels.state, "переходы состояний должны попадать в журнал")
+        assert.is_truthy(vim.tbl_count(levels) > 0)
+    end)
+
+    it("смерть ядра попадает в журнал", function()
+        local _, b = notebook({ "# %%", "import os, signal", "os.kill(os.getpid(), signal.SIGKILL)" })
+        buf = b
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        local session = jupyter.session(buf)
+        wait(function() return session.kernel:state() == "dead" end, 60000, "смерть ядра")
+
+        local found = false
+        for _, entry in ipairs(jupyter.log(buf)) do
+            if entry.level == "state" and entry.msg == "dead" then found = true end
+        end
+        assert.is_true(found)
+    end)
+
+    it("журнал показывается в буфере и закрывается по q", function()
+        local _, b = notebook({ "# %%", "x = 1" })
+        buf = b
+        jupyter.ensure_started()
+
+        jupyter.show_log()
+
+        local shown = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+        assert.is_true(#shown >= 1)
+        assert.is_truthy(vim.api.nvim_buf_get_name(0):find("jupyter://log", 1, true))
+        vim.cmd("close")
+    end)
+end)
+
+describe("гашение", function()
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    it("detach дожидается выхода сайдкара, не оставляя процесс", function()
+        local _, b = notebook({ "# %%", "x = 1" })
+        jupyter.ensure_started()
+        local session = jupyter.session(b)
+        wait(function() return session.kernel:state() == "ready" end, 60000, "ready")
+
+        jupyter.detach(b)
+
+        assert.is_false(session.kernel.sidecar:is_running(), "сайдкар должен был выйти")
+    end)
+
+    it("мёртвое ядро не задерживает гашение", function()
+        local _, b = notebook({ "# %%", "import os, signal", "os.kill(os.getpid(), signal.SIGKILL)" })
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+        jupyter.run_cell()
+        local session = jupyter.session(b)
+        wait(function() return session.kernel:state() == "dead" end, 60000, "смерть ядра")
+
+        local started = vim.uv.now()
+        jupyter.detach(b)
+        local spent = vim.uv.now() - started
+
+        assert.is_false(session.kernel.sidecar:is_running())
+        assert.is_true(spent < 3000, ("гашение заняло %d мс"):format(spent))
+    end)
+end)

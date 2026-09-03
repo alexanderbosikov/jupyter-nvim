@@ -53,6 +53,8 @@ class App:
                 kernel_name=args.get("kernel_name") or "python3",
                 cwd=args.get("cwd"),
                 env=args.get("env"),
+                # лог ядра рядом с выводами, если ноутбук известен
+                log_file=str(self.outdir.base / "kernel.log") if self.outdir else None,
             )
 
         @rpc.op(Op.KERNEL_STATE)

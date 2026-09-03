@@ -39,6 +39,8 @@ M.config = vim.deepcopy(M.defaults)
 local sessions = {}
 local augroup
 
+local LOG_LIMIT = 200
+
 ---@param opts? jupyter.Config
 function M.setup(opts)
     opts = opts or {}
@@ -51,6 +53,13 @@ function M.setup(opts)
     augroup = vim.api.nvim_create_augroup("jupyter.nvim", { clear = true })
 
     require("jupyter.commands").setup(M)
+
+    vim.api.nvim_create_autocmd("VimLeavePre", {
+        group = augroup,
+        callback = function()
+            M.detach_all()
+        end,
+    })
 
     if M.config.keys ~= false then
         vim.api.nvim_create_autocmd("FileType", {
@@ -104,8 +113,42 @@ function M.session(buf)
         end,
     }):attach()
 
-    found = { buf = buf, kernel = k, exec = ex, output = drawer, started = false }
+    found = { buf = buf, kernel = k, exec = ex, output = drawer, started = false, log = {} }
     sessions[buf] = found
+
+    -- Диагностика. Без этого любая поломка сайдкара была бы невидимой: события log
+    -- приходят, но подписчика нет, и они просто теряются.
+    sc:on("log", function(msg)
+        local data = msg.data or {}
+        table.insert(found.log, {
+            at = os.date("%H:%M:%S"),
+            level = data.level or "info",
+            msg = tostring(data.msg or ""),
+        })
+        if #found.log > LOG_LIMIT then
+            table.remove(found.log, 1)
+        end
+        -- "kernel" — это собственный вывод ядра (баннеры на старте), не ошибка.
+        if data.level == "error" or data.level == "stderr" then
+            vim.notify("jupyter.nvim: " .. tostring(data.msg), vim.log.levels.ERROR)
+        end
+    end)
+    sc:on("orphan", function(msg)
+        table.insert(found.log, {
+            at = os.date("%H:%M:%S"),
+            level = "orphan",
+            msg = ("сообщение с неизвестным родителем: %s"):format((msg.data or {}).msg_type or "?"),
+        })
+    end)
+    k.on_state = function(state, data)
+        table.insert(found.log, { at = os.date("%H:%M:%S"), level = "state", msg = state })
+        if state == "dead" then
+            vim.notify(
+                "jupyter.nvim: ядро умерло — " .. ((data or {}).reason or "причина неизвестна"),
+                vim.log.levels.ERROR
+            )
+        end
+    end
 
     vim.api.nvim_create_autocmd({ "BufUnload" }, {
         group = augroup or vim.api.nvim_create_augroup("jupyter.nvim", { clear = false }),
@@ -143,7 +186,12 @@ function M.ensure_started(buf)
     return s
 end
 
-function M.detach(buf)
+---Погасить сессию буфера и дождаться выхода сайдкара.
+---Ждём намеренно: иначе при выходе из nvim остаются висеть python-процесс и ядро —
+---ровно то, за что у molten открытые issue про утечку ресурсов.
+---@param buf integer
+---@param timeout_ms? integer
+function M.detach(buf, timeout_ms)
     local s = sessions[buf]
     if not s then
         return
@@ -151,6 +199,14 @@ function M.detach(buf)
     sessions[buf] = nil
     s.output:close()
     s.kernel:stop()
+    s.kernel.sidecar:wait(timeout_ms or 3000)
+end
+
+---Погасить все сессии. Вешается на VimLeavePre.
+function M.detach_all()
+    for buf in pairs(vim.deepcopy(sessions)) do
+        M.detach(buf, 1500)
+    end
 end
 
 -- --- действия ---
@@ -213,6 +269,30 @@ function M.restart()
             vim.notify("jupyter.nvim: ядро перезапущено")
         end
     end)
+end
+
+---Последние сообщения сайдкара и переходы состояний. Первое, куда смотреть, если что-то не так.
+---@return table[]
+function M.log(buf)
+    return M.session(buf).log
+end
+
+---Показать журнал в scratch-буфере.
+function M.show_log()
+    local entries = M.log()
+    local lines = {}
+    for _, entry in ipairs(entries) do
+        table.insert(lines, ("%s  %-7s %s"):format(entry.at, entry.level, entry.msg))
+    end
+    if #lines == 0 then
+        lines = { "журнал пуст" }
+    end
+
+    local buf = common.scratch_buf("jupyter://log", "jupyter-log")
+    common.set_lines(buf, lines)
+    vim.cmd(("botright %dsplit"):format(math.min(#lines + 1, 20)))
+    vim.api.nvim_win_set_buf(0, buf)
+    common.map("n", "q", "<cmd>close<cr>", { buffer = buf, nowait = true, silent = true })
 end
 
 function M.status()

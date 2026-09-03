@@ -18,8 +18,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
+import tempfile
 import threading
 import time
+from pathlib import Path
 from queue import Empty
 from typing import Any, Callable
 
@@ -78,6 +81,8 @@ class KernelSession:
         self._ready_lock = threading.Lock()
         self._restarting = False
         self._banner: dict[str, Any] = {}
+        self._kernel_log: Path | None = None
+        self._kernel_log_fh: Any = None
 
     # ---------- состояние ----------
 
@@ -102,7 +107,11 @@ class KernelSession:
     # ---------- жизненный цикл ----------
 
     def start(
-        self, kernel_name: str = "python3", cwd: str | None = None, env: dict | None = None
+        self,
+        kernel_name: str = "python3",
+        cwd: str | None = None,
+        env: dict | None = None,
+        log_file: str | None = None,
     ) -> dict[str, Any]:
         from jupyter_client.manager import KernelManager
 
@@ -111,7 +120,7 @@ class KernelSession:
 
         self._set_state(KernelState.STARTING)
         self._km = KernelManager(kernel_name=kernel_name)
-        launch = {"env": {**os.environ, **(env or {})}}
+        launch = {"env": self._launch_env(env), "stderr": self._open_kernel_log(log_file)}
         if cwd:
             launch["cwd"] = cwd
         self._km.start_kernel(**launch)
@@ -121,7 +130,38 @@ class KernelSession:
             "kernel_id": os.path.basename(self._km.connection_file),
             "connection_file": self._km.connection_file,
             "kernel_name": kernel_name,
+            "kernel_log": str(self._kernel_log),
         }
+
+    def _launch_env(self, env: dict | None) -> dict[str, str]:
+        """Окружение ядра: свой bin впереди PATH.
+
+        kernelspec может задавать интерпретатор относительно — у venv'ного `python3` в argv
+        стоит просто "python". Тогда ядро берётся из PATH, а он у nvim, запущенного из GUI,
+        произвольный: в чистом PATH бинарника `python` может не быть вообще, и ячейка падает
+        с ModuleNotFoundError на первом же импорте. Мы уже знаем нужный интерпретатор — тот,
+        которым запущен сам сайдкар, — поэтому кладём его каталог первым. Абсолютные argv
+        в kernelspec это никак не затрагивает.
+        """
+        merged = {**os.environ, **(env or {})}
+        bin_dir = os.path.dirname(sys.executable)
+        merged["PATH"] = os.pathsep.join([bin_dir, merged.get("PATH", "")]).rstrip(os.pathsep)
+        return merged
+
+    def _open_kernel_log(self, log_file: str | None) -> Any:
+        """Свой файл для stderr ядра — не наследовать наш.
+
+        ipykernel пишет туда собственные логи, включая безобидный баннер про TCP без
+        шифрования на каждом старте. Унаследованный stderr означал бы, что этот баннер
+        доезжает до пользователя как ошибка сайдкара, а настоящие падения тонут в шуме.
+        Наш stderr остаётся только под наши трейсбеки.
+        """
+        self._kernel_log = Path(
+            log_file or os.path.join(tempfile.gettempdir(), f"jupyter-nvim-kernel-{os.getpid()}.log")
+        )
+        self._kernel_log.parent.mkdir(parents=True, exist_ok=True)
+        self._kernel_log_fh = self._kernel_log.open("ab")
+        return self._kernel_log_fh
 
     def _open_client(self) -> None:
         self._client = self._km.client()
@@ -274,9 +314,17 @@ class KernelSession:
         for ex in self._router.abort_all():
             self._emit_done(ex)
         try:
-            self._km.shutdown_kernel(now=False)
+            # мёртвое ядро гасить нечем: shutdown_request уйдёт в никуда, а jupyter_client
+            # будет ждать его shutdown_wait_time (5 с) впустую
+            if self._km.is_alive():
+                self._km.shutdown_kernel(now=False)
+        except Exception as e:
+            self._rpc.log("warn", f"гашение ядра: {type(e).__name__}: {e}")
         finally:
             self._km.cleanup_resources()  # чтобы не оставлять kernel-*.json в runtime/
+            if self._kernel_log_fh is not None:
+                self._kernel_log_fh.close()
+                self._kernel_log_fh = None
             self._km = None
             self._client = None
             self._set_state(KernelState.NONE)

@@ -186,3 +186,17 @@ describe("fence", function()
         assert.equals(before + 1, #cells.list(buf))
     end)
 end)
+
+describe("устойчивость к NUL", function()
+    it("NUL-байт не доезжает до ядра", function()
+        -- в буфер NUL попадает легко: writefile так пишет перевод строки внутри элемента
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", "x = 1" .. string.char(0) .. "y = 2" })
+        vim.bo[buf].filetype = "python"
+
+        local text = cells.text(buf, cells.at(buf, 2))
+
+        assert.is_nil(text:find("%z"), "NUL должен быть вырезан")
+        assert.equals("x = 1y = 2", text)
+    end)
+end)

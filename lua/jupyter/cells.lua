@@ -160,10 +160,16 @@ function M.body(buf, cell)
 end
 
 ---Код ячейки одной строкой, готовый к отправке ядру.
+---
+---NUL-байты вырезаются: python всё равно откажется компилировать такой исходник
+---("source code string cannot contain null bytes"), а по пути они успевают наделать
+---беды — NUL в коде ячейки молча убивал дочерний nvim в тестах. В буфер NUL попадает
+---легко: например `writefile` так записывает перевод строки внутри элемента списка.
 ---@return string
 function M.text(buf, cell)
     local first, last = M.body(buf, cell)
-    return table.concat(vim.api.nvim_buf_get_lines(buf, first - 1, last, false), "\n")
+    local text = table.concat(vim.api.nvim_buf_get_lines(buf, first - 1, last, false), "\n")
+    return (text:gsub("%z", ""))
 end
 
 ---Вставить пустую ячейку выше или ниже ячейки под строкой.
