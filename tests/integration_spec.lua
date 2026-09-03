@@ -742,3 +742,104 @@ describe("устаревший и исторический вывод", function
         assert.is_true(#from_disk.lines > 0, "трейсбек должен быть на диске")
     end)
 end)
+
+describe("статус под ячейками", function()
+    local buf, session
+    local status_ui = require("jupyter.ui.status")
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+            session = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("появляется у выполненной ячейки и не у остальных", function()
+        local _, b = notebook({ "# %%", 'print("раз")', "# %%", 'print("два")' })
+        buf, session = b, nil
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok"
+        end, 60000, "прогон")
+
+        assert.equals(1, status_ui.count(buf), "статус только у выполненной ячейки")
+
+        vim.api.nvim_win_set_cursor(0, { 4, 0 })
+        jupyter.run_cell()
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 4))
+            return r and r.status == "ok"
+        end, 60000, "второй прогон")
+
+        assert.equals(2, status_ui.count(buf))
+    end)
+
+    it("правка ячейки сразу помечает её статус, без сохранения", function()
+        local _, b = notebook({ "# %%", 'print("исходный")' })
+        buf, session = b, nil
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok"
+        end, 60000, "прогон")
+
+        local function status_text()
+            local marks = vim.api.nvim_buf_get_extmarks(buf, status_ui.NS, 0, -1, { details = true })
+            local chunks = marks[1] and (marks[1][4].virt_lines and marks[1][4].virt_lines[1] or marks[1][4].virt_text)
+            return chunks and chunks[1][1] or ""
+        end
+
+        assert.is_nil(status_text():find("⚠"), "свежий вывод предупреждения не несёт")
+
+        -- правим и НЕ сохраняем: автокоманда TextChanged должна перерисовать статус
+        vim.api.nvim_buf_set_lines(buf, 1, 2, false, { 'print("другой код")' })
+        vim.api.nvim_exec_autocmds("TextChanged", { buffer = buf })
+
+        assert.is_truthy(status_text():find("⚠"), "после правки ожидается ⚠, статус: " .. status_text())
+        assert.is_true(vim.bo[buf].modified, "файл при этом не сохранён")
+        assert.is_true(session.output:is_stale())
+    end)
+
+    it("история рисует статус сразу при открытии, без ядра", function()
+        local path, b = notebook({ "# %%", 'print("вчерашний")' })
+        buf, session = b, nil
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok"
+        end, 60000, "прогон")
+        vim.cmd("silent write")
+
+        jupyter.detach(buf)
+        buf = nil
+        vim.cmd("silent! %bwipeout!")
+
+        vim.cmd.edit(path)
+        vim.bo.filetype = "python"
+        buf = vim.api.nvim_get_current_buf()
+        session = jupyter.session(buf)
+
+        local drawn = jupyter.repaint(buf)
+
+        assert.equals(1, drawn)
+        assert.equals("none", session.kernel:state(), "ядро подниматься не должно")
+        local marks = vim.api.nvim_buf_get_extmarks(buf, status_ui.NS, 0, -1, { details = true })
+        local text = marks[1][4].virt_lines[1][1][1]
+        assert.is_truthy(text:find("⟲"), "статус из истории помечается знаком: " .. text)
+    end)
+end)

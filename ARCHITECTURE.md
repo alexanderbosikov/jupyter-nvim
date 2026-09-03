@@ -190,7 +190,7 @@ FIFO выводов нет нигде — ни в Lua, ни в Python. Имен�
 | `ui/output.lua` ✔ | drawer: вывод focused-ячейки, скролл, поиск, янк, `actions` | `open`, `close`, `focus(cell_id)`, `get_actions()` | |
 | `ui/table.lua` ✔ | постраничный просмотр parquet через `table.page`, выравнивание колонок, `actions` (`H/L/[[/]]/R/q`) | `open(path)`, `get_actions()` | не читает parquet сам |
 | `highlight.lua` ✔ | группы подсветки winbar'ов: контраст от `Normal`, смысл от `Diagnostic*`, переопределение на `ColorScheme` без затирания пользовательских |
-| `ui/status.lua` | однострочный virt_text под ячейкой: `⏳ выполняется` / `✓ 12.3 с · 1240 строк` / `✗ ValueError` | `set(cell_id, state)` | |
+| `ui/status.lua` ✔ | однострочный virt_text под ячейкой: `⏳ выполняется` / `✓ 12.3 с · 1240 строк` / `✗ ValueError` | `set(cell_id, state)` | |
 | `images.lua` | позиция + передача пути в image.nvim | `show(cell_id, path)`, `clear` | своего рендера нет |
 | `commands.lua` ✔ | `:Jupyter*`, `<Plug>`-мапы | | |
 | `health.lua` | `:checkhealth jupyter`: python, `jupyter_client`, polars, ядро, image.nvim, версия протокола | | |
@@ -323,6 +323,11 @@ identity. Работает в 4 случаях из 5, а в пятом прих
   Это самый сильный признак: он говорит не «вывод старый», а «вывод получен не из этого кода»;
 - **`⏳ ещё N`** — где-то идут другие прогоны (§4.3).
 
+Перерисовка висит на `TextChanged`/`TextChangedI`/`InsertLeave`, а не только на смене прогона.
+Без этого сравнение работало (оно идёт с буфером, не с файлом), но пометка появлялась лишь когда
+что-то ещё вызывало перерисовку — например переход на другую ячейку и обратно. Ответ `is_stale`
+кэшируется по `changedtick`: функция зовётся на каждое движение курсора и на каждую правку.
+
 Ошибки хранятся вместе с успешными прогонами: `status: error` плюс `ename` в индексе и трейсбек
 в `.txt`. Поэтому «почему вчера упало» отвечается без перезапуска, а `[r`/`]r` позволяют уйти от
 неудачной попытки к последнему хорошему результату. Новый запуск снимает просмотр истории.
@@ -414,7 +419,7 @@ ipywidgets, itables, интерактивный plotly, `tqdm.notebook`; экс�
 **Флаки — не шум по умолчанию.** Полезное правило по итогу: тест с живым ядром, падающий 1 раз на 5,
 сначала считается багом кода и только потом — багом теста. Из пяти случаев выше четыре были кодом.
 
-**Lua — plenary/busted в headless nvim**, `tests/run.sh`. Состояние: **158 тестов** —
+**Lua — plenary/busted в headless nvim**, `tests/run.sh`. Состояние: **173 теста** —
 `integration_spec` 25, `output_spec` 24, `cells_spec` 19, `exec_spec` 16, `cellid_spec` 15,
 `table_spec` 10, `sidecar_codec_spec` 9, `store_spec` 8, `sidecar_live_spec` 6, `kernel_spec` 6,
 `jupytext_roundtrip_spec` 2. Вместе с сайдкаром — 232.

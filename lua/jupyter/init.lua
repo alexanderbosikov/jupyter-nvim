@@ -11,6 +11,7 @@ local exec = require("jupyter.exec")
 local highlight = require("jupyter.highlight")
 local kernel = require("jupyter.kernel")
 local output = require("jupyter.ui.output")
+local status_ui = require("jupyter.ui.status")
 local store = require("jupyter.store")
 local table_view = require("jupyter.ui.table")
 
@@ -27,6 +28,8 @@ M.defaults = {
     highlight = true,
     output = { position = "bottom", size = 15, follow_cursor = true },
     table = { page_size = 50, max_col = 40 },
+    -- статус строкой под ячейкой: enabled = false выключает, position = "eol" ставит в конец строки
+    status = { enabled = true, position = "below" },
     -- Клавиши: false — не ставить вовсе, дальше пользователь делает это сам.
     keys = {
         run_cell = "<leader>jc",
@@ -141,14 +144,7 @@ function M.session(buf)
         -- вывод получен из другого кода, чем сейчас в ячейке: сравниваем sha так же,
         -- как считает сайдкар. Это и есть ответ на «почему тут старый вывод»
         stale = function(run)
-            if not run or not run.code_sha then
-                return false
-            end
-            local cell = cellid.find(buf, run.cell_id)
-            if not cell then
-                return false
-            end
-            return vim.fn.sha256(cells.text(buf, cell)):sub(1, 8) ~= run.code_sha
+            return M.is_stale(buf, run)
         end,
     }))
     ex = exec.new({
@@ -166,6 +162,7 @@ function M.session(buf)
             elseif not drawer:update(run) then
                 drawer:refresh_status()
             end
+            M.repaint(buf)
         end,
     }):attach()
 
@@ -182,7 +179,9 @@ function M.session(buf)
         exec = ex,
         output = drawer,
         table = tbl,
+        status = status_ui.new(M.config.status),
         store = store.new({ notebook = name ~= "" and name or nil, out_dir = M.config.out_dir }),
+        stale_cache = { tick = -1, value = {} },
         browse = {}, -- cell_id -> номер просматриваемого прогона в истории
         started = false,
         log = {},
@@ -223,6 +222,14 @@ function M.session(buf)
         end
     end
 
+    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "InsertLeave" }, {
+        group = augroup or vim.api.nvim_create_augroup("jupyter.nvim", { clear = false }),
+        buffer = buf,
+        callback = function()
+            M.repaint(buf)
+        end,
+    })
+
     if M.config.output.follow_cursor ~= false then
         vim.api.nvim_create_autocmd("CursorMoved", {
             group = augroup or vim.api.nvim_create_augroup("jupyter.nvim", { clear = false }),
@@ -241,6 +248,58 @@ function M.session(buf)
         end,
     })
     return found
+end
+
+---Код ячейки изменился с момента прогона? Ответ кэшируется по changedtick: функция
+---зовётся на каждое движение курсора и на каждую правку.
+---@param buf integer
+---@param run jupyter.Run|nil
+---@return boolean
+function M.is_stale(buf, run)
+    local s = sessions[buf]
+    if not s or not run or not run.code_sha then
+        return false
+    end
+
+    local tick = vim.api.nvim_buf_get_changedtick(buf)
+    if s.stale_cache.tick ~= tick then
+        s.stale_cache = { tick = tick, value = {} }
+    end
+    local key = run.cell_id .. ":" .. run.code_sha
+    if s.stale_cache.value[key] == nil then
+        local cell = cellid.find(buf, run.cell_id)
+        s.stale_cache.value[key] = cell ~= nil
+            and vim.fn.sha256(cells.text(buf, cell)):sub(1, 8) ~= run.code_sha
+    end
+    return s.stale_cache.value[key]
+end
+
+---Перерисовать состояние: статусы под ячейками и строку drawer'а.
+---Зовётся на правку буфера и на движение курсора — оба дешёвые благодаря кэшу выше.
+---@param buf? integer
+function M.repaint(buf)
+    buf = buf or vim.api.nvim_get_current_buf()
+    local s = sessions[buf]
+    if not s then
+        return 0
+    end
+
+    local entries = {}
+    for _, cell in ipairs(cells.list(buf)) do
+        local cell_id = exec.cell_id(buf, cell)
+        local run = s.exec:run_for(cell_id) or s.store:last_run(cell_id)
+        if run then
+            local text, group = status_ui.text_of(run, M.is_stale(buf, run))
+            local _, last = cells.body(buf, cell)
+            table.insert(entries, { row = last, text = text, group = group })
+        end
+    end
+
+    local drawn = s.status:render(buf, entries)
+    if s.output:is_open() then
+        s.output:refresh_status()
+    end
+    return drawn
 end
 
 ---Показать в drawer'е вывод ячейки под курсором.
@@ -272,6 +331,8 @@ function M.follow_cursor(buf)
     run = run or s.exec:run_for(cell_id) or s.store:last_run(cell_id)
     if run and (not shown or shown.cell_id ~= run.cell_id or shown.run_id ~= run.run_id) then
         s.output:show(run)
+    else
+        s.output:refresh_status() -- прогон тот же, но «код изменился» мог поменяться
     end
 end
 
@@ -312,6 +373,7 @@ function M.detach(buf, timeout_ms)
         return
     end
     sessions[buf] = nil
+    s.status:clear(buf)
     s.output:close()
     s.table:close()
     s.kernel:stop()
