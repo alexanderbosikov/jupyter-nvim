@@ -484,3 +484,88 @@ describe("клавиши", function()
         assert.is_nil(lhs_of(buf)["<C-X>"])
     end)
 end)
+
+describe("таблица", function()
+    local buf, session
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+            session = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    local function table_lines()
+        return vim.api.nvim_buf_get_lines(session.table.buf, 0, -1, false)
+    end
+
+    it("листается постранично и не читает файл целиком", function()
+        local _, b = notebook({
+            "# %%",
+            "import polars as pl",
+            "pl.DataFrame({'n': range(200), 'имя': [f'стр-{i}' for i in range(200)]})",
+        })
+        buf, session = b, nil
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for("0001")
+            return r and r.status == "ok" and r.table ~= nil
+        end, 60000, "таблицу")
+
+        jupyter.open_table()
+        wait(function() return session.table.total == 200 end, 30000, "первую страницу")
+
+        local lines = table_lines()
+        assert.equals(52, #lines, "заголовок, линейка и 50 строк")
+        assert.is_truthy(lines[1]:find("имя", 1, true))
+        assert.is_truthy(lines[3]:find("стр%-0"))
+        assert.is_truthy(session.table:status():find("строки 1–50 из 200", 1, true))
+        assert.is_truthy(vim.wo[session.table.win].winbar:find("ячейка 0001", 1, true))
+
+        session.table:get_actions().page_next()
+        wait(function() return session.table.offset == 50 end, 30000, "вторую страницу")
+        assert.is_truthy(table_lines()[3]:find("стр%-50"))
+
+        session.table:get_actions().page_last()
+        wait(function() return session.table.offset == 150 end, 30000, "последнюю страницу")
+        assert.is_truthy(session.table:status():find("страница 4/4", 1, true))
+
+        session.table:get_actions().page_next()
+        wait(function() return session.table.offset == 150 end, 5000, "клампинг за концом")
+        assert.equals(52, #table_lines())
+
+        session.table:get_actions().close()
+        assert.is_false(session.table:is_open())
+    end)
+
+    it("у ячейки без таблицы предупреждает, а не открывает пустое окно", function()
+        local _, b = notebook({ "# %%", 'print("просто текст")' })
+        buf, session = b, nil
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for("0001")
+            return r and r.status == "ok"
+        end, 60000, "прогон")
+
+        local said
+        local notify = vim.notify
+        vim.notify = function(msg) said = msg end
+        jupyter.open_table()
+        vim.notify = notify
+
+        assert.is_truthy(said and said:find("нет результата%-таблицы"))
+        assert.is_false(session.table:is_open())
+    end)
+end)

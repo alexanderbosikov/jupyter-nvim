@@ -9,6 +9,7 @@ local common = require("jupyter.ui.common")
 local exec = require("jupyter.exec")
 local kernel = require("jupyter.kernel")
 local output = require("jupyter.ui.output")
+local table_view = require("jupyter.ui.table")
 
 local M = {}
 
@@ -19,6 +20,7 @@ M.defaults = {
     env = {},
     filetypes = { "python", "markdown" },
     output = { position = "bottom", size = 15, follow_cursor = true },
+    table = { page_size = 50, max_col = 40 },
     -- Клавиши: false — не ставить вовсе, дальше пользователь делает это сам.
     keys = {
         run_cell = "<leader>jc",
@@ -29,6 +31,7 @@ M.defaults = {
         insert_above = "<leader>ja",
         insert_below = "<leader>jb",
         toggle_output = "<leader>jo",
+        open_table = "<leader>jt",
         interrupt = "<leader>ji",
         restart = "<leader>jR",
     },
@@ -139,7 +142,21 @@ function M.session(buf)
         end,
     }):attach()
 
-    found = { buf = buf, kernel = k, exec = ex, output = drawer, started = false, log = {} }
+    local tbl = table_view.new({
+        sidecar = sc,
+        page_size = M.config.table.page_size,
+        max_col = M.config.table.max_col,
+    })
+
+    found = {
+        buf = buf,
+        kernel = k,
+        exec = ex,
+        output = drawer,
+        table = tbl,
+        started = false,
+        log = {},
+    }
     sessions[buf] = found
 
     -- Диагностика. Без этого любая поломка сайдкара была бы невидимой: события log
@@ -257,6 +274,7 @@ function M.detach(buf, timeout_ms)
     end
     sessions[buf] = nil
     s.output:close()
+    s.table:close()
     s.kernel:stop()
     s.kernel.sidecar:wait(timeout_ms or 3000)
 end
@@ -310,6 +328,31 @@ end
 function M.insert_below()
     local row = cells.insert(0, vim.api.nvim_win_get_cursor(0)[1], "below")
     vim.api.nvim_win_set_cursor(0, { row, 0 })
+end
+
+---Открыть таблицу-результат ячейки под курсором. Если её нет — того прогона, что показан
+---в drawer'е: так работает и когда курсор стоит в markdown между ячейками.
+function M.open_table()
+    local s = M.session()
+    local run
+    local cell = cells.at(s.buf, vim.api.nvim_win_get_cursor(0)[1])
+    if cell then
+        run = s.exec:run_for(exec.cell_id(cell))
+    end
+    run = run or s.output.run
+
+    if not run then
+        vim.notify("jupyter.nvim: ячейка ещё не выполнялась", vim.log.levels.WARN)
+        return
+    end
+    if not (run.table and run.table.path) then
+        vim.notify(
+            ("jupyter.nvim: у ячейки %s нет результата-таблицы"):format(run.cell_id),
+            vim.log.levels.WARN
+        )
+        return
+    end
+    s.table:open(run.table.path, ("ячейка %s · прогон %d"):format(run.cell_id, run.run_id))
 end
 
 function M.toggle_output()
