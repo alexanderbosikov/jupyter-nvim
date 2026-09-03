@@ -1,6 +1,7 @@
 -- Логика запуска и накопления вывода. Ядро здесь подменено заглушкой: проверяется
 -- ровно то, что решает Lua — result_expr (§7.1) и отбраковка устаревших прогонов (§4.4).
 
+local cellid = require("jupyter.cellid")
 local exec = require("jupyter.exec")
 local cells = require("jupyter.cells")
 
@@ -61,8 +62,10 @@ describe("запуск", function()
         local run = ex:run_at(buf, 2)
 
         assert.equals(1, #k.sent)
+        local id = cellid.of(buf, cells.at(buf, 2))
+        assert.is_truthy(id and id:match("^%x%x%x%x$"), "id должен быть записан в маркер")
         assert.same({
-            cell_id = "0001",
+            cell_id = id,
             run_id = 1,
             code = 'print("раз")',
             result_expr = "_",
@@ -79,12 +82,15 @@ describe("запуск", function()
 
     it("run_all идёт по всем ячейкам, from_row — только с текущей", function()
         ex:run_all(buf)
-        assert.same({ "0001", "0002" }, { k.sent[1].cell_id, k.sent[2].cell_id })
+        local first = cellid.of(buf, cells.at(buf, 2))
+        local second = cellid.of(buf, cells.at(buf, 4))
+        assert.same({ first, second }, { k.sent[1].cell_id, k.sent[2].cell_id })
+        assert.are_not.equals(first, second)
 
         k.sent = {}
         ex:run_all(buf, 4)
         assert.equals(1, #k.sent)
-        assert.equals("0002", k.sent[1].cell_id)
+        assert.equals(second, k.sent[1].cell_id)
     end)
 
     it("копит поток строками и перерисовывает по replace_last", function()

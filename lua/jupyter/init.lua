@@ -9,6 +9,7 @@ local common = require("jupyter.ui.common")
 local exec = require("jupyter.exec")
 local kernel = require("jupyter.kernel")
 local output = require("jupyter.ui.output")
+local store = require("jupyter.store")
 local table_view = require("jupyter.ui.table")
 
 local M = {}
@@ -19,6 +20,7 @@ M.defaults = {
     python = nil, -- путь к интерпретатору сайдкара; по умолчанию vim.g.jupyter_python
     env = {},
     filetypes = { "python", "markdown" },
+    out_dir = ".jupyter-out",
     output = { position = "bottom", size = 15, follow_cursor = true },
     table = { page_size = 50, max_col = 40 },
     -- Клавиши: false — не ставить вовсе, дальше пользователь делает это сам.
@@ -148,12 +150,14 @@ function M.session(buf)
         max_col = M.config.table.max_col,
     })
 
+    local name = vim.api.nvim_buf_get_name(buf)
     found = {
         buf = buf,
         kernel = k,
         exec = ex,
         output = drawer,
         table = tbl,
+        store = store.new({ notebook = name ~= "" and name or nil, out_dir = M.config.out_dir }),
         started = false,
         log = {},
     }
@@ -230,8 +234,11 @@ function M.follow_cursor(buf)
     if not cell then
         return
     end
-    local run = s.exec:run_for(exec.cell_id(cell))
-    if run and (not shown or shown.cell_id ~= run.cell_id) then
+    local cell_id = exec.cell_id(s.buf, cell)
+    -- сначала прогон этой сессии, потом история с диска: так вывод вчерашней ячейки
+    -- виден сразу при открытии файла, без перезапуска и без ядра
+    local run = s.exec:run_for(cell_id) or s.store:last_run(cell_id)
+    if run and (not shown or shown.cell_id ~= run.cell_id or shown.run_id ~= run.run_id) then
         s.output:show(run)
     end
 end
@@ -337,7 +344,8 @@ function M.open_table()
     local run
     local cell = cells.at(s.buf, vim.api.nvim_win_get_cursor(0)[1])
     if cell then
-        run = s.exec:run_for(exec.cell_id(cell))
+        local cell_id = exec.cell_id(s.buf, cell)
+        run = s.exec:run_for(cell_id) or s.store:last_run(cell_id)
     end
     run = run or s.output.run
 
@@ -399,12 +407,24 @@ end
 
 function M.status()
     local s = M.session()
+    local known_cells, known_runs = s.store:size()
     return {
         state = s.kernel:state(),
         queued = s.kernel:queued(),
         info = s.kernel:info(),
         cells = #cells.list(s.buf),
+        history_cells = known_cells,
+        history_runs = known_runs,
     }
+end
+
+---Перечитать историю прогонов с диска: нужно, если ноутбук считали заново
+---или его правили другим редактором.
+function M.reload_history()
+    local s = M.session()
+    local count = s.store:load()
+    vim.notify(("jupyter.nvim: прочитано прогонов — %d"):format(count))
+    return count
 end
 
 return M

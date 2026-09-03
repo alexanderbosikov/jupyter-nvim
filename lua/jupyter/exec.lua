@@ -12,6 +12,7 @@
 -- нумерацией строк, а показываем мы их в одном списке. Поэтому запоминаем, какая строка
 -- списка была последней для каждого потока: иначе "\r" в stdout перерисует строку stderr.
 
+local cellid = require("jupyter.cellid")
 local cells = require("jupyter.cells")
 
 local M = {}
@@ -62,12 +63,21 @@ end
 
 -- --- запуск ---
 
----Идентификатор ячейки. На шаге 3 это её номер в буфере: шаг 5 заменит его на стабильный
----id из текста. Формат сразу hex — сайдкар проверяет cell_id регуляркой перед записью на диск.
+---Запасной идентификатор — номер ячейки в буфере. Нужен там, где стабильный id записать
+---некуда: ячейка без маркера (код до первого `# %%` или файл вообще без маркеров).
+---Формат hex, потому что сайдкар проверяет cell_id регуляркой перед записью на диск.
 ---@param cell jupyter.Cell
 ---@return string
-function M.cell_id(cell)
+function M.fallback_id(cell)
     return ("%04x"):format(cell.index)
+end
+
+---Идентификатор ячейки только для чтения: в документ ничего не пишется.
+---@param buf integer
+---@param cell jupyter.Cell
+---@return string
+function M.cell_id(buf, cell)
+    return cellid.of(buf, cell) or M.fallback_id(cell)
 end
 
 ---@param buf integer
@@ -79,7 +89,10 @@ function Exec:run(buf, cell)
         return nil -- пустая ячейка: ядру отправлять нечего
     end
 
-    local cell_id = M.cell_id(cell)
+    -- Единственный момент, когда плагин правит документ: стабильный id дописывается
+    -- к маркеру ячейки при первом запуске (§4.6). Id детерминирован от содержимого,
+    -- поэтому даже несохранённый буфер получит тот же id и не потеряет историю.
+    local cell_id = cellid.ensure(buf, cell) or M.fallback_id(cell)
     self._next_run = self._next_run + 1
     local run = {
         cell_id = cell_id,

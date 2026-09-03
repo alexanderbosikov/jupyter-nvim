@@ -19,9 +19,11 @@ function M.setup(api)
     cmd("JupyterStop", function() api.detach(vim.api.nvim_get_current_buf()) end, { desc = "погасить ядро" })
     cmd("JupyterTable", function() api.open_table() end, { desc = "постраничный просмотр таблицы" })
     cmd("JupyterLog", function() api.show_log() end, { desc = "журнал сайдкара и состояний ядра" })
+    cmd("JupyterHistory", function() api.reload_history() end, { desc = "перечитать историю прогонов" })
     cmd("JupyterStatus", function()
         local s = api.status()
-        vim.notify(("jupyter.nvim: ядро %s · в очереди %d · ячеек %d"):format(s.state, s.queued, s.cells))
+        vim.notify(("jupyter.nvim: ядро %s · в очереди %d · ячеек %d · в истории %d прогонов по %d ячейкам")
+            :format(s.state, s.queued, s.cells, s.history_runs, s.history_cells))
     end, { desc = "состояние ядра" })
 end
 

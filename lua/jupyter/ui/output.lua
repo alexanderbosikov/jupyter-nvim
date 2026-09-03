@@ -151,13 +151,16 @@ function Output:status()
     end
     if run.status == "error" then
         local name = run.error and run.error.code or "ошибка"
-        return ("%s %s"):format(STATUS.error, name)
+        return ("%s %s%s"):format(STATUS.error, name, run.historical and " · из истории" or "")
     end
     if run.status == "aborted" then
         return STATUS.aborted
     end
 
     local parts = {}
+    if run.historical then
+        table.insert(parts, "из истории")
+    end
     if run.duration_ms then
         table.insert(parts, ("%.1f с"):format(run.duration_ms / 1000))
     end

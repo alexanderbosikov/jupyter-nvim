@@ -1,7 +1,15 @@
 -- Сквозная проверка шага 3: настоящий файл в буфере, настоящее ядро, вывод в drawer.
 -- Это тот самый момент «%%sql даёт текст в буфере», только без человека.
 
+local cells = require("jupyter.cells")
+local exec = require("jupyter.exec")
 local jupyter = require("jupyter")
+
+---Стабильный id ячейки под строкой. После первого запуска он записан в маркер,
+---поэтому тесты сверяются с тем, что реально лежит в тексте, а не с номером ячейки.
+local function cid(buf, row)
+    return exec.cell_id(buf, cells.at(buf, row))
+end
 
 local function wait(pred, timeout, what)
     assert.is_true(vim.wait(timeout or 60000, pred, 20), "не дождались " .. (what or "условия"))
@@ -39,7 +47,7 @@ describe("шаг 3 целиком", function()
         local session = jupyter.session(buf)
 
         wait(function()
-            local run = session.exec:run_for("0001")
+            local run = session.exec:run_for(cid(buf, 2))
             return run and run.status == "ok"
         end, 60000, "успешное завершение ячейки")
 
@@ -47,7 +55,7 @@ describe("шаг 3 целиком", function()
         local shown = vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false)
         assert.same({ "привет из буфера" }, shown)
         assert.is_truthy(session.output:status():find("✓"))
-        assert.is_truthy(vim.wo[session.output.win].winbar:find("ячейка 0001", 1, true))
+        assert.is_truthy(vim.wo[session.output.win].winbar:find(("ячейка " .. cid(buf, 2)), 1, true))
     end)
 
     it("вторая ячейка не смешивается с первой", function()
@@ -58,19 +66,19 @@ describe("шаг 3 целиком", function()
         jupyter.run_cell()
         local session = jupyter.session(buf)
         wait(function()
-            local run = session.exec:run_for("0001")
+            local run = session.exec:run_for(cid(buf, 2))
             return run and run.status == "ok"
         end, 60000, "первая ячейка")
 
         vim.api.nvim_win_set_cursor(0, { 4, 0 })
         jupyter.run_cell()
         wait(function()
-            local run = session.exec:run_for("0002")
+            local run = session.exec:run_for(cid(buf, 4))
             return run and run.status == "ok"
         end, 30000, "вторая ячейка")
 
-        assert.same({ "первая" }, session.exec:run_for("0001").lines)
-        assert.same({ "вторая" }, session.exec:run_for("0002").lines)
+        assert.same({ "первая" }, session.exec:run_for(cid(buf, 2)).lines)
+        assert.same({ "вторая" }, session.exec:run_for(cid(buf, 4)).lines)
         assert.same({ "вторая" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
     end)
 
@@ -86,11 +94,11 @@ describe("шаг 3 целиком", function()
         jupyter.run_cell()
         local session = jupyter.session(buf)
         wait(function()
-            local run = session.exec:run_for("0001")
+            local run = session.exec:run_for(cid(buf, 2))
             return run and run.table ~= nil and run.status == "ok"
         end, 60000, "результат-таблицу и завершение прогона")
 
-        local run = session.exec:run_for("0001")
+        local run = session.exec:run_for(cid(buf, 2))
         assert.equals(3, run.table.rows)
         assert.equals(2, run.table.cols)
         assert.equals(1, vim.fn.filereadable(run.table.path))
@@ -101,7 +109,9 @@ describe("шаг 3 целиком", function()
         local expected = vim.fn.fnamemodify(opened, ":h")
             .. "/.jupyter-out/"
             .. vim.fn.fnamemodify(opened, ":t:r")
-            .. "/0001/1.parquet"
+            .. "/"
+            .. cid(buf, 2)
+            .. "/1.parquet"
         assert.equals(expected, run.table.path)
         assert.is_truthy(session.output:status():find("3 × 2", 1, true))
     end)
@@ -114,11 +124,11 @@ describe("шаг 3 целиком", function()
         jupyter.run_cell()
         local session = jupyter.session(buf)
         wait(function()
-            local run = session.exec:run_for("0001")
+            local run = session.exec:run_for(cid(buf, 2))
             return run and run.status == "error"
         end, 60000, "ошибку")
 
-        assert.equals("ZeroDivisionError", session.exec:run_for("0001").error.code)
+        assert.equals("ZeroDivisionError", session.exec:run_for(cid(buf, 2)).error.code)
         assert.is_truthy(session.output:status():find("ZeroDivisionError", 1, true))
 
         -- именно эта проверка ловит трейсбек с "\n" внутри элемента: без неё падение
@@ -136,11 +146,11 @@ describe("шаг 3 целиком", function()
         vim.api.nvim_win_set_cursor(0, { 4, 0 })
         jupyter.run_cell()
         wait(function()
-            local run = session.exec:run_for("0002")
+            local run = session.exec:run_for(cid(buf, 4))
             return run and run.status == "ok"
         end, 30000, "ячейку после ошибки")
 
-        assert.same({ "после ошибки" }, session.exec:run_for("0002").lines)
+        assert.same({ "после ошибки" }, session.exec:run_for(cid(buf, 4)).lines)
     end)
 
     it("запуск сразу после открытия файла не теряется", function()
@@ -155,11 +165,11 @@ describe("шаг 3 целиком", function()
         assert.equals(1, session.kernel:queued())
 
         wait(function()
-            local run = session.exec:run_for("0001")
+            local run = session.exec:run_for(cid(buf, 2))
             return run and run.status == "ok"
         end, 60000, "выполнение из очереди")
 
-        assert.same({ "без ожидания" }, session.exec:run_for("0001").lines)
+        assert.same({ "без ожидания" }, session.exec:run_for(cid(buf, 2)).lines)
     end)
 
     it("status рассказывает про ядро и ячейки", function()
@@ -236,7 +246,7 @@ describe("диагностика", function()
         jupyter.run_cell()
         local session = jupyter.session(buf)
         wait(function()
-            local run = session.exec:run_for("0001")
+            local run = session.exec:run_for(cid(buf, 2))
             return run and run.status == "ok"
         end, 60000, "выполнение")
 
@@ -334,7 +344,7 @@ describe("повторный запуск при закрытом окне", fun
         jupyter.run_cell()
         local session = jupyter.session(buf)
         wait(function()
-            local run = session.exec:run_for("0001")
+            local run = session.exec:run_for(cid(buf, 2))
             return run and run.status == "ok"
         end, 60000, "первый прогон")
         assert.is_true(session.output:is_open())
@@ -347,7 +357,7 @@ describe("повторный запуск при закрытом окне", fun
         assert.is_true(session.output:is_open(), "окно должно подняться на новый прогон")
 
         wait(function()
-            local run = session.exec:run_for("0001")
+            local run = session.exec:run_for(cid(buf, 2))
             return run and run.run_id == 2 and run.status == "ok"
         end, 60000, "второй прогон")
         assert.same({ "первый прогон" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
@@ -369,28 +379,28 @@ describe("окно следует за курсором", function()
         vim.cmd("silent! %bwipeout!")
     end)
 
-    local function run_cell_at(row, cell_id)
+    local function run_cell_at(row)
         vim.api.nvim_win_set_cursor(0, { row, 0 })
         jupyter.run_cell()
         session = session or jupyter.session(buf)
         wait(function()
-            local r = session.exec:run_for(cell_id)
+            local r = session.exec:run_for(cid(buf, row))
             return r and r.status == "ok"
-        end, 60000, "прогон " .. cell_id)
+        end, 60000, "прогон в строке " .. row)
     end
 
     it("переключается на вывод ячейки под курсором", function()
         local _, b = notebook({ "# %%", 'print("первая")', "# %%", 'print("вторая")' })
         buf, session = b, nil
 
-        run_cell_at(2, "0001")
-        run_cell_at(4, "0002")
+        run_cell_at(2)
+        run_cell_at(4)
         assert.same({ "вторая" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
 
         vim.api.nvim_win_set_cursor(0, { 2, 0 })
         jupyter.follow_cursor(buf)
 
-        assert.equals("0001", session.output.run.cell_id)
+        assert.equals(cid(buf, 2), session.output.run.cell_id)
         assert.same({ "первая" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
     end)
 
@@ -398,17 +408,17 @@ describe("окно следует за курсором", function()
         local _, b = notebook({ "# %%", 'print("готово")', "# %%", "import time", "time.sleep(3)" })
         buf, session = b, nil
 
-        run_cell_at(2, "0001")
+        run_cell_at(2)
 
         vim.api.nvim_win_set_cursor(0, { 4, 0 })
         jupyter.run_cell()
-        assert.equals("0002", session.output.run.cell_id)
+        assert.equals(cid(buf, 4), session.output.run.cell_id)
 
         -- уходим читать первую ячейку, вторая ещё выполняется
         vim.api.nvim_win_set_cursor(0, { 2, 0 })
         jupyter.follow_cursor(buf)
 
-        assert.equals("0001", session.output.run.cell_id, "окно должно переключиться")
+        assert.equals(cid(buf, 2), session.output.run.cell_id, "окно должно переключиться")
         assert.same({ "готово" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
         assert.is_truthy(
             vim.wo[session.output.win].winbar:find("ещё 1", 1, true),
@@ -416,11 +426,11 @@ describe("окно следует за курсором", function()
         )
 
         wait(function()
-            local r = session.exec:run_for("0002")
+            local r = session.exec:run_for(cid(buf, 4))
             return r and r.status == "ok"
         end, 60000, "вторая ячейка")
 
-        assert.equals("0001", session.output.run.cell_id, "завершение чужого прогона окно не забирает")
+        assert.equals(cid(buf, 2), session.output.run.cell_id, "завершение чужого прогона окно не забирает")
         assert.is_nil(vim.wo[session.output.win].winbar:find("ещё", 1, true), "счётчик должен исчезнуть")
     end)
 
@@ -428,19 +438,19 @@ describe("окно следует за курсором", function()
         local _, b = notebook({ "# %%", 'print("есть вывод")', "# %%", "x = 1" })
         buf, session = b, nil
 
-        run_cell_at(2, "0001")
+        run_cell_at(2)
 
         vim.api.nvim_win_set_cursor(0, { 4, 0 })
         jupyter.follow_cursor(buf)
 
-        assert.equals("0001", session.output.run.cell_id)
+        assert.equals(cid(buf, 2), session.output.run.cell_id)
     end)
 
     it("при закрытом окне ничего не делает", function()
         local _, b = notebook({ "# %%", 'print("вывод")' })
         buf, session = b, nil
 
-        run_cell_at(2, "0001")
+        run_cell_at(2)
         session.output:close()
 
         jupyter.follow_cursor(buf)
@@ -517,7 +527,7 @@ describe("таблица", function()
         jupyter.run_cell()
         session = jupyter.session(buf)
         wait(function()
-            local r = session.exec:run_for("0001")
+            local r = session.exec:run_for(cid(buf, 2))
             return r and r.status == "ok" and r.table ~= nil
         end, 60000, "таблицу")
 
@@ -529,7 +539,7 @@ describe("таблица", function()
         assert.is_truthy(lines[1]:find("имя", 1, true))
         assert.is_truthy(lines[3]:find("стр%-0"))
         assert.is_truthy(session.table:status():find("строки 1–50 из 200", 1, true))
-        assert.is_truthy(vim.wo[session.table.win].winbar:find("ячейка 0001", 1, true))
+        assert.is_truthy(vim.wo[session.table.win].winbar:find(("ячейка " .. cid(buf, 2)), 1, true))
 
         session.table:get_actions().page_next()
         wait(function() return session.table.offset == 50 end, 30000, "вторую страницу")
@@ -555,7 +565,7 @@ describe("таблица", function()
         jupyter.run_cell()
         session = jupyter.session(buf)
         wait(function()
-            local r = session.exec:run_for("0001")
+            local r = session.exec:run_for(cid(buf, 2))
             return r and r.status == "ok"
         end, 60000, "прогон")
 
@@ -567,5 +577,83 @@ describe("таблица", function()
 
         assert.is_truthy(said and said:find("нет результата%-таблицы"))
         assert.is_false(session.table:is_open())
+    end)
+end)
+
+describe("история переживает перезагрузку", function()
+    local buf
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("вывод вчерашней ячейки виден без ядра и без перезапуска", function()
+        local path, b = notebook({ "# %%", 'print("это было раньше")', "# %%", "x = 1" })
+        buf = b
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        local session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok"
+        end, 60000, "прогон")
+
+        local id = cid(buf, 2)
+        assert.is_truthy(id:match("^%x%x%x%x$"), "id должен быть записан в маркер")
+        vim.cmd("silent write")
+
+        -- закрываем всё: ядра нет, состояние в памяти потеряно
+        jupyter.detach(buf)
+        buf = nil
+        vim.cmd("silent! %bwipeout!")
+
+        vim.cmd.edit(path)
+        vim.bo.filetype = "python"
+        buf = vim.api.nvim_get_current_buf()
+        local reopened = jupyter.session(buf)
+
+        assert.equals(id, cid(buf, 2), "id прочитался из текста")
+        assert.equals("none", reopened.kernel:state(), "ядро подниматься не должно")
+
+        local from_disk = reopened.store:last_run(id)
+        assert.is_truthy(from_disk, "история должна найтись по id")
+        assert.same({ "это было раньше" }, from_disk.lines)
+        assert.is_true(from_disk.historical)
+
+        -- и то же самое через движение курсора
+        reopened.output:open()
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+        jupyter.follow_cursor(buf)
+
+        assert.same({ "это было раньше" }, vim.api.nvim_buf_get_lines(reopened.output.buf, 0, -1, false))
+        assert.is_truthy(reopened.output:status():find("из истории", 1, true))
+    end)
+
+    it("status рассказывает про историю", function()
+        local _, b = notebook({ "# %%", 'print("для истории")' })
+        buf = b
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        local session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok"
+        end, 60000, "прогон")
+
+        session.store:load()
+        local st = jupyter.status()
+
+        assert.equals(1, st.history_cells)
+        assert.is_true(st.history_runs >= 1)
     end)
 end)
