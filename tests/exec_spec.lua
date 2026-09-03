@@ -175,3 +175,22 @@ describe("запуск", function()
         assert.is_true(#updates > before)
     end)
 end)
+
+describe("признак нового прогона", function()
+    it("новый прогон помечен, обновления — нет", function()
+        local k = stub_kernel()
+        local flags = {}
+        local ex = exec.new({
+            kernel = k,
+            on_update = function(_, is_new) table.insert(flags, is_new) end,
+        }):attach()
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", 'print("раз")' })
+        vim.bo[buf].filetype = "python"
+
+        local run = ex:run_at(buf, 2)
+        k.emit({ ev = "exec.done", cell_id = run.cell_id, run_id = run.run_id, data = { status = "ok" } })
+
+        assert.same({ true, false }, flags)
+    end)
+end)

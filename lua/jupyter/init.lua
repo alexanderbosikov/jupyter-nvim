@@ -106,9 +106,14 @@ function M.session(buf)
     local drawer = output.new(M.config.output)
     local ex = exec.new({
         kernel = k,
-        on_update = function(run)
-            if not drawer:update(run) then
+        on_update = function(run, is_new)
+            -- Новый прогон показываем всегда, даже если окно вывода было закрыто: нажал
+            -- запуск — хочешь видеть результат. А обновления идущего прогона окно не
+            -- поднимают, иначе закрыть drawer посреди долгого запроса было бы невозможно.
+            if is_new then
                 drawer:show(run)
+            else
+                drawer:update(run)
             end
         end,
     }):attach()

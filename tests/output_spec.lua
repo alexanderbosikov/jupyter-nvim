@@ -193,3 +193,30 @@ describe("многострочный элемент", function()
         out:close()
     end)
 end)
+
+describe("закрытое окно", function()
+    it("update не поднимает окно, но пишет в буфер", function()
+        local out = output.new({ size = 8 })
+        local r = run({ lines = { "первое" } })
+        out:show(r)
+        out:close()
+
+        r.lines = { "первое", "второе" }
+        assert.is_true(out:update(r))
+
+        assert.is_false(out:is_open(), "обновление не должно поднимать закрытое окно")
+        assert.same({ "первое", "второе" }, vim.api.nvim_buf_get_lines(out.buf, 0, -1, false))
+    end)
+
+    it("show поднимает окно заново", function()
+        local out = output.new({ size = 8 })
+        out:show(run({ lines = { "раз" } }))
+        out:close()
+
+        out:show(run({ cell_id = "0001", run_id = 2, lines = { "два" } }))
+
+        assert.is_true(out:is_open())
+        assert.same({ "два" }, vim.api.nvim_buf_get_lines(out.buf, 0, -1, false))
+        out:close()
+    end)
+end)

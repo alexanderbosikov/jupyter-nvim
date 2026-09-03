@@ -104,7 +104,7 @@ function Exec:run(buf, cell)
         end
     end)
 
-    self:_updated(run)
+    self:_updated(run, true)
     return run
 end
 
@@ -200,9 +200,11 @@ function M.lines_of(run)
     return require("jupyter.ui.common").flatten(run.lines)
 end
 
-function Exec:_updated(run)
+---@param run jupyter.Run
+---@param is_new boolean|nil прогон только что начат, а не обновлён
+function Exec:_updated(run, is_new)
     if self.on_update then
-        self.on_update(run)
+        self.on_update(run, is_new == true)
     end
 end
 

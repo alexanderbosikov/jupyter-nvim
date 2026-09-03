@@ -310,3 +310,46 @@ describe("гашение", function()
         assert.is_true(spent < 3000, ("гашение заняло %d мс"):format(spent))
     end)
 end)
+
+describe("повторный запуск при закрытом окне", function()
+    local buf
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("окно вывода поднимается снова для той же ячейки", function()
+        local _, b = notebook({ "# %%", 'print("первый прогон")' })
+        buf = b
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        local session = jupyter.session(buf)
+        wait(function()
+            local run = session.exec:run_for("0001")
+            return run and run.status == "ok"
+        end, 60000, "первый прогон")
+        assert.is_true(session.output:is_open())
+
+        session.output:close()
+        assert.is_false(session.output:is_open())
+
+        -- та же ячейка: раньше update() молча писал в буфер и окно не появлялось
+        jupyter.run_cell()
+        assert.is_true(session.output:is_open(), "окно должно подняться на новый прогон")
+
+        wait(function()
+            local run = session.exec:run_for("0001")
+            return run and run.run_id == 2 and run.status == "ok"
+        end, 60000, "второй прогон")
+        assert.same({ "первый прогон" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
+    end)
+end)
