@@ -657,3 +657,88 @@ describe("история переживает перезагрузку", functio
         assert.is_true(st.history_runs >= 1)
     end)
 end)
+
+describe("устаревший и исторический вывод", function()
+    local buf, session
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+            session = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    local function run_and_wait(row)
+        vim.api.nvim_win_set_cursor(0, { row, 0 })
+        jupyter.run_cell()
+        session = session or jupyter.session(buf)
+        local want = session.exec._next_run
+        wait(function()
+            local r = session.exec:run_for(cid(buf, row))
+            return r and r.run_id == want and r.status ~= "running"
+        end, 60000, "прогон в строке " .. row)
+    end
+
+    it("правка ячейки помечает показанный вывод как устаревший", function()
+        local _, b = notebook({ "# %%", 'print("старый результат")' })
+        buf, session = b, nil
+
+        run_and_wait(2)
+        assert.is_false(session.output:is_stale(), "свежий вывод устаревшим быть не должен")
+
+        vim.api.nvim_buf_set_lines(buf, 1, 2, false, { 'print("уже другой код")' })
+        session.output:refresh_status()
+
+        assert.is_true(session.output:is_stale())
+        assert.is_truthy(vim.wo[session.output.win].winbar:find("код изменился", 1, true))
+    end)
+
+    it("листание истории показывает предыдущие прогоны и не сбивается курсором", function()
+        local _, b = notebook({ "# %%", 'print("прогон А")' })
+        buf, session = b, nil
+
+        run_and_wait(2)
+        vim.api.nvim_buf_set_lines(buf, 1, 2, false, { 'print("прогон Б")' })
+        run_and_wait(2)
+        assert.same({ "прогон Б" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
+
+        local older = jupyter.prev_run()
+
+        assert.is_truthy(older)
+        assert.is_true(older.historical)
+        assert.same({ "прогон А" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
+
+        -- движение курсора не должно возвращать к последнему прогону
+        jupyter.follow_cursor(buf)
+        assert.same({ "прогон А" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
+
+        jupyter.next_run()
+        assert.same({ "прогон Б" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
+
+        -- новый запуск снимает просмотр истории
+        run_and_wait(2)
+        assert.is_nil(session.browse[cid(buf, 2)])
+    end)
+
+    it("ошибки сохраняются и находятся в истории", function()
+        local _, b = notebook({ "# %%", "1 / 0" })
+        buf, session = b, nil
+
+        run_and_wait(2)
+        session.store:load()
+
+        local record = session.store:last_record(cid(buf, 2))
+        assert.equals("error", record.status)
+        assert.equals("ZeroDivisionError", record.ename)
+
+        local from_disk = session.store:last_run(cid(buf, 2))
+        assert.equals("ZeroDivisionError", from_disk.error.code)
+        assert.is_true(#from_disk.lines > 0, "трейсбек должен быть на диске")
+    end)
+end)

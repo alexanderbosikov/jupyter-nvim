@@ -248,3 +248,36 @@ describe("счётчик идущих прогонов", function()
         out:close()
     end)
 end)
+
+describe("устаревший вывод", function()
+    it("код изменился — в winbar предупреждение", function()
+        local stale = false
+        local out = output.new({ size = 8, stale = function() return stale end })
+        out:show(run({ status = "ok", duration_ms = 10, code_sha = "9c1f2a" }))
+        assert.is_false(out:is_stale())
+        assert.is_nil(vim.wo[out.win].winbar:find("код изменился", 1, true))
+
+        stale = true
+        out:refresh_status()
+
+        assert.is_true(out:is_stale())
+        assert.is_truthy(vim.wo[out.win].winbar:find("код изменился", 1, true))
+        out:close()
+    end)
+
+    it("прогон из истории подписан временем", function()
+        local out = output.new({ size = 8 })
+        out:show(run({ status = "ok", duration_ms = 500, historical = true, at = "03.09 12:46" }))
+
+        assert.is_truthy(out:status():find("из истории · 03.09 12:46", 1, true))
+        out:close()
+    end)
+
+    it("ошибка из истории тоже помечена", function()
+        local out = output.new({ size = 8 })
+        out:show(run({ status = "error", error = { code = "KeyError" }, historical = true }))
+
+        assert.equals("✗ KeyError · из истории", out:status())
+        out:close()
+    end)
+end)

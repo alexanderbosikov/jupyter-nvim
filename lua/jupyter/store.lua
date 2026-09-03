@@ -9,6 +9,35 @@
 
 local M = {}
 
+---Смещение локальной зоны от UTC в секундах.
+local function utc_offset()
+    local now = os.time()
+    return os.difftime(now, os.time(os.date("!*t", now)))
+end
+
+---ISO-время из индекса (оно в UTC) в локальное «дд.мм чч:мм».
+---@param iso string|nil
+---@return string|nil
+function M.local_time(iso)
+    if type(iso) ~= "string" then
+        return nil
+    end
+    local y, mo, d, h, mi = iso:match("^(%d+)-(%d+)-(%d+)T(%d+):(%d+)")
+    if not y then
+        return nil
+    end
+    local epoch = os.time({
+        year = tonumber(y),
+        month = tonumber(mo),
+        day = tonumber(d),
+        hour = tonumber(h),
+        min = tonumber(mi),
+        sec = 0,
+        isdst = false,
+    }) + utc_offset()
+    return os.date("%d.%m %H:%M", epoch)
+end
+
 ---@class jupyter.Store
 local Store = {}
 Store.__index = Store
@@ -106,6 +135,8 @@ function Store:to_run(record)
         lines = {},
         historical = true, -- drawer покажет это в статусе
         record = record,
+        code_sha = record.code_sha,
+        at = M.local_time(record.started_at),
     }
 
     if record.kind == "table" then

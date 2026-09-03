@@ -4,6 +4,7 @@
 -- с буфером. Ядро поднимается лениво, на первом запуске ячейки, а не при открытии файла —
 -- иначе просто заглянуть в ноутбук означало бы поднять python-процесс.
 
+local cellid = require("jupyter.cellid")
 local cells = require("jupyter.cells")
 local common = require("jupyter.ui.common")
 local exec = require("jupyter.exec")
@@ -30,6 +31,8 @@ M.defaults = {
         run_below = "<leader>jB",
         next_cell = "]c",
         prev_cell = "[c",
+        prev_run = "[r",
+        next_run = "]r",
         insert_above = "<leader>ja",
         insert_below = "<leader>jb",
         toggle_output = "<leader>jo",
@@ -129,6 +132,18 @@ function M.session(buf)
             end
             return count
         end,
+        -- вывод получен из другого кода, чем сейчас в ячейке: сравниваем sha так же,
+        -- как считает сайдкар. Это и есть ответ на «почему тут старый вывод»
+        stale = function(run)
+            if not run or not run.code_sha then
+                return false
+            end
+            local cell = cellid.find(buf, run.cell_id)
+            if not cell then
+                return false
+            end
+            return vim.fn.sha256(cells.text(buf, cell)):sub(1, 8) ~= run.code_sha
+        end,
     }))
     ex = exec.new({
         kernel = k,
@@ -137,6 +152,10 @@ function M.session(buf)
             -- хочешь видеть результат. Обновление чужого прогона окно не забирает, но
             -- счётчик «ещё выполняется» в winbar обновить надо.
             if is_new then
+                local session = sessions[buf]
+                if session then
+                    session.browse[run.cell_id] = nil -- новый прогон снимает просмотр истории
+                end
                 drawer:show(run)
             elseif not drawer:update(run) then
                 drawer:refresh_status()
@@ -158,6 +177,7 @@ function M.session(buf)
         output = drawer,
         table = tbl,
         store = store.new({ notebook = name ~= "" and name or nil, out_dir = M.config.out_dir }),
+        browse = {}, -- cell_id -> номер просматриваемого прогона в истории
         started = false,
         log = {},
     }
@@ -235,9 +255,15 @@ function M.follow_cursor(buf)
         return
     end
     local cell_id = exec.cell_id(s.buf, cell)
-    -- сначала прогон этой сессии, потом история с диска: так вывод вчерашней ячейки
+    -- если по этой ячейке листают историю, курсор не должен возвращать к последнему прогону
+    local browsing = s.browse[cell_id]
+    local run
+    if browsing then
+        run = s.store:to_run(s.store:records_of(cell_id)[browsing])
+    end
+    -- иначе: прогон этой сессии, потом история с диска — так вывод вчерашней ячейки
     -- виден сразу при открытии файла, без перезапуска и без ядра
-    local run = s.exec:run_for(cell_id) or s.store:last_run(cell_id)
+    run = run or s.exec:run_for(cell_id) or s.store:last_run(cell_id)
     if run and (not shown or shown.cell_id ~= run.cell_id or shown.run_id ~= run.run_id) then
         s.output:show(run)
     end
@@ -416,6 +442,47 @@ function M.status()
         history_cells = known_cells,
         history_runs = known_runs,
     }
+end
+
+---Листать историю прогонов ячейки под курсором.
+---@param step integer -1 назад, 1 вперёд
+---@return jupyter.Run|nil
+function M.browse_run(step)
+    local s = M.session()
+    local cell = cells.at(s.buf, vim.api.nvim_win_get_cursor(0)[1])
+    if not cell then
+        vim.notify("jupyter.nvim: под курсором нет ячейки", vim.log.levels.WARN)
+        return nil
+    end
+
+    local cell_id = exec.cell_id(s.buf, cell)
+    s.store:load() -- индекс мог дописаться после последнего прогона
+    local records = s.store:records_of(cell_id)
+    if #records == 0 then
+        vim.notify("jupyter.nvim: истории по этой ячейке нет", vim.log.levels.WARN)
+        return nil
+    end
+
+    local at = s.browse[cell_id] or #records
+    local want = math.min(#records, math.max(1, at + step))
+    s.browse[cell_id] = want
+
+    local run = s.store:to_run(records[want])
+    s.output:show(run)
+    vim.notify(("jupyter.nvim: прогон %d из %d%s"):format(
+        want,
+        #records,
+        run.status == "error" and (" · " .. (run.error and run.error.code or "ошибка")) or ""
+    ))
+    return run
+end
+
+function M.prev_run()
+    return M.browse_run(-1)
+end
+
+function M.next_run()
+    return M.browse_run(1)
 end
 
 ---Перечитать историю прогонов с диска: нужно, если ноутбук считали заново

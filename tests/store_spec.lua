@@ -107,3 +107,33 @@ describe("хранилище", function()
         assert.same({}, run.lines)
     end)
 end)
+
+describe("время прогона", function()
+    it("ISO из индекса переводится в локальное", function()
+        local formatted = store.local_time("2026-09-03T12:46:19.742508+00:00")
+
+        assert.is_truthy(formatted:match("^%d%d%.%d%d %d%d:%d%d$"), "получили: " .. tostring(formatted))
+    end)
+
+    it("мусор не ломает", function()
+        assert.is_nil(store.local_time(nil))
+        assert.is_nil(store.local_time("не дата"))
+        assert.is_nil(store.local_time(42))
+    end)
+
+    it("прогон из индекса несёт время и sha кода", function()
+        local dir = vim.fn.tempname()
+        vim.fn.mkdir(dir .. "/.jupyter-out/отчёт", "p")
+        vim.fn.writefile({
+            vim.json.encode({
+                cell_id = "a3f9", run_id = 1, status = "ok", kind = "text",
+                started_at = "2026-09-03T12:46:19+00:00", code_sha = "9c1f2a",
+            }),
+        }, dir .. "/.jupyter-out/отчёт/index.jsonl")
+
+        local run = store.new({ notebook = dir .. "/отчёт.md" }):last_run("a3f9")
+
+        assert.equals("9c1f2a", run.code_sha)
+        assert.is_truthy(run.at)
+    end)
+end)

@@ -36,6 +36,9 @@ function M.new(opts)
     return setmetatable({
         -- функция-счётчик прогонов, идущих не в этом окне: рисуется в winbar
         pending = opts.pending,
+        -- функция «код ячейки изменился с момента этого прогона»: главный признак,
+        -- что показанный вывод к тексту на экране уже не относится
+        stale = opts.stale,
         position = opts.position or "bottom",
         size = opts.size or 15,
         keys = opts.keys or M.DEFAULT_KEYS,
@@ -159,7 +162,7 @@ function Output:status()
 
     local parts = {}
     if run.historical then
-        table.insert(parts, "из истории")
+        table.insert(parts, run.at and ("из истории · " .. run.at) or "из истории")
     end
     if run.duration_ms then
         table.insert(parts, ("%.1f с"):format(run.duration_ms / 1000))
@@ -170,6 +173,12 @@ function Output:status()
         table.insert(parts, ("%d строк"):format(#run.lines))
     end
     return ("%s %s"):format(STATUS.ok, table.concat(parts, " · "))
+end
+
+---Показанный вывод получен из другого кода, чем сейчас в ячейке?
+---@return boolean
+function Output:is_stale()
+    return self.run ~= nil and self.stale ~= nil and self.stale(self.run) == true
 end
 
 ---Пересобрать только строку статуса. Нужно, когда изменился прогон, который в окне
@@ -190,6 +199,7 @@ function Output:_render_winbar()
         "%=",
         common.escape_status(self:status()),
         pending > 0 and common.escape_status((" · ⏳ ещё %d"):format(pending)) or "",
+        self:is_stale() and common.escape_status(" · ⚠ код изменился") or "",
         " ",
     })
 end

@@ -29,6 +29,12 @@ Notebook-workflow для nvim: ячейки в тексте, ядро в отд�
 
 Зачем: по этому id находится история прогонов в `.jupyter-out/`, в том числе снаружи nvim.
 
+## Свежий вывод и старый
+
+Вывод из истории подписан в winbar временем прогона (`из истории · 03.09 12:46`), а если код
+ячейки с тех пор менялся — появляется `⚠ код изменился`. Сравнение по sha кода, той же формулы,
+что пишет сайдкар в индекс. Это ответ на «почему тут результат, которого я сейчас не получал».
+
 ## Попробовать
 
 Сайдкару нужен python с `jupyter_client` и polars:
@@ -52,7 +58,11 @@ vim.g.jupyter_python = vim.fn.expand("~/work/jupyter-utils/.venv/bin/python")
 
 Команды: `:JupyterRun`, `:JupyterRunAll`, `:JupyterRunBelow`, `:JupyterOutput`,
 `:JupyterTable`, `:JupyterInterrupt`, `:JupyterRestart`, `:JupyterLog`, `:JupyterHistory`,
-`:JupyterStatus`, `:JupyterStop`.
+`:JupyterRunPrev`, `:JupyterRunNext`, `:JupyterStatus`, `:JupyterStop`.
+
+`[r` / `]r` листают прогоны ячейки: ошибки сохраняются вместе с успешными, поэтому после
+неудачной попытки можно вернуться к последнему хорошему результату. Новый запуск снимает
+просмотр истории.
 
 В окне таблицы: `H`/`L` — страницы, `[[`/`]]` — первая и последняя, `R` — перечитать,
 `q` — закрыть вкладку.
