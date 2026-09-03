@@ -103,17 +103,34 @@ function M.session(buf)
         kernel_name = M.config.kernel_name,
         env = M.config.env,
     })
-    local drawer = output.new(M.config.output)
-    local ex = exec.new({
+    local ex, drawer
+    drawer = output.new(vim.tbl_extend("force", M.config.output, {
+        -- сколько прогонов идёт помимо показываемого: без статуса под ячейкой (шаг 6)
+        -- это единственный признак, что где-то ещё выполняется запрос
+        pending = function()
+            if not ex then
+                return 0
+            end
+            local shown = drawer.run and drawer.run.cell_id
+            local count = 0
+            for cell_id, run in pairs(ex.runs) do
+                if run.status == "running" and cell_id ~= shown then
+                    count = count + 1
+                end
+            end
+            return count
+        end,
+    }))
+    ex = exec.new({
         kernel = k,
         on_update = function(run, is_new)
-            -- Новый прогон показываем всегда, даже если окно вывода было закрыто: нажал
-            -- запуск — хочешь видеть результат. А обновления идущего прогона окно не
-            -- поднимают, иначе закрыть drawer посреди долгого запроса было бы невозможно.
+            -- Новый прогон показываем всегда, даже если окно было закрыто: нажал запуск —
+            -- хочешь видеть результат. Обновление чужого прогона окно не забирает, но
+            -- счётчик «ещё выполняется» в winbar обновить надо.
             if is_new then
                 drawer:show(run)
-            else
-                drawer:update(run)
+            elseif not drawer:update(run) then
+                drawer:refresh_status()
             end
         end,
     }):attach()
@@ -177,11 +194,9 @@ end
 
 ---Показать в drawer'е вывод ячейки под курсором.
 ---
----Правила ровно два, и второе важнее первого: (1) переключаемся, только если у ячейки под
----курсором есть прогон — пустое окно вместо чужого вывода никому не нужно; (2) не уводим
----окно с прогона, который ещё идёт, иначе долгий запрос пропадает из вида, стоит подвинуть
----курсор. Пока нет статуса под ячейкой (шаг 6), drawer — единственное место, где видно,
----что ячейка выполняется.
+---Правило одно: переключаемся, только если у ячейки под курсором есть прогон — пустое окно
+---вместо чужого вывода никому не нужно. Идущий запрос при этом уходить из вида не мешает:
+---пока он выполняется, в winbar висит счётчик «ещё N», а его завершение окно не забирает.
 ---@param buf integer
 function M.follow_cursor(buf)
     local s = sessions[buf]
@@ -189,9 +204,6 @@ function M.follow_cursor(buf)
         return
     end
     local shown = s.output.run
-    if shown and shown.status == "running" then
-        return
-    end
 
     local cell = cells.at(buf, vim.api.nvim_win_get_cursor(0)[1])
     if not cell then

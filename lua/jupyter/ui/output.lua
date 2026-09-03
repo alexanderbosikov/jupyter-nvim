@@ -30,10 +30,12 @@ local STATUS = {
 local Output = {}
 Output.__index = Output
 
----@param opts? table position ("bottom"|"right"), size, keys, follow
+---@param opts? table position ("bottom"|"right"), size, keys, follow, pending
 function M.new(opts)
     opts = opts or {}
     return setmetatable({
+        -- функция-счётчик прогонов, идущих не в этом окне: рисуется в winbar
+        pending = opts.pending,
         position = opts.position or "bottom",
         size = opts.size or 15,
         keys = opts.keys or M.DEFAULT_KEYS,
@@ -167,16 +169,24 @@ function Output:status()
     return ("%s %s"):format(STATUS.ok, table.concat(parts, " · "))
 end
 
+---Пересобрать только строку статуса. Нужно, когда изменился прогон, который в окне
+---не показывается: счётчик «ещё выполняется» иначе останется висеть неверным.
+function Output:refresh_status()
+    self:_render_winbar()
+end
+
 function Output:_render_winbar()
     if not self:is_open() then
         return
     end
     local cell = self.run and self.run.cell_id or "—"
+    local pending = self.pending and self.pending() or 0
     vim.wo[self.win].winbar = table.concat({
         " ",
         common.escape_status("ячейка " .. cell),
         "%=",
         common.escape_status(self:status()),
+        pending > 0 and common.escape_status((" · ⏳ ещё %d"):format(pending)) or "",
         " ",
     })
 end

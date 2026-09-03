@@ -394,7 +394,7 @@ describe("окно следует за курсором", function()
         assert.same({ "первая" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
     end)
 
-    it("не уводит окно с идущего прогона", function()
+    it("во время долгого запроса можно смотреть вывод другой ячейки", function()
         local _, b = notebook({ "# %%", 'print("готово")', "# %%", "import time", "time.sleep(3)" })
         buf, session = b, nil
 
@@ -404,15 +404,24 @@ describe("окно следует за курсором", function()
         jupyter.run_cell()
         assert.equals("0002", session.output.run.cell_id)
 
-        -- курсор уехал на первую ячейку, но вторая ещё выполняется
+        -- уходим читать первую ячейку, вторая ещё выполняется
         vim.api.nvim_win_set_cursor(0, { 2, 0 })
         jupyter.follow_cursor(buf)
 
-        assert.equals("0002", session.output.run.cell_id, "окно не должно уходить с идущего прогона")
+        assert.equals("0001", session.output.run.cell_id, "окно должно переключиться")
+        assert.same({ "готово" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
+        assert.is_truthy(
+            vim.wo[session.output.win].winbar:find("ещё 1", 1, true),
+            "в winbar должен быть счётчик идущих прогонов: " .. vim.wo[session.output.win].winbar
+        )
+
         wait(function()
             local r = session.exec:run_for("0002")
             return r and r.status == "ok"
         end, 60000, "вторая ячейка")
+
+        assert.equals("0001", session.output.run.cell_id, "завершение чужого прогона окно не забирает")
+        assert.is_nil(vim.wo[session.output.win].winbar:find("ещё", 1, true), "счётчик должен исчезнуть")
     end)
 
     it("ячейка без прогона окно не трогает", function()

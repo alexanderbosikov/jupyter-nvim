@@ -220,3 +220,31 @@ describe("закрытое окно", function()
         out:close()
     end)
 end)
+
+describe("счётчик идущих прогонов", function()
+    it("появляется в winbar и исчезает", function()
+        local pending = 0
+        local out = output.new({ size = 8, pending = function() return pending end })
+        out:show(run({ status = "ok", duration_ms = 100 }))
+        assert.is_nil(vim.wo[out.win].winbar:find("ещё", 1, true))
+
+        pending = 2
+        out:refresh_status()
+        assert.is_truthy(vim.wo[out.win].winbar:find("ещё 2", 1, true))
+
+        pending = 0
+        out:refresh_status()
+        assert.is_nil(vim.wo[out.win].winbar:find("ещё", 1, true))
+        out:close()
+    end)
+
+    it("refresh_status не трогает содержимое буфера", function()
+        local out = output.new({ size = 8, pending = function() return 1 end })
+        out:show(run({ lines = { "не менять" }, status = "ok" }))
+
+        out:refresh_status()
+
+        assert.same({ "не менять" }, vim.api.nvim_buf_get_lines(out.buf, 0, -1, false))
+        out:close()
+    end)
+end)
