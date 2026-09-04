@@ -1097,17 +1097,51 @@ describe("окно вывода при открытии", function()
         vim.cmd("silent! %bwipeout!")
     end)
 
-    it("открывается для буфера с ячейками", function()
+    it("без истории окно не открывает, но статусы рисует", function()
+        -- пустое окно на пол-экрана хуже, чем никакого: при первом запуске оно откроется само
         jupyter.setup({ output = { open_on_attach = true } })
-        local buf = vim.api.nvim_create_buf(false, true)
-        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", "x = 1" })
-        vim.bo[buf].filetype = "python"
+        local path = vim.fn.tempname() .. ".py"
+        vim.fn.writefile({ "# %%", "x = 1" }, path)
+        vim.cmd.edit(path)
+        vim.bo.filetype = "python"
+        local buf = vim.api.nvim_get_current_buf()
+
+        assert.is_false(jupyter.open_for(buf))
+
+        local session = jupyter.session(buf)
+        assert.is_false(session.output:is_open())
+        assert.equals("none", session.kernel:state(), "ядро при этом не поднимается")
+        jupyter.detach(buf)
+    end)
+
+    it("с историей открывает и сразу показывает прогон", function()
+        jupyter.setup({ output = { open_on_attach = true } })
+        local path = vim.fn.tempname() .. ".py"
+        vim.fn.writefile({ "# %%", 'print("вчерашнее")' }, path)
+        vim.cmd.edit(path)
+        vim.bo.filetype = "python"
+        local buf = vim.api.nvim_get_current_buf()
+
+        -- кладём историю на диск руками: ядро для этого не нужно
+        local session = jupyter.session(buf)
+        local id = cid(buf, 2)
+        local base = session.store.base
+        vim.fn.mkdir(base .. "/" .. id, "p")
+        vim.fn.writefile({ "вчерашнее" }, base .. "/" .. id .. "/1.txt")
+        vim.fn.writefile({
+            vim.json.encode({
+                cell_id = id, run_id = 1, status = "ok", kind = "text",
+                path = id .. "/1.txt", started_at = "2026-09-04T09:00:00+00:00",
+                duration_ms = 7, code_sha = "abc12345",
+            }),
+        }, base .. "/index.jsonl")
+        session.store:load()
 
         assert.is_true(jupyter.open_for(buf))
 
-        local session = jupyter.session(buf)
         assert.is_true(session.output:is_open())
-        assert.equals("none", session.kernel:state(), "ядро при этом не поднимается")
+        assert.same({ "вчерашнее" }, vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false))
+        assert.equals("none", session.kernel:state())
         jupyter.detach(buf)
     end)
 

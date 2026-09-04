@@ -342,19 +342,34 @@ function M.is_stale(buf, run)
     return s.stale_cache.value[key]
 end
 
----Открыть окно вывода для буфера, если это похоже на ноутбук.
+---Открыть окно вывода при открытии ноутбука — если есть что показать.
 ---
----Проверка на ячейки обязательна: `ft = python` ловит любой .py, а поднимать окно вывода
----над обычным скриптом незачем. Ядро при этом не стартует — оно по-прежнему ленивое.
+---Две проверки, и обе нужны. Ячейки: `ft = python` ловит любой скрипт, поднимать над ним
+---окно незачем. История: пустое окно на пол-экрана хуже, чем никакого, а при первом же
+---запуске ячейки окно откроется само. Ядро при этом не стартует — оно по-прежнему ленивое.
 ---@param buf integer
 ---@return boolean открыли
 function M.open_for(buf)
-    if #cells.list(buf) == 0 then
+    local list = cells.list(buf)
+    if #list == 0 then
         return false
     end
+
     local s = M.session(buf)
-    s.output:open()
-    M.repaint(buf) -- заодно нарисовать статусы и подхватить историю
+    M.repaint(buf) -- статусы под ячейками рисуем в любом случае: они не занимают окна
+
+    -- показать прогон ячейки под курсором, иначе самый свежий по ноутбуку
+    local run
+    local cell = cells.at(buf, vim.api.nvim_win_get_cursor(0)[1])
+    if cell then
+        run = s.store:last_run(exec.cell_id(buf, cell))
+    end
+    run = run or s.store:to_run(s.store:latest_record())
+    if not run then
+        return false
+    end
+
+    s.output:show(run)
     return true
 end
 

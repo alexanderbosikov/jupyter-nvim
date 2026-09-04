@@ -172,6 +172,20 @@ function Store:last_run(cell_id)
     return self:to_run(self:last_record(cell_id))
 end
 
+---Самый свежий прогон по всем ячейкам: чем заполнить окно при открытии ноутбука.
+---@return table|nil
+function Store:latest_record()
+    self:ensure_loaded()
+    local newest
+    for _, records in pairs(self.history) do
+        local last = records[#records]
+        if last and (not newest or (last.run_id or 0) > (newest.run_id or 0)) then
+            newest = last
+        end
+    end
+    return newest
+end
+
 ---Сколько прогонов знаем по всем ячейкам.
 ---@return integer cells, integer runs
 function Store:size()
