@@ -11,6 +11,39 @@ local M = {}
 
 M.PREVIEW_LINES = 60
 
+---Подходит ли строка под запрос: все слова запроса должны встретиться, регистр не важен.
+---@param line string
+---@param prompt string
+---@return boolean
+function M.matches(line, prompt)
+    if prompt == nil or prompt == "" then
+        return true
+    end
+    -- vim.fn.tolower, а не string.lower: последний работает побайтово и кириллицу
+    -- не приводит, то есть поиск по русским заголовкам стал бы регистрозависимым
+    local haystack = vim.fn.tolower(line)
+    for word in vim.fn.tolower(prompt):gmatch("%S+") do
+        if not haystack:find(word, 1, true) then
+            return false
+        end
+    end
+    return true
+end
+
+---Сортировщик, который фильтрует, но не переставляет.
+---
+---Штатный нечёткий сортировщик telescope выстраивает результаты по релевантности, и порядок
+---разделов в документе теряется — а для оглавления он и есть главная информация. Здесь всем
+---подходящим строкам даётся одинаковый вес, поэтому остаётся исходный порядок.
+local function ordered_sorter()
+    local sorters = require("telescope.sorters")
+    return sorters.Sorter:new({
+        scoring_function = function(_, prompt, line)
+            return M.matches(line, prompt) and 1 or -1
+        end,
+    })
+end
+
 ---@return boolean, table|nil
 function M.telescope()
     local ok, telescope = pcall(require, "telescope.pickers")
@@ -72,7 +105,11 @@ function M.select(entries, opts, on_choice)
     local action_state = require("telescope.actions.state")
 
     pickers
-        .new({}, {
+        .new({
+            -- сверху вниз: иначе первая запись документа оказывается внизу списка
+            sorting_strategy = "ascending",
+            layout_config = { prompt_position = "top" },
+        }, {
             prompt_title = opts.prompt,
             finder = finders.new_table({
                 results = entries,
@@ -87,7 +124,7 @@ function M.select(entries, opts, on_choice)
                     }
                 end,
             }),
-            sorter = conf.generic_sorter({}),
+            sorter = ordered_sorter(),
             previewer = opts.buf and previewer(opts.buf, entries, opts.format) or nil,
             attach_mappings = function(prompt_bufnr)
                 actions.select_default:replace(function()

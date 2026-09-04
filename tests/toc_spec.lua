@@ -217,3 +217,30 @@ describe("выбор списка", function()
         assert.is_false(called)
     end)
 end)
+
+describe("фильтрация списка", function()
+    local picker = require("jupyter.ui.picker")
+
+    it("пустой запрос пропускает всё", function()
+        assert.is_true(picker.matches("любая строка", ""))
+        assert.is_true(picker.matches("любая строка", nil))
+    end)
+
+    it("регистр не важен", function()
+        assert.is_true(picker.matches("SELECT count(*)", "select"))
+        assert.is_true(picker.matches("Загрузка данных", "ЗАГРУЗКА"))
+    end)
+
+    it("все слова запроса должны встретиться", function()
+        assert.is_true(picker.matches("sql: select count(*) from t  ✓ 0.7 с", "sql count"))
+        assert.is_false(picker.matches("sql: select count(*) from t", "sql orders"))
+    end)
+
+    it("слова могут идти в любом порядке", function()
+        assert.is_true(picker.matches("df = load()  ✗ KeyError", "keyerror df"))
+    end)
+
+    it("ищется и по состоянию, не только по коду", function()
+        assert.is_true(picker.matches("plt.plot(x)  не запускалась", "не запускалась"))
+    end)
+end)
