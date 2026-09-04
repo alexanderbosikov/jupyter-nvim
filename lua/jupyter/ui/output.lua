@@ -69,6 +69,18 @@ function Output:is_open()
     return self.win ~= nil and vim.api.nvim_win_is_valid(self.win)
 end
 
+---Размер окна в строках или колонках.
+---Дробное значение — доля экрана: `size = 0.5` это половина ширины при position = "right".
+---@return integer
+function Output:computed_size()
+    local vertical = self.position == "right"
+    local total = vertical and vim.o.columns or vim.o.lines
+    if self.size > 0 and self.size < 1 then
+        return math.max(1, math.floor(total * self.size))
+    end
+    return math.max(1, math.floor(self.size))
+end
+
 ---Открыть окно, не забирая фокус: пользователь остаётся в ноутбуке.
 function Output:open()
     if self:is_open() then
@@ -76,9 +88,9 @@ function Output:open()
     end
     local from = vim.api.nvim_get_current_win()
     local buf = self:_ensure_buf()
+    local vertical = self.position == "right"
 
-    vim.cmd(self.position == "right" and ("botright %dvsplit"):format(self.size)
-        or ("botright %dsplit"):format(self.size))
+    vim.cmd(("botright %d%s"):format(self:computed_size(), vertical and "vsplit" or "split"))
     self.win = vim.api.nvim_get_current_win()
     vim.api.nvim_win_set_buf(self.win, buf)
 
@@ -86,7 +98,9 @@ function Output:open()
     vim.wo[self.win].relativenumber = false
     vim.wo[self.win].signcolumn = "no"
     vim.wo[self.win].wrap = false
-    vim.wo[self.win].winfixheight = true
+    -- фиксируем ту сторону, которой управляем: иначе соседние окна её растащат
+    vim.wo[self.win].winfixwidth = vertical
+    vim.wo[self.win].winfixheight = not vertical
 
     self:_render_winbar()
     if vim.api.nvim_win_is_valid(from) then
@@ -100,6 +114,18 @@ function Output:close()
         vim.api.nvim_win_close(self.win, true)
     end
     self.win = nil
+end
+
+---Пересчитать размер под текущий экран. Нужно для дробного size после VimResized.
+function Output:resize()
+    if not self:is_open() then
+        return
+    end
+    if self.position == "right" then
+        pcall(vim.api.nvim_win_set_width, self.win, self:computed_size())
+    else
+        pcall(vim.api.nvim_win_set_height, self.win, self:computed_size())
+    end
 end
 
 function Output:toggle()

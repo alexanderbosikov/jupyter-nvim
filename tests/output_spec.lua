@@ -354,3 +354,60 @@ describe("предпросмотр таблицы", function()
         out:close()
     end)
 end)
+
+describe("размер и ориентация", function()
+    it("целое значение — строки или колонки как есть", function()
+        assert.equals(15, output.new({ size = 15 }):computed_size())
+        assert.equals(60, output.new({ size = 60, position = "right" }):computed_size())
+    end)
+
+    it("дробное — доля экрана по нужной оси", function()
+        local right = output.new({ size = 0.5, position = "right" })
+        local bottom = output.new({ size = 0.25 })
+
+        assert.equals(math.floor(vim.o.columns * 0.5), right:computed_size())
+        assert.equals(math.floor(vim.o.lines * 0.25), bottom:computed_size())
+    end)
+
+    it("вправо открывается вертикальным сплитом в половину ширины", function()
+        local out = output.new({ size = 0.5, position = "right" })
+
+        out:open()
+
+        local width = vim.api.nvim_win_get_width(out.win)
+        assert.is_true(math.abs(width - math.floor(vim.o.columns * 0.5)) <= 1, "ширина: " .. width)
+        assert.is_true(vim.wo[out.win].winfixwidth, "у вертикального фиксируется ширина")
+        assert.is_false(vim.wo[out.win].winfixheight)
+        out:close()
+    end)
+
+    it("вниз открывается горизонтальным и фиксирует высоту", function()
+        local out = output.new({ size = 8 })
+
+        out:open()
+
+        assert.equals(8, vim.api.nvim_win_get_height(out.win))
+        assert.is_true(vim.wo[out.win].winfixheight)
+        assert.is_false(vim.wo[out.win].winfixwidth)
+        out:close()
+    end)
+
+    it("resize пересчитывает под текущий экран", function()
+        local out = output.new({ size = 0.5, position = "right" })
+        out:open()
+        vim.api.nvim_win_set_width(out.win, 10)
+
+        out:resize()
+
+        assert.is_true(vim.api.nvim_win_get_width(out.win) > 10)
+        out:close()
+    end)
+
+    it("закрытое окно resize не трогает", function()
+        local out = output.new({ size = 0.5, position = "right" })
+
+        out:resize() -- не должно падать
+
+        assert.is_false(out:is_open())
+    end)
+end)

@@ -26,6 +26,7 @@ M.defaults = {
     out_dir = ".jupyter-out",
     -- false — не определять группы подсветки, если хочешь задать их сам
     highlight = true,
+    -- size меньше единицы — доля экрана: 0.5 это половина ширины при position = "right".
     -- preview_rows = 0 — не показывать таблицу в окне вывода, только строку-сводку
     output = { position = "bottom", size = 15, follow_cursor = true, preview_rows = 10 },
     table = { page_size = 50, max_col = 40 },
@@ -236,6 +237,16 @@ function M.session(buf)
             )
         end
     end
+
+    vim.api.nvim_create_autocmd("VimResized", {
+        group = augroup or vim.api.nvim_create_augroup("jupyter.nvim", { clear = false }),
+        callback = function()
+            local session = sessions[buf]
+            if session then
+                session.output:resize()
+            end
+        end,
+    })
 
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "InsertLeave" }, {
         group = augroup or vim.api.nvim_create_augroup("jupyter.nvim", { clear = false }),
