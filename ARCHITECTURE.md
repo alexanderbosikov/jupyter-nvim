@@ -191,9 +191,9 @@ FIFO выводов нет нигде — ни в Lua, ни в Python. Имен�
 | `ui/table.lua` ✔ | постраничный просмотр parquet через `table.page`, выравнивание колонок, `actions` (`H/L/[[/]]/R/q`) | `open(path)`, `get_actions()` | не читает parquet сам |
 | `highlight.lua` ✔ | группы подсветки winbar'ов: контраст от `Normal`, смысл от `Diagnostic*`, переопределение на `ColorScheme` без затирания пользовательских |
 | `ui/status.lua` ✔ | однострочный virt_text под ячейкой: `⏳ выполняется` / `✓ 12.3 с · 1240 строк` / `✗ ValueError` | `set(cell_id, state)` | |
-| `images.lua` | позиция + передача пути в image.nvim | `show(cell_id, path)`, `clear` | своего рендера нет |
+| `images.lua` ✔ | путь и строка-якорь в image.nvim; картинка живёт в окне вывода, а не поверх кода | `show(path, win, buf, row)`, `clear` | своего рендера нет |
 | `commands.lua` ✔ | `:Jupyter*`, `<Plug>`-мапы | | |
-| `health.lua` | `:checkhealth jupyter`: python, `jupyter_client`, polars, ядро, image.nvim, версия протокола | | |
+| `health.lua` ✔ | `:checkhealth jupyter`: python, `jupyter_client`, polars, ядро, image.nvim, версия протокола | `collect()`, `check()` | сбор отделён от отрисовки, поэтому покрыт тестами |
 
 Галочкой отмечено сделанное (03.09.2026). Переезд из существующих 824 строк — **как образец, не как модуль** (см. правку к §5 идеи): `cells.lua` берёт
 регекспы из `lua/plugins/molten.lua`, `ui/table.lua` берёт UX из `lua/custom/molten_table.lua` (но без таймера
@@ -419,10 +419,14 @@ ipywidgets, itables, интерактивный plotly, `tqdm.notebook`; экс�
 **Флаки — не шум по умолчанию.** Полезное правило по итогу: тест с живым ядром, падающий 1 раз на 5,
 сначала считается багом кода и только потом — багом теста. Из пяти случаев выше четыре были кодом.
 
-**Lua — plenary/busted в headless nvim**, `tests/run.sh`. Состояние: **173 теста** —
+**Lua — plenary/busted в headless nvim**, `tests/run.sh`. Состояние: **204 теста** —
 `integration_spec` 25, `output_spec` 24, `cells_spec` 19, `exec_spec` 16, `cellid_spec` 15,
 `table_spec` 10, `sidecar_codec_spec` 9, `store_spec` 8, `sidecar_live_spec` 6, `kernel_spec` 6,
-`jupytext_roundtrip_spec` 2. Вместе с сайдкаром — 232.
+`jupytext_roundtrip_spec` 2. Вместе с сайдкаром — 296.
+
+Картинки проверяются до границы с image.nvim: что путь и якорь отданы, что у каждого показа свой
+id (иначе `from_file` вернёт прошлую картинку), что отсутствие файла или самого image.nvim окно не
+роняет. Как оно выглядит в терминале — единственное, что остаётся человеку.
 
 `jupytext_roundtrip_spec` гоняет настоящий `jupytext` на копии рабочего ноутбука вместе с
 `ipynb_magics.lua` из конфига пользователя (пропускается, если их нет). Это единственная защита
@@ -466,7 +470,9 @@ langmapper в русской раскладке, внешняя правка ф�
 5. ~~**`cellid` + `marks` + `store`**~~ **Сделано 03.09.2026**, кроме `marks` — он оказался
    не нужен на этом шаге (§7.2). Стабильные id живут в тексте, история читается с диска
    при открытии файла: вывод вчерашней ячейки виден без ядра и без перезапуска.
-6. **`ui/status`, `images`, `health`, `commands`.**
+6. ~~**`ui/status`, `images`, `health`, `commands`.**~~ **Сделано 04.09.2026.**
+   Статус под ячейкой, картинки через image.nvim в окне вывода, `:checkhealth jupyter`.
+   `marks` так и не понадобился (§7.2).
 7. Дальше по факту использования: cell mode (§8 идеи), textobjects, фичи из §13 идеи.
 
 Молten до этого момента остаётся в конфиге параллельно и удаляется вместе с мостом из §12 п.1 идеи.
