@@ -371,6 +371,7 @@ function M.follow_cursor(buf)
 
     local cell = cells.at(buf, vim.api.nvim_win_get_cursor(0)[1])
     if not cell then
+        s.output:focus_cell(nil) -- курсор в markdown между ячейками
         return
     end
     local cell_id = exec.cell_id(s.buf, cell)
@@ -387,6 +388,9 @@ function M.follow_cursor(buf)
         s.output:show(run)
     else
         s.output:refresh_status() -- прогон тот же, но «код изменился» мог поменяться
+        -- ушли на ячейку, которую ещё не запускали: показанный прогон не сменился,
+        -- а картинка от него висеть над чужой ячейкой не должна
+        s.output:focus_cell(cell_id)
     end
 end
 

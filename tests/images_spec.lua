@@ -8,7 +8,8 @@ local output = require("jupyter.ui.output")
 ---Заглушка, повторяющая устройство image.nvim: свой реестр всех отрисованных картинок,
 ---который сам плагин никогда не чистит, и выборка по буферу.
 local function fake_api()
-    local api = { made = {}, cleared = 0, state = { images = {} } }
+    local api = { made = {}, cleared = 0, state = { images = {} }, sent = {} }
+    api.send = function(payload) table.insert(api.sent, payload) end
     api.from_file = function(path, opts)
         local image = {
             id = opts.id,
@@ -87,19 +88,44 @@ describe("картинки", function()
         assert.equals(2, api.cleared)
     end)
 
-    it("clear по буферу снимает всё, что там нарисовано", function()
+    it("clear снимает все известные картинки, а не только свои", function()
+        -- с фильтром по буферу картинка на практике не снималась; повторяем то, что
+        -- доказанно работает у самого image.nvim в обработчике FocusLost
         local api = fake_api()
-        local im = images.new({ api = api })
+        local im = images.new({ api = api, send = api.send })
         im:show(png(), 1, 2, 0)
-        -- картинка в чужом буфере остаётся нетронутой
         local other = api.from_file(png(), { id = "чужая", buffer = 99, window = 1 })
         other:render()
 
         im:clear(2)
 
-        assert.equals(1, vim.tbl_count(api.state.images), "чужой буфер не трогаем")
-        assert.is_truthy(api.state.images["чужая"])
+        assert.equals(0, vim.tbl_count(api.state.images))
         assert.is_nil(im.current)
+    end)
+
+    it("после чистки уходит прямая последовательность удаления", function()
+        local api = fake_api()
+        local im = images.new({ api = api, send = api.send })
+        im:show(png(), 1, 2, 0)
+
+        im:clear(2)
+
+        -- show() тоже чистит перед рисованием, поэтому последовательностей две
+        assert.is_true(#api.sent >= 1)
+        for _, payload in ipairs(api.sent) do
+            assert.is_truthy(payload:find("a=d,d=A", 1, true), "kitty: удалить и размещения, и данные")
+        end
+    end)
+
+    it("последовательность заворачивается в tmux-passthrough", function()
+        local saved = vim.env.TMUX
+        vim.env.TMUX = "/tmp/tmux-502/default,1,0"
+
+        local wrapped = images.tmux_wrap(images.PURGE)
+
+        assert.is_truthy(wrapped:find("^\27Ptmux;"))
+        assert.is_truthy(wrapped:find("\27\27_Ga=d,d=A", 1, true), "escape удваивается")
+        vim.env.TMUX = saved
     end)
 
     it("нет файла — не показываем и не падаем", function()
@@ -162,6 +188,70 @@ describe("картинка в окне вывода", function()
         assert.equals(1, api.cleared)
         assert.equals(1, #api.made, "у текстового прогона картинки нет")
         assert.equals(0, vim.tbl_count(api.state.images), "таблица не должна рисоваться поверх картинки")
+        out:close()
+    end)
+end)
+
+describe("картинка следует за ячейкой", function()
+    local function make(api)
+        local out = output.new({ size = 8, images = images.new({ api = api }) })
+        local path = png()
+        out:show({ cell_id = "a3f9", run_id = 1, status = "ok", lines = { "график" }, image = path })
+        return out, path
+    end
+
+    it("уход на другую ячейку снимает картинку", function()
+        local api = fake_api()
+        local out = make(api)
+        assert.equals(1, #api.made)
+
+        out:focus_cell("b7e1")
+
+        assert.equals(1, api.cleared, "картинка не должна висеть над чужой ячейкой")
+        assert.equals(0, vim.tbl_count(api.state.images))
+        out:close()
+    end)
+
+    it("возврат на свою ячейку рисует снова", function()
+        local api = fake_api()
+        local out = make(api)
+        out:focus_cell("b7e1")
+
+        out:focus_cell("a3f9")
+
+        assert.equals(2, #api.made, "картинка вернулась")
+        out:close()
+    end)
+
+    it("повторный уход не дёргает лишний раз", function()
+        local api = fake_api()
+        local out = make(api)
+
+        out:focus_cell("b7e1")
+        out:focus_cell("b7e1")
+
+        assert.equals(1, api.cleared)
+        out:close()
+    end)
+
+    it("курсор вне ячеек тоже снимает", function()
+        local api = fake_api()
+        local out = make(api)
+
+        out:focus_cell(nil)
+
+        assert.equals(1, api.cleared)
+        out:close()
+    end)
+
+    it("у прогона без картинки делать нечего", function()
+        local api = fake_api()
+        local out = output.new({ size = 8, images = images.new({ api = api }) })
+        out:show({ cell_id = "a3f9", run_id = 1, status = "ok", lines = { "текст" } })
+
+        out:focus_cell("b7e1")
+
+        assert.equals(0, api.cleared)
         out:close()
     end)
 end)

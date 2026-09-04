@@ -27,6 +27,7 @@ function M.new(opts)
     return setmetatable({
         enabled = opts.enabled ~= false,
         api = opts.api, -- подменяется в тестах
+        send = opts.send, -- куда писать escape-последовательности; тесты подменяют
         current = nil,
         _seq = 0,
     }, Images)
@@ -46,13 +47,15 @@ end
 ---состоянии и **никогда не удаляет их оттуда**, а на WinScrolled/WinResized перерисовывает
 ---всё, что знает про окно (image/init.lua:153). Поэтому снятой картинки мало — запись надо
 ---убрать из состояния, иначе следующая прокрутка вернёт её на экран поверх новой.
----@param buf? integer буфер, в котором чистим; без него — только текущая картинка
+---@param buf? integer оставлен для совместимости вызовов; чистим всё равно всё
 function Images:clear(buf)
     local api = self:_api()
-    -- намеренно без проверки валидности буфера: у выгруженного как раз и остаётся
-    -- мусор в состоянии image.nvim, и его надо снять
-    if api and buf then
-        local ok, list = pcall(api.get_images, { buffer = buf })
+    if api then
+        -- Без фильтра по буферу. С фильтром (`get_images({ buffer = buf })`) картинка на
+        -- практике не снималась, хотя собственный обработчик FocusLost у image.nvim —
+        -- он перебирает `get_images()` целиком — снимает её надёжно. Разница только в
+        -- фильтре, поэтому повторяем то, что доказанно работает.
+        local ok, list = pcall(api.get_images)
         if ok then
             for _, image in ipairs(list or {}) do
                 pcall(function()
@@ -71,7 +74,37 @@ function Images:clear(buf)
             self.current:clear()
         end)
     end
+
+    -- И добиваем напрямую: удаление в kitty-протоколе — одна последовательность, а вот
+    -- рисование мы отдаём image.nvim. `d=A` заглавной убирает и размещения, и данные;
+    -- image.nvim шлёт строчную `d=a`, и в Ghostty под tmux этого не хватало.
+    M.purge_terminal(self.send)
     self.current = nil
+end
+
+---Обернуть последовательность для tmux: без passthrough tmux её съест.
+---@param sequence string
+---@return string
+function M.tmux_wrap(sequence)
+    if not vim.env.TMUX then
+        return sequence
+    end
+    return "\27Ptmux;" .. sequence:gsub("\27", "\27\27") .. "\27\\"
+end
+
+M.PURGE = "\27_Ga=d,d=A\27\\"
+
+---Куда писать управляющие последовательности. Отдельно, чтобы тесты не сыпали
+---escape-кодами в терминал, которым их запустили.
+---@param payload string
+function M.send(payload)
+    pcall(vim.api.nvim_chan_send, vim.v.stderr, payload)
+end
+
+---@param send? fun(payload: string)
+---@return boolean
+function M.purge_terminal(send)
+    return pcall(send or M.send, M.tmux_wrap(M.PURGE))
 end
 
 ---Показать картинку в окне.

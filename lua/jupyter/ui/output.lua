@@ -154,6 +154,26 @@ function Output:show(run)
     self:render()
 end
 
+---Подстроить картинку под ячейку, на которой стоит курсор.
+---
+---Текст в окне может спокойно относиться к другой ячейке — он маленький и лежит в своём
+---окне. Картинка так не умеет: это большое пятно поверх содержимого, и висеть над чужой
+---ячейкой она не должна. Поэтому при уходе с ячейки картинка снимается, при возврате —
+---рисуется снова.
+---@param cell_id string|nil ячейка под курсором
+function Output:focus_cell(cell_id)
+    if not self.images or not self.run or not self.run.image then
+        return
+    end
+    local mine = cell_id ~= nil and cell_id == self.run.cell_id
+    if mine and not self._image_shown then
+        self:render()
+    elseif not mine and self._image_shown then
+        self.images:clear(self.buf)
+        self._image_shown = false
+    end
+end
+
 ---Обновить содержимое, если показываем именно этот прогон.
 ---@param run jupyter.Run
 function Output:update(run)
@@ -209,8 +229,9 @@ function Output:render()
     common.set_lines(buf, lines)
     self:_render_winbar()
 
+    self._image_shown = false
     if self.images and image_path and self:is_open() then
-        self.images:show(image_path, self.win, buf, #lines - 1)
+        self._image_shown = self.images:show(image_path, self.win, buf, #lines - 1)
     end
 
     -- к концу прокручиваем только текст: у таблицы и картинки интереснее начало
