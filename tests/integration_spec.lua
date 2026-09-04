@@ -860,8 +860,9 @@ describe("таблица в окне вывода", function()
         vim.cmd("silent! %bwipeout!")
     end)
 
-    it("свой repr ячейки не дублируется предпросмотром", function()
-        -- обычная ячейка-датафрейм печатает таблицу сама, через execute_result
+    it("repr от polars заменяется нашей таблицей", function()
+        -- polars печатает свой repr с рамками ┌───┬───┐: в узком окне он разъезжается
+        -- на несколько строк на ячейку. Раз parquet есть, рисуем сами
         local _, b = notebook({
             "# %%",
             "import polars as pl",
@@ -874,17 +875,17 @@ describe("таблица в окне вывода", function()
         session = jupyter.session(buf)
         wait(function()
             local r = session.exec:run_for(cid(buf, 2))
-            return r and r.status == "ok"
-        end, 60000, "прогон")
-
-        local run = session.exec:run_for(cid(buf, 2))
-        assert.is_true(run.has_text_result, "polars отдаёт свой repr через execute_result")
-        assert.is_nil(run._preview, "предпросмотр дублировать repr не должен")
+            return r and r.status == "ok" and r._preview ~= nil
+        end, 60000, "предпросмотр таблицы")
 
         local text = table.concat(vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false), "\n")
-        assert.is_truthy(text:find("имя", 1, true), "таблица polars видна в окне")
-        assert.is_truthy(text:find("%[таблица%] 50 строк"), "сводка тоже на месте")
-        assert.is_false(session.table:is_open(), "отдельная вкладка не открывается")
+
+        assert.is_falsy(text:find("┌", 1, true), "рамок polars быть не должно: " .. text:sub(1, 200))
+        assert.is_falsy(text:find("│", 1, true), "и вертикальных линеек тоже")
+        assert.is_truthy(text:find("%[таблица%] 50 строк"), "сводка на месте")
+        assert.is_truthy(text:find("стр%-0"), "первая строка данных видна")
+        assert.is_truthy(text:find("─"), "линейка под заголовком — наша")
+        assert.is_falsy(text:find("стр%-49"), "хвост датафрейма в окно не грузится")
     end)
 
     it("ячейка без своего repr получает предпросмотр из parquet", function()
@@ -912,7 +913,7 @@ describe("таблица в окне вывода", function()
         assert.is_truthy(text:find("%[таблица%] 50 строк"), "сводка остаётся")
         assert.is_truthy(text:find("имя", 1, true), "заголовок колонки виден")
         assert.is_truthy(text:find("стр%-0"), "первая строка данных видна")
-        assert.is_truthy(text:find("ещё 40 строк", 1, true), "подсказка про остаток")
+        assert.is_truthy(text:find("… ещё %d+ строк"), "подсказка про остаток: " .. text:sub(-80))
         assert.is_falsy(text:find("стр%-49"), "весь датафрейм в окно не грузится")
     end)
 

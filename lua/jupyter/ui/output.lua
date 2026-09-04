@@ -43,7 +43,7 @@ function M.new(opts)
         -- функция предпросмотра таблицы: результат-датафрейм и есть вывод ячейки,
         -- поэтому первые строки показываем здесь, а не только в отдельной вкладке
         preview = opts.preview,
-        preview_rows = opts.preview_rows or 10,
+        preview_rows = opts.preview_rows or 30,
         position = opts.position or "bottom",
         size = opts.size or 15,
         keys = opts.keys or M.DEFAULT_KEYS,
@@ -167,9 +167,7 @@ function Output:_want_preview()
     if run._preview or run._preview_asked or not self.preview or self.preview_rows <= 0 then
         return
     end
-    if run.has_text_result then
-        return -- ячейка уже напечатала таблицу сама
-    end
+
     run._preview_asked = true
     self.preview(run, self.preview_rows, function(lines)
         run._preview = lines or {}

@@ -198,6 +198,16 @@ end
 
 function Exec:_apply_result(run, data)
     if data.kind == "table" then
+        -- Есть parquet — значит таблицу нарисуем сами, ровными колонками и без рамок.
+        -- Свой repr polars (`┌───┬───┐`) при этом лишний: он приезжает раньше, отдельным
+        -- execute_result, и в узком окне разъезжается на несколько строк на ячейку.
+        if run.text_range then
+            for _ = run.text_range.from, run.text_range.to do
+                table.remove(run.lines, run.text_range.from)
+            end
+            run.text_range = nil
+            run.has_text_result = false
+        end
         run.table = data
         table.insert(run.lines, ("[таблица] %s строк × %s колонок"):format(data.rows, data.cols))
     elseif data.kind == "image" then
@@ -206,11 +216,12 @@ function Exec:_apply_result(run, data)
     elseif data.kind == "html" then
         table.insert(run.lines, "[html] " .. (data.path or ""))
     elseif data.text then
-        -- ячейка напечатала результат сама: у обычного датафрейма polars отдаёт свой repr
-        -- через execute_result, и дублировать его предпросмотром не нужно. У %%sql-ячейки
-        -- такого вывода нет — там предпросмотр остаётся единственным способом увидеть таблицу
+        -- Запоминаем, какие строки пришли из execute_result: если следом окажется, что
+        -- результат — датафрейм, этот кусок заменится нашей таблицей (см. ветку выше).
+        local added = vim.split(data.text, "\n", { plain = true })
+        run.text_range = { from = #run.lines + 1, to = #run.lines + #added }
         run.has_text_result = true
-        vim.list_extend(run.lines, vim.split(data.text, "\n", { plain = true }))
+        vim.list_extend(run.lines, added)
     end
 end
 

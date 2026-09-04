@@ -200,3 +200,40 @@ describe("признак нового прогона", function()
         assert.same({ true, false }, flags)
     end)
 end)
+
+describe("repr и таблица", function()
+    it("текстовый repr заменяется, когда приходит таблица", function()
+        local k = stub_kernel()
+        local ex = exec.new({ kernel = k }):attach()
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", "df" })
+        vim.bo[buf].filetype = "python"
+
+        local run = ex:run_at(buf, 2)
+        k.emit({ ev = "stream", cell_id = run.cell_id, run_id = run.run_id,
+                 data = { name = "stdout", ops = { { op = "append", text = "▶ Выполняю запрос..." } } } })
+        k.emit({ ev = "result", cell_id = run.cell_id, run_id = run.run_id,
+                 data = { kind = "text", text = "┌─────┐\n│ n   │\n└─────┘" } })
+        assert.equals(4, #run.lines, "repr сначала попадает в вывод")
+
+        k.emit({ ev = "result", cell_id = run.cell_id, run_id = run.run_id,
+                 data = { kind = "table", path = "/tmp/a.parquet", rows = 50, cols = 2 } })
+
+        assert.same({ "▶ Выполняю запрос...", "[таблица] 50 строк × 2 колонок" }, run.lines)
+        assert.is_falsy(run.has_text_result, "предпросмотр больше не подавляется")
+    end)
+
+    it("текст без таблицы остаётся как есть", function()
+        local k = stub_kernel()
+        local ex = exec.new({ kernel = k }):attach()
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", "2 + 2" })
+        vim.bo[buf].filetype = "python"
+
+        local run = ex:run_at(buf, 2)
+        k.emit({ ev = "result", cell_id = run.cell_id, run_id = run.run_id,
+                 data = { kind = "text", text = "4" } })
+
+        assert.same({ "4" }, run.lines)
+    end)
+end)

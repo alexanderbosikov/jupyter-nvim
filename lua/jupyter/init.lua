@@ -28,7 +28,7 @@ M.defaults = {
     highlight = true,
     -- size меньше единицы — доля экрана: 0.5 это половина ширины при position = "right".
     -- preview_rows = 0 — не показывать таблицу в окне вывода, только строку-сводку
-    output = { position = "bottom", size = 15, follow_cursor = true, preview_rows = 10 },
+    output = { position = "bottom", size = 15, follow_cursor = true, preview_rows = 30 },
     table = { page_size = 50, max_col = 40 },
     -- статус строкой под ячейкой: enabled = false выключает, position = "eol" ставит в конец строки
     status = { enabled = true, position = "below" },
