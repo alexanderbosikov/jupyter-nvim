@@ -14,6 +14,7 @@ local kernel = require("jupyter.kernel")
 local output = require("jupyter.ui.output")
 local status_ui = require("jupyter.ui.status")
 local store = require("jupyter.store")
+local picker = require("jupyter.ui.picker")
 local toc = require("jupyter.toc")
 local table_view = require("jupyter.ui.table")
 
@@ -360,6 +361,13 @@ function M.open_for(buf)
     local s = M.session(buf)
     M.repaint(buf) -- статусы под ячейками рисуем в любом случае: они не занимают окна
 
+    -- Открываем один раз на сессию. FileType срабатывает на каждое перечитывание буфера —
+    -- например при прыжке из telescope, — и без этого окно вывода поднималось бы заново
+    -- после каждого перехода, даже если его только что закрыли руками.
+    if s.attached then
+        return false
+    end
+
     -- показать прогон ячейки под курсором, иначе самый свежий по ноутбуку
     local run
     local cell = cells.at(buf, vim.api.nvim_win_get_cursor(0)[1])
@@ -371,6 +379,8 @@ function M.open_for(buf)
         return false
     end
 
+    -- отмечаем по факту открытия: если показывать было нечего, попытка не считается
+    s.attached = true
     s.output:show(run)
     return true
 end
@@ -719,14 +729,13 @@ function M.show_toc()
         return
     end
 
-    vim.ui.select(entries, {
+    picker.select(entries, {
         prompt = "Оглавление",
-        format_item = toc.format,
+        format = toc.format,
+        buf = buf,
     }, function(choice)
-        if choice then
-            vim.api.nvim_win_set_cursor(0, { choice.row, 0 })
-            vim.cmd("normal! zz")
-        end
+        vim.api.nvim_win_set_cursor(0, { choice.row, 0 })
+        vim.cmd("normal! zz")
     end)
 end
 

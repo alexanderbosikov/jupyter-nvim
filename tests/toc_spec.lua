@@ -168,3 +168,52 @@ describe("текущая позиция", function()
         assert.is_nil(toc.at(toc.collect(md(FENCE)), 0))
     end)
 end)
+
+describe("выбор списка", function()
+    local picker = require("jupyter.ui.picker")
+
+    it("без telescope падает обратно на vim.ui.select", function()
+        local shown, chosen
+        local original = vim.ui.select
+        vim.ui.select = function(items, opts, cb)
+            shown = { items = items, prompt = opts.prompt, formatted = opts.format_item(items[1]) }
+            cb(items[2])
+        end
+        local saved = package.loaded["telescope.pickers"]
+        package.loaded["telescope.pickers"] = nil
+        package.preload["telescope.pickers"] = function() error("нет telescope") end
+
+        picker.select(
+            { { text = "раз" }, { text = "два" } },
+            { prompt = "Оглавление", format = function(e) return e.text end },
+            function(entry) chosen = entry end
+        )
+
+        vim.ui.select = original
+        package.preload["telescope.pickers"] = nil
+        package.loaded["telescope.pickers"] = saved
+
+        assert.equals("Оглавление", shown.prompt)
+        assert.equals("раз", shown.formatted)
+        assert.same({ text = "два" }, chosen)
+    end)
+
+    it("отказ от выбора ничего не вызывает", function()
+        local called = false
+        local original = vim.ui.select
+        vim.ui.select = function(_, _, cb) cb(nil) end
+        package.preload["telescope.pickers"] = function() error("нет telescope") end
+        local saved = package.loaded["telescope.pickers"]
+        package.loaded["telescope.pickers"] = nil
+
+        picker.select({ { text = "раз" } }, { format = function(e) return e.text end }, function()
+            called = true
+        end)
+
+        vim.ui.select = original
+        package.preload["telescope.pickers"] = nil
+        package.loaded["telescope.pickers"] = saved
+
+        assert.is_false(called)
+    end)
+end)

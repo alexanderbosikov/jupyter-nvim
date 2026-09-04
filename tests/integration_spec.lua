@@ -1226,3 +1226,39 @@ describe("сортировка таблицы", function()
         session.table:get_actions().close()
     end)
 end)
+
+describe("повторное открытие ноутбука", function()
+    it("окно вывода поднимается один раз на сессию", function()
+        -- FileType срабатывает на каждое перечитывание буфера: прыжок из telescope,
+        -- :e, смена filetype. Окно не должно возвращаться после того, как его закрыли
+        jupyter.setup({ output = { open_on_attach = true } })
+        local path = vim.fn.tempname() .. ".py"
+        vim.fn.writefile({ "# %%", 'print("вчерашнее")' }, path)
+        vim.cmd.edit(path)
+        vim.bo.filetype = "python"
+        local buf = vim.api.nvim_get_current_buf()
+
+        local session = jupyter.session(buf)
+        local id = cid(buf, 2)
+        local base = session.store.base
+        vim.fn.mkdir(base .. "/" .. id, "p")
+        vim.fn.writefile({ "вчерашнее" }, base .. "/" .. id .. "/1.txt")
+        vim.fn.writefile({
+            vim.json.encode({
+                cell_id = id, run_id = 1, status = "ok", kind = "text",
+                path = id .. "/1.txt", started_at = "2026-09-04T09:00:00+00:00",
+                duration_ms = 7, code_sha = "abc12345",
+            }),
+        }, base .. "/index.jsonl")
+        session.store:load()
+
+        assert.is_true(jupyter.open_for(buf), "первый раз открываем")
+        session.output:close()
+
+        assert.is_false(jupyter.open_for(buf), "второй раз — нет")
+        assert.is_false(session.output:is_open(), "закрытое руками окно не должно возвращаться")
+
+        jupyter.detach(buf)
+        jupyter.setup({})
+    end)
+end)
