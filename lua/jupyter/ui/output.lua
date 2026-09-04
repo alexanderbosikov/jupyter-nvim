@@ -99,8 +99,8 @@ function Output:open()
     self.win = vim.api.nvim_get_current_win()
     vim.api.nvim_win_set_buf(self.win, buf)
 
-    vim.wo[self.win].number = false
-    vim.wo[self.win].relativenumber = false
+    vim.wo[self.win].number = true
+    vim.wo[self.win].relativenumber = false -- вывод читают сверху вниз, прыгать по нему нечем
     vim.wo[self.win].signcolumn = "no"
     vim.wo[self.win].wrap = false
     -- фиксируем ту сторону, которой управляем: иначе соседние окна её растащат

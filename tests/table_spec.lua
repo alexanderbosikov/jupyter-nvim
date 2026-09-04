@@ -116,6 +116,44 @@ describe("раскладка колонок", function()
     end)
 end)
 
+describe("нумерация строк", function()
+    it("продолжает счёт со страницы на страницу", function()
+        local lines = table_view.format({ "id" }, { { "a" }, { "b" } }, { first_row = 101 })
+
+        assert.equals("101", lines[3]:match("^%s*(%d+)"))
+        assert.equals("102", lines[4]:match("^%s*(%d+)"))
+    end)
+
+    it("ширину колонки задаёт последний номер страницы", function()
+        local lines = table_view.format({ "id" }, { { "a" }, { "b" } }, { first_row = 99 })
+
+        -- 99 и 100: обе строки выровнены вправо по ширине большего
+        assert.equals(lines[3]:find("9"), lines[4]:find("1") + 1)
+    end)
+
+    it("шапка помечена #, линейка не рвётся", function()
+        local lines = table_view.format({ "id" }, { { "a" } }, { first_row = 1 })
+
+        assert.equals("#", lines[1]:match("^%s*(%S)"))
+        assert.is_truthy(lines[2]:match("^%s*─"))
+    end)
+
+    it("раскладка сдвинута на колонку номеров", function()
+        local plain = select(2, table_view.format({ "id", "имя" }, { { "1", "стр" } }))
+        local lines, layout = table_view.format({ "id", "имя" }, { { "1", "стр" } }, { first_row = 1 })
+
+        assert.equals(plain[1].from + 3, layout[1].from) -- ширина номера плюс отбивка
+        assert.equals("i", vim.fn.strcharpart(lines[1], layout[1].from - 1, 1))
+        assert.equals("и", vim.fn.strcharpart(lines[1], layout[2].from - 1, 1))
+    end)
+
+    it("без first_row всё как было", function()
+        local lines = table_view.format({ "id" }, { { "a" } })
+
+        assert.equals(" id", lines[1])
+    end)
+end)
+
 describe("сортировка", function()
     local view
 

@@ -55,13 +55,18 @@ end
 ---
 ---Вторым значением возвращается раскладка: где на экране начинается и кончается каждая
 ---колонка. По ней сортировка понимает, над какой колонкой стоит курсор.
+---
+---opts.first_row включает слева колонку номеров. Это номер строки в датасете, а не в
+---буфере: он продолжается со страницы на страницу и считается после сортировки, поэтому
+---'number' окна тут не годится — тот считал бы ещё шапку с разделителем.
 ---@param header string[]
 ---@param rows string[][]
----@param opts? table max_col
+---@param opts? table max_col, first_row
 ---@return string[] lines, table[] layout
 function M.format(header, rows, opts)
     opts = opts or {}
     local max_col = opts.max_col or 40
+    local first_row = opts.first_row
     if #header == 0 then
         return { "(нет колонок)" }, {}
     end
@@ -79,29 +84,39 @@ function M.format(header, rows, opts)
         end
     end
 
-    local function line(cells)
+    -- ширину колонки номеров задаёт последняя строка страницы: она самая длинная
+    local gutter = first_row and #tostring(first_row + math.max(#rows, 1) - 1) or 0
+
+    ---@param cells string[]
+    ---@param mark string содержимое колонки номеров, выравнивается вправо
+    local function line(cells, mark)
         local parts = {}
         for i = 1, #header do
             table.insert(parts, pad(clip(cells[i] or "", widths[i]), widths[i]))
         end
-        return " " .. vim.trim(table.concat(parts, GAP), " ")
+        local body = vim.trim(table.concat(parts, GAP), " ")
+        if gutter == 0 then
+            return " " .. body
+        end
+        local width = vim.fn.strdisplaywidth(mark)
+        return " " .. string.rep(" ", math.max(0, gutter - width)) .. mark .. GAP .. body
     end
 
-    local out = { line(header) }
+    local out = { line(header, "#") }
     local rule = {}
     for i = 1, #header do
         rule[i] = string.rep(RULE, widths[i])
     end
-    table.insert(out, line(rule))
-    for _, row in ipairs(rows) do
-        table.insert(out, line(row))
+    table.insert(out, line(rule, string.rep(RULE, gutter)))
+    for i, row in ipairs(rows) do
+        table.insert(out, line(row, tostring((first_row or 1) + i - 1)))
     end
     if #rows == 0 then
         table.insert(out, " (пусто)")
     end
 
-    -- раскладка в экранных колонках: 1 занимает ведущий пробел
-    local layout, x = {}, 2
+    -- раскладка в экранных колонках: 1 занимает ведущий пробел, дальше колонка номеров
+    local layout, x = {}, 2 + (gutter > 0 and gutter + #GAP or 0)
     for i, name in ipairs(header) do
         table.insert(layout, { name = name, from = x, to = x + widths[i] - 1 })
         x = x + widths[i] + #GAP
@@ -201,7 +216,10 @@ function View:page(offset)
         end
         self.offset = page.offset
         self.total = page.total_rows
-        local lines, layout = M.format(page.header, page.rows, { max_col = self.max_col })
+        local lines, layout = M.format(page.header, page.rows, {
+            max_col = self.max_col,
+            first_row = page.offset + 1,
+        })
         self.layout = layout
         common.set_lines(self:_ensure_buf(), lines)
         self:_render_winbar()
