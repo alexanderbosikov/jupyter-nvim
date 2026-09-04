@@ -184,8 +184,38 @@ describe("чистка терминала", function()
         assert.equals(1, called.n)
         assert.is_nil(called.args, "id не передаётся: иначе стирается одна картинка, а не все")
     end)
+end)
 
-    it("без image.nvim честно отвечает «нет»", function()
-        assert.is_false(images.new({}):clear_terminal())
+describe("последовательность удаления", function()
+    it("kitty: удаляем и размещения, и данные", function()
+        -- d=A заглавной: строчная оставляет данные картинок в терминале
+        assert.equals("\27_Ga=d,d=A\27\\", images.PURGE)
+    end)
+
+    it("вне tmux уходит как есть", function()
+        local saved = vim.env.TMUX
+        vim.env.TMUX = nil
+
+        assert.equals(images.PURGE, images.tmux_wrap(images.PURGE))
+
+        vim.env.TMUX = saved
+    end)
+
+    it("в tmux заворачивается в passthrough с удвоением escape", function()
+        local saved = vim.env.TMUX
+        vim.env.TMUX = "/tmp/tmux-502/default,1,0"
+
+        local wrapped = images.tmux_wrap(images.PURGE)
+
+        assert.is_truthy(wrapped:find("^\27Ptmux;"), "нет заголовка passthrough")
+        assert.is_truthy(wrapped:find("\27\27_Ga=d,d=A", 1, true), "escape должен быть удвоен")
+        assert.is_truthy(wrapped:find("\27\\$"), "нет завершителя")
+
+        vim.env.TMUX = saved
+    end)
+
+    it("без image.nvim всё равно шлёт последовательность", function()
+        -- залипшие картинки бывают и там, где плагин не загружен
+        assert.is_true(images.new({}):clear_terminal())
     end)
 end)

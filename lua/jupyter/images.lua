@@ -115,6 +115,30 @@ function Images:show(path, win, buf, row)
     end)
 end
 
+---Обернуть управляющую последовательность для tmux: без passthrough она до терминала
+---не дойдёт, tmux её съест.
+---@param sequence string
+---@return string
+function M.tmux_wrap(sequence)
+    if not vim.env.TMUX then
+        return sequence
+    end
+    return "\27Ptmux;" .. sequence:gsub("\27", "\27\27") .. "\27\\"
+end
+
+---Последовательность kitty «удалить всё».
+---
+---`d=A` заглавной, а не `d=a`: строчная убирает только размещения, оставляя сами данные
+---картинок в терминале, и в Ghostty этого не всегда достаточно. image.nvim шлёт именно
+---строчную (`codes.control.delete.all = "a"`), поэтому его clear() не помогает от залипших.
+M.PURGE = "\27_Ga=d,d=A\27\\"
+
+---Отправить в терминал команду удаления всех картинок, минуя image.nvim.
+---@return boolean
+function M.purge_terminal()
+    return pcall(vim.api.nvim_chan_send, vim.v.stderr, M.tmux_wrap(M.PURGE))
+end
+
 ---Стереть вообще все картинки в терминале, включая чужие и осиротевшие.
 ---
 ---Нужно, когда на экране остались картинки, о которых текущая сессия не знает: например
@@ -124,10 +148,13 @@ end
 function Images:clear_terminal()
     local api = self:_api()
     if not api then
-        return false
+        return M.purge_terminal() -- image.nvim может быть не установлен, а картинки висеть
     end
     self.current = nil
-    return pcall(api.clear) == true
+    local cleared = pcall(api.clear) == true
+    -- добиваем своей последовательностью: image.nvim удаляет только размещения
+    M.purge_terminal()
+    return cleared
 end
 
 return M
