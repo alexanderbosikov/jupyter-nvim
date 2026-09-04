@@ -1090,3 +1090,34 @@ describe("картинки и фокус окна", function()
         assert.equals(0, rendered)
     end)
 end)
+
+describe("окно вывода при открытии", function()
+    after_each(function()
+        jupyter.setup({})
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("открывается для буфера с ячейками", function()
+        jupyter.setup({ output = { open_on_attach = true } })
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", "x = 1" })
+        vim.bo[buf].filetype = "python"
+
+        assert.is_true(jupyter.open_for(buf))
+
+        local session = jupyter.session(buf)
+        assert.is_true(session.output:is_open())
+        assert.equals("none", session.kernel:state(), "ядро при этом не поднимается")
+        jupyter.detach(buf)
+    end)
+
+    it("обычный python-скрипт без ячеек не трогает", function()
+        jupyter.setup({ output = { open_on_attach = true } })
+        local buf = vim.api.nvim_create_buf(false, true)
+        -- файл без маркеров считается одной ячейкой, поэтому берём пустой
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "" })
+        vim.bo[buf].filetype = "python"
+
+        assert.is_false(jupyter.open_for(buf))
+    end)
+end)

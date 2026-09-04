@@ -19,6 +19,20 @@ local FENCE_OPEN = "^```(%S+)"
 local FENCE_CLOSE = "^```%s*$"
 local CODE_LANG = "python"
 
+---Языки магик, которые jupytext выносит в info-строку фенса.
+---
+---Такая ячейка в markdown выглядит как ```sql magic_args="df_name=orders", а строка `%%sql`
+---из тела удалена. Мы принимаем эту форму как есть и собираем магику обратно только в момент
+---отправки ядру (M.text). Разворачивать её в буфере не нужно: тогда работает родная подсветка
+---SQL, а jupytext пишет .ipynb без промежуточных преобразований.
+M.MAGIC_LANGS = { sql = true }
+
+---@param lang string|nil
+---@return boolean
+local function is_code_lang(lang)
+    return lang == CODE_LANG or (lang ~= nil and M.MAGIC_LANGS[lang] == true)
+end
+
 ---@class jupyter.Cell
 ---@field index integer номер среди код-ячеек, 1-based
 ---@field start_row integer первая строка тела, 1-based
@@ -45,11 +59,13 @@ local function add(cells, cell)
 end
 
 local function fence_cells(buf)
-    local cells, open = {}, nil
+    local cells, open, lang, magic_args = {}, nil, nil, nil
     for row, line in ipairs(lines(buf)) do
         if not open then
-            if line:match(FENCE_OPEN) == CODE_LANG then
-                open = row
+            local found = line:match(FENCE_OPEN)
+            if is_code_lang(found) then
+                open, lang = row, found
+                magic_args = line:match('magic_args="(.-)"')
             end
         elseif line:match(FENCE_CLOSE) then
             add(cells, {
@@ -58,8 +74,10 @@ local function fence_cells(buf)
                 span_start = open,
                 span_end = row,
                 marker_row = open,
+                lang = lang,
+                magic_args = magic_args,
             })
-            open = nil
+            open, lang, magic_args = nil, nil, nil
         end
     end
     return cells -- незакрытый фенс в конце файла ячейкой не считается
@@ -161,6 +179,10 @@ end
 
 ---Код ячейки одной строкой, готовый к отправке ядру.
 ---
+---Для ячейки с магикой языка (```sql в markdown-представлении) строка `%%sql` собирается
+---обратно: в буфере её нет, jupytext держит язык и аргументы в info-строке фенса. Если
+---магика уже стоит в теле — например буфер прошёл через ipynb_magics — второй раз не добавляем.
+---
 ---NUL-байты вырезаются: python всё равно откажется компилировать такой исходник
 ---("source code string cannot contain null bytes"), а по пути они успевают наделать
 ---беды — NUL в коде ячейки молча убивал дочерний nvim в тестах. В буфер NUL попадает
@@ -169,7 +191,16 @@ end
 function M.text(buf, cell)
     local first, last = M.body(buf, cell)
     local text = table.concat(vim.api.nvim_buf_get_lines(buf, first - 1, last, false), "\n")
-    return (text:gsub("%z", ""))
+    text = text:gsub("%z", "")
+
+    if cell.lang and cell.lang ~= CODE_LANG and not text:match("^%%%%") then
+        local magic = "%%" .. cell.lang
+        if cell.magic_args and cell.magic_args ~= "" then
+            magic = magic .. " " .. cell.magic_args
+        end
+        text = magic .. "\n" .. text
+    end
+    return text
 end
 
 ---Вставить пустую ячейку выше или ниже ячейки под строкой.

@@ -31,7 +31,14 @@ M.defaults = {
     images = true,
     -- size меньше единицы — доля экрана: 0.5 это половина ширины при position = "right".
     -- preview_rows = 0 — не показывать таблицу в окне вывода, только строку-сводку
-    output = { position = "bottom", size = 15, follow_cursor = true, preview_rows = 30 },
+    -- open_on_attach — открыть окно вывода сразу при открытии ноутбука
+    output = {
+        position = "bottom",
+        size = 15,
+        follow_cursor = true,
+        preview_rows = 30,
+        open_on_attach = false,
+    },
     table = { page_size = 100, max_col = 40 },
     -- статус строкой под ячейкой: enabled = false выключает, position = "eol" ставит в конец строки
     status = { enabled = true, position = "below" },
@@ -100,15 +107,18 @@ function M.setup(opts)
         end,
     })
 
-    if M.config.keys ~= false then
-        vim.api.nvim_create_autocmd("FileType", {
-            group = augroup,
-            pattern = M.config.filetypes,
-            callback = function(ev)
+    vim.api.nvim_create_autocmd("FileType", {
+        group = augroup,
+        pattern = M.config.filetypes,
+        callback = function(ev)
+            if M.config.keys ~= false then
                 M.set_keys(ev.buf)
-            end,
-        })
-    end
+            end
+            if M.config.output.open_on_attach then
+                M.open_for(ev.buf)
+            end
+        end,
+    })
 end
 
 ---Поставить буфер-локальные мапы. Значением действия может быть как одна клавиша,
@@ -330,6 +340,22 @@ function M.is_stale(buf, run)
             and vim.fn.sha256(cells.text(buf, cell)):sub(1, 8) ~= run.code_sha
     end
     return s.stale_cache.value[key]
+end
+
+---Открыть окно вывода для буфера, если это похоже на ноутбук.
+---
+---Проверка на ячейки обязательна: `ft = python` ловит любой .py, а поднимать окно вывода
+---над обычным скриптом незачем. Ядро при этом не стартует — оно по-прежнему ленивое.
+---@param buf integer
+---@return boolean открыли
+function M.open_for(buf)
+    if #cells.list(buf) == 0 then
+        return false
+    end
+    local s = M.session(buf)
+    s.output:open()
+    M.repaint(buf) -- заодно нарисовать статусы и подхватить историю
+    return true
 end
 
 ---Реакция на фокус окна: без фокуса картинок на экране быть не должно.

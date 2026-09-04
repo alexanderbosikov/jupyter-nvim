@@ -29,7 +29,7 @@ local FENCE = {
     "", -- 6
     "Текст между ячейками.", -- 7
     "", -- 8
-    "```sql", -- 9  чужой язык: ядру не отдаём
+    "```sql", -- 9  магика языка: код-ячейка, магика соберётся при отправке
     "select 1", -- 10
     "```", -- 11
     "", -- 12
@@ -136,21 +136,27 @@ describe("fence", function()
         assert.equals("fence", cells.representation(buf))
     end)
 
-    it("код-ячейка это только ```python", function()
+    it("код-ячейки — python и языки магик", function()
         local list = cells.list(buf)
 
-        assert.equals(2, #list)
+        assert.equals(3, #list)
         assert.same({ 3, 5, 4, 4 }, { list[1].span_start, list[1].span_end, list[1].start_row, list[1].end_row })
-        assert.same({ 13, 16, 14, 15 }, { list[2].span_start, list[2].span_end, list[2].start_row, list[2].end_row })
+        assert.equals("sql", list[2].lang, "```sql это ячейка с магикой, а не чужой блок")
+        assert.same({ 9, 11, 10, 10 }, { list[2].span_start, list[2].span_end, list[2].start_row, list[2].end_row })
+        assert.same({ 13, 16, 14, 15 }, { list[3].span_start, list[3].span_end, list[3].start_row, list[3].end_row })
     end)
 
     it("незакрытый фенс ячейкой не считается", function()
         assert.is_nil(cells.at(buf, 19))
     end)
 
-    it("в тексте между ячейками и в чужом фенсе ячейки нет", function()
+    it("в тексте между ячейками ячейки нет", function()
         assert.is_nil(cells.at(buf, 7))
-        assert.is_nil(cells.at(buf, 10))
+    end)
+
+    it("сквозная нумерация учитывает ячейки с магикой", function()
+        assert.equals(2, cells.at(buf, 10).index)
+        assert.equals(3, cells.at(buf, 14).index)
     end)
 
     it("оба фенса принадлежат ячейке", function()
@@ -198,5 +204,62 @@ describe("устойчивость к NUL", function()
 
         assert.is_nil(text:find("%z"), "NUL должен быть вырезан")
         assert.equals("x = 1y = 2", text)
+    end)
+end)
+
+describe("магика языка в фенсе", function()
+    local function md(lines)
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+        vim.bo[buf].filetype = "markdown"
+        return buf
+    end
+
+    it("```sql считается код-ячейкой", function()
+        local buf = md({ "```sql", "select 1", "```" })
+
+        local list = cells.list(buf)
+
+        assert.equals(1, #list)
+        assert.equals("sql", list[1].lang)
+    end)
+
+    it("магика собирается обратно при отправке ядру", function()
+        local buf = md({ '```sql magic_args="df_name=orders limit=0"', "select 1", "```" })
+
+        local text = cells.text(buf, cells.list(buf)[1])
+
+        assert.equals("%%sql df_name=orders limit=0\nselect 1", text)
+    end)
+
+    it("без magic_args магика голая", function()
+        local buf = md({ "```sql", "select 1", "```" })
+
+        assert.equals("%%sql\nselect 1", cells.text(buf, cells.list(buf)[1]))
+    end)
+
+    it("если магика уже в теле, второй раз не добавляем", function()
+        -- так выглядит буфер после ipynb_magics: язык python, магика первой строкой
+        local buf = md({ "```python", "%%sql df_name=orders", "select 1", "```" })
+
+        assert.equals("%%sql df_name=orders\nselect 1", cells.text(buf, cells.list(buf)[1]))
+    end)
+
+    it("чужие языки код-ячейками не считаются", function()
+        local buf = md({ "```bash", "ls", "```", "```json", "{}", "```" })
+
+        assert.equals(0, #cells.list(buf))
+    end)
+
+    it("id живёт на фенсе рядом с magic_args", function()
+        local cellid = require("jupyter.cellid")
+        local buf = md({ '```sql magic_args="df_name=orders"', "select 1", "```" })
+
+        local id = cellid.ensure(buf, cells.list(buf)[1])
+        local line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
+
+        assert.is_truthy(line:find('magic_args="df_name=orders"', 1, true))
+        assert.equals(id, cellid.parse(line))
+        assert.equals("%%sql df_name=orders\nselect 1", cells.text(buf, cells.list(buf)[1]))
     end)
 end)
