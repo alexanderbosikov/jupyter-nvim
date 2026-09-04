@@ -137,3 +137,24 @@ describe("время прогона", function()
         assert.is_truthy(run.at)
     end)
 end)
+
+describe("null в индексе", function()
+    it("запись без файла вывода не роняет чтение", function()
+        -- сайдкар пишет "path": null для прогонов без файла; vim.json.decode без luanil
+        -- превращает его в vim.NIL, и vim.fs.joinpath падает на userdata
+        local dir = vim.fn.tempname()
+        vim.fn.mkdir(dir .. "/.jupyter-out/отчёт", "p")
+        vim.fn.writefile({
+            '{"cell_id":"a3f9","run_id":1,"status":"ok","kind":"none","path":null,"ename":null,'
+                .. '"started_at":"2026-09-04T09:00:00+00:00","duration_ms":5,"code_sha":"abc12345"}',
+        }, dir .. "/.jupyter-out/отчёт/index.jsonl")
+        local s = store.new({ notebook = dir .. "/отчёт.md" })
+
+        local run = s:last_run("a3f9")
+
+        assert.is_truthy(run)
+        assert.is_nil(s:path_of(s:last_record("a3f9")))
+        assert.same({}, run.lines)
+        assert.is_nil(run.error, "ename = null это отсутствие ошибки")
+    end)
+end)

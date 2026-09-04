@@ -156,7 +156,9 @@ function Sidecar:_feed(chunk)
         local line = self._tail:sub(1, nl - 1)
         self._tail = self._tail:sub(nl + 1)
         if line:match("%S") then
-            local ok, msg = pcall(vim.json.decode, line)
+            -- luanil здесь по той же причине, что и в store: null в поле протокола
+            -- иначе приезжает как vim.NIL и ведёт себя как значение, а не как его отсутствие
+            local ok, msg = pcall(vim.json.decode, line, { luanil = { object = true, array = true } })
             if ok and type(msg) == "table" then
                 table.insert(self._queue, msg)
             else

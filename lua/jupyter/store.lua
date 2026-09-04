@@ -77,7 +77,10 @@ function Store:load()
     local count = 0
     for _, line in ipairs(vim.fn.readfile(path)) do
         if line:match("%S") then
-            local ok, record = pcall(vim.json.decode, line)
+            -- luanil: без него JSON null превращается в vim.NIL (userdata), которая
+            -- проходит проверку `if not record.path` и падает уже в vim.fs.joinpath.
+            -- В индексе null стоит у каждой записи без файла вывода.
+            local ok, record = pcall(vim.json.decode, line, { luanil = { object = true, array = true } })
             -- обрезанная строка после падения не должна терять остальные
             if ok and type(record) == "table" and record.cell_id then
                 self.history[record.cell_id] = self.history[record.cell_id] or {}
@@ -113,8 +116,8 @@ end
 ---@param record table
 ---@return string|nil
 function Store:path_of(record)
-    if not record or not record.path or not self.base then
-        return nil
+    if not record or type(record.path) ~= "string" or not self.base then
+        return nil -- проверяем тип, а не истинность: с userdata joinpath падает
     end
     return vim.fs.joinpath(self.base, record.path)
 end

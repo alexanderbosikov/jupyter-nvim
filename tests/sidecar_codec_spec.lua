@@ -103,3 +103,18 @@ describe("кодек", function()
         assert.is_true(reached)
     end)
 end)
+
+describe("null в протоколе", function()
+    it("приезжает как отсутствие поля, а не как значение", function()
+        local sc = sidecar.new()
+        local got
+        sc:on("exec.done", function(msg) got = msg end)
+
+        sc:_feed('{"v":1,"ev":"exec.done","cell_id":"a3f9","run_id":1,'
+            .. '"data":{"status":"ok","user_expressions":null,"duration_ms":12}}\n')
+        vim.wait(1000, function() return got ~= nil end, 10)
+
+        assert.is_nil(got.data.user_expressions, "vim.NIL вёл бы себя как значение")
+        assert.equals(12, got.data.duration_ms)
+    end)
+end)
