@@ -318,15 +318,9 @@ end
 ---Снять все картинки этой сессии. Аварийный выход: image.nvim не удаляет картинки из
 ---своего состояния сам, и если что-то всё же осталось на экране — это лечится отсюда.
 ---@param buf? integer
----@param all? boolean стереть вообще все картинки в терминале, включая чужие и осиротевшие
-function M.clear_images(buf, all)
+function M.clear_images(buf)
     buf = buf or vim.api.nvim_get_current_buf()
     local s = sessions[buf]
-    if all then
-        -- сессии может уже не быть: например плагин перезагрузили, а картинки на экране остались
-        local sweeper = s and s.output.images or images.new({})
-        return sweeper:clear_terminal()
-    end
     if not s then
         return false
     end
