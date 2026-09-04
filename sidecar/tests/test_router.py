@@ -31,7 +31,7 @@ def test_same_cell_rerun_keeps_runs_apart(router):
 
 
 def test_late_output_after_idle_is_late_not_orphan(router):
-    """Вывод из фонового потока после `idle` (у нас его печатает nb_utils/notify.py)."""
+    """Вывод из фонового потока, напечатанный уже после `idle`."""
     router.start("m1", "a3f9", 1)
     router.finish("m1")
 

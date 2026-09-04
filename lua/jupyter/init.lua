@@ -500,8 +500,7 @@ function M.ensure_started(buf)
 end
 
 ---Погасить сессию буфера и дождаться выхода сайдкара.
----Ждём намеренно: иначе при выходе из nvim остаются висеть python-процесс и ядро —
----ровно то, за что у molten открытые issue про утечку ресурсов.
+---Ждём намеренно: иначе при выходе из nvim остаются висеть python-процесс и ядро.
 ---@param buf integer
 ---@param timeout_ms? integer
 function M.detach(buf, timeout_ms)

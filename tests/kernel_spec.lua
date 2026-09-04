@@ -46,7 +46,7 @@ describe("ядро", function()
     it("запуск до готовности ждёт в очереди, а не падает", function()
         local err, data
         k:start()
-        -- сразу, не дожидаясь ready: ровно то нажатие, которое ломалось в molten
+        -- сразу, не дожидаясь ready: запрос должен встать в очередь, а не упасть
         k:execute({ cell_id = "a3f9", run_id = 1, code = "print('из очереди')" }, function(e, d)
             err, data = e, d
         end)

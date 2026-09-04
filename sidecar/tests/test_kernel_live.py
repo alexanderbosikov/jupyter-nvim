@@ -147,7 +147,7 @@ def test_progress_bar_stays_one_line(live):
 
 
 def test_late_output_lands_on_its_own_cell_when_nothing_else_runs(live):
-    """Тест-лист §10: вывод из фонового потока после `idle` (наш nb_utils/notify.py)."""
+    """Вывод из фонового потока, напечатанный уже после `idle`."""
     session, sink, _ = live()
     session.execute(
         "a3f9",
@@ -247,7 +247,7 @@ def test_stdin_roundtrip(live):
 
 
 def test_env_reaches_the_kernel(live):
-    """Через этот путь ядру уезжает NB_UTILS_ITABLES=0."""
+    """Этим путём ядру передаются флаги, которые библиотеки читают при импорте."""
     session, sink, _ = live(env={"JN_TEST_FLAG": "42"})
     session.execute("a3f9", 1, "import os\nprint(os.environ.get('JN_TEST_FLAG'))")
 

@@ -1,35 +1,53 @@
 -- Круг .ipynb → markdown → .ipynb с настоящим jupytext.
 --
--- Это главная проверка шага 5: id ячейки живёт в тексте документа пользователя, и если он
--- не переживает конвертацию, привязка выводов рассыпается, а ноутбук получает мусор.
--- Проверяется вместе с ipynb_magics.lua из конфига, потому что он тоже правит буфер.
+-- Главная проверка того, что id ячейки живёт в тексте документа: если он не переживает
+-- конвертацию, привязка выводов рассыпается, а ноутбук получает мусор. Ноутбук для теста
+-- собирается здесь же, чтобы проверка не зависела от чужих файлов.
 --
--- Тест пропускается там, где нет jupytext или этого конфига.
+-- Тест пропускается там, где нет jupytext.
 
 local cells = require("jupyter.cells")
 local cellid = require("jupyter.cellid")
 
-local JUPYTEXT = vim.fn.expand("~/.local/bin/jupytext")
-local MAGICS = vim.fn.expand("~/.config/nvim/lua/custom/ipynb_magics.lua")
-local SAMPLE = vim.fn.expand("~/work/sandbox/Sandbox.ipynb")
+local JUPYTEXT = vim.fn.exepath("jupytext")
 
 local function available()
-    return vim.fn.executable(JUPYTEXT) == 1
-        and vim.fn.filereadable(MAGICS) == 1
-        and vim.fn.filereadable(SAMPLE) == 1
+    return JUPYTEXT ~= ""
+end
+
+---Ноутбук с обычными ячейками и ячейкой с магикой языка.
+local function sample_notebook(path)
+    local function cell(source)
+        return { cell_type = "code", execution_count = vim.NIL, metadata = vim.empty_dict(), outputs = {}, source = source }
+    end
+    local nb = {
+        nbformat = 4,
+        nbformat_minor = 5,
+        metadata = {
+            kernelspec = { display_name = "Python 3", language = "python", name = "python3" },
+            language_info = { name = "python", version = "3.11.0" },
+        },
+        cells = {
+            cell({ "import polars as pl\n" }),
+            cell({ "%%sql df_name=orders limit=0\n", "select 1\n" }),
+            cell({ 'print("привет")\n' }),
+            cell({ "%%sql\n", "select 2\n" }),
+            cell({ "x = 1\n", "y = 2\n" }),
+        },
+    }
+    vim.fn.writefile(vim.split(vim.json.encode(nb), "\n"), path)
 end
 
 describe("круг через jupytext", function()
-    local dir, magics
+    local dir
 
     before_each(function()
         if not available() then
             return
         end
-        magics = loadfile(MAGICS)()
         dir = vim.fn.tempname()
         vim.fn.mkdir(dir, "p")
-        vim.fn.system({ "cp", SAMPLE, dir .. "/nb.ipynb" })
+        sample_notebook(dir .. "/nb.ipynb")
     end)
 
     local function to_md(ipynb, md)
@@ -40,12 +58,11 @@ describe("круг через jupytext", function()
         vim.fn.system({ JUPYTEXT, "--to", "notebook", "--output", ipynb, md })
     end
 
-    ---Буфер таким, каким его видит nvim: содержимое md плюс нормализация магик.
-    ---Без :edit — в изолированном rtp нет парсера markdown, и штатный ftplugin падает.
+    ---Буфер таким, каким его видит nvim. Без :edit — в изолированном rtp нет парсера
+    ---markdown, и штатный ftplugin падает.
     local function open_md(path)
         local buf = vim.api.nvim_create_buf(false, true)
-        local lines = vim.fn.readfile(path)
-        vim.api.nvim_buf_set_lines(buf, 0, -1, false, magics.normalize(lines) or lines)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.fn.readfile(path))
         local save = vim.o.eventignore
         vim.o.eventignore = "FileType"
         vim.bo[buf].filetype = "markdown"
@@ -66,20 +83,19 @@ describe("круг через jupytext", function()
 
         to_md(dir .. "/nb.ipynb", dir .. "/a.md")
         local buf = open_md(dir .. "/a.md")
-        assert.is_true(#cells.list(buf) > 10, "в образце должны быть код-ячейки")
+        assert.is_true(#cells.list(buf) >= 4, "ожидали код-ячейки, нашли " .. #cells.list(buf))
 
         for _, cell in ipairs(cells.list(buf)) do
             cellid.ensure(buf, cell)
         end
         local before = ids_of(buf)
-        assert.is_nil(vim.tbl_contains(before, "—") and true or nil, "id должны быть у всех ячеек")
+        assert.is_false(vim.tbl_contains(before, "—"), "id должны быть у всех ячеек")
         vim.fn.writefile(vim.api.nvim_buf_get_lines(buf, 0, -1, false), dir .. "/a.md")
 
         to_nb(dir .. "/a.md", dir .. "/b.ipynb")
         to_md(dir .. "/b.ipynb", dir .. "/c.md")
-        local after = ids_of(open_md(dir .. "/c.md"))
 
-        assert.same(before, after)
+        assert.same(before, ids_of(open_md(dir .. "/c.md")))
     end)
 
     it("id не попадает в тело ячейки и не ломает магику", function()
@@ -95,7 +111,8 @@ describe("круг через jupytext", function()
         vim.fn.writefile(vim.api.nvim_buf_get_lines(buf, 0, -1, false), dir .. "/a.md")
         to_nb(dir .. "/a.md", dir .. "/b.ipynb")
 
-        local nb = vim.json.decode(table.concat(vim.fn.readfile(dir .. "/b.ipynb"), "\n"))
+        local nb = vim.json.decode(table.concat(vim.fn.readfile(dir .. "/b.ipynb"), "\n"),
+            { luanil = { object = true, array = true } })
         local leaked, with_meta, magic_first = 0, 0, 0
         for _, cell in ipairs(nb.cells) do
             local src = table.concat(cell.source or {}, "")
@@ -110,8 +127,8 @@ describe("круг через jupytext", function()
             end
         end
 
-        assert.equals(0, leaked, "id в теле ячейки уехал бы в Redshift частью запроса")
-        assert.is_true(with_meta > 10, "id должен лежать в cell metadata")
-        assert.is_true(magic_first > 0, "%%sql должен остаться первой строкой тела")
+        assert.equals(0, leaked, "id в теле ячейки уехал бы в ядро частью кода")
+        assert.is_true(with_meta >= 4, "id должен лежать в cell metadata")
+        assert.is_true(magic_first > 0, "магика должна остаться первой строкой тела")
     end)
 end)

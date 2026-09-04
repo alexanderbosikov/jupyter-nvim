@@ -145,8 +145,7 @@ describe("fence", function()
     end)
 
     it("магика в теле остаётся первой строкой", function()
-        -- ipynb_magics возвращает %%sql в тело; id обязан жить на фенсе, иначе он
-        -- уедет в Redshift частью запроса
+        -- id обязан жить на фенсе: в теле он уехал бы в ядро частью кода ячейки
         local sql = make({ "```python", "%%sql df_name=orders", "select 1", "```" }, "markdown")
 
         cellid.ensure(sql, cells.list(sql)[1])

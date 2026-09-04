@@ -17,6 +17,6 @@ vim.opt.runtimepath:append(vim.fn.expand("~/.local/share/nvim/lazy/plenary.nvim"
 vim.opt.swapfile = false
 vim.opt.shadafile = "NONE"
 
--- Сайдкару нужен python с jupyter_client и polars; в тестах это venv jupyter-utils.
-vim.g.jupyter_python = vim.env.JUPYTER_NVIM_PYTHON
-    or vim.fn.expand("~/work/jupyter-utils/.venv/bin/python")
+-- Сайдкару нужен python с jupyter_client, ipykernel и polars.
+-- Задаётся переменной окружения: JUPYTER_NVIM_PYTHON=/path/to/venv/bin/python ./tests/run.sh
+vim.g.jupyter_python = vim.env.JUPYTER_NVIM_PYTHON or "python3"
