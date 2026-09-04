@@ -1155,3 +1155,74 @@ describe("окно вывода при открытии", function()
         assert.is_false(jupyter.open_for(buf))
     end)
 end)
+
+describe("сортировка таблицы", function()
+    local buf, session
+
+    before_each(function()
+        jupyter.setup({ table = { page_size = 50 } })
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+            session = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("каждая следующая сортировка учитывает предыдущую", function()
+        local _, b = notebook({
+            "# %%",
+            "import polars as pl",
+            "pl.DataFrame({'площадка': ['web','ios','web','ios'], 'день': [2,1,1,2]})",
+        })
+        buf, session = b, nil
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok" and r.table ~= nil
+        end, 60000, "таблицу")
+
+        jupyter.open_table()
+        wait(function() return session.table.total == 4 end, 30000, "страницу")
+
+        local function column(index)
+            local out = {}
+            for i = 3, #vim.api.nvim_buf_get_lines(session.table.buf, 0, -1, false) do
+                local line = vim.api.nvim_buf_get_lines(session.table.buf, i - 1, i, false)[1]
+                local entry = session.table.layout[index]
+                table.insert(out, vim.trim(vim.fn.strcharpart(line, entry.from - 1, entry.to - entry.from + 1)))
+            end
+            return out
+        end
+
+        -- ждём точного порядка, а не первой строки: иначе ожидание проходит мгновенно
+        -- на данных, которые совпали случайно
+        local function ordered(index, want)
+            return function()
+                return table.concat(column(index), ",") == want
+            end
+        end
+
+        -- сначала по площадке
+        session.table:sort_by("площадка", false)
+        wait(ordered(1, "ios,ios,web,web"), 30000, "порядок по площадке")
+
+        -- теперь по дню: он главный, площадка осталась тай-брейкером
+        session.table:sort_by("день", false)
+        wait(ordered(2, "1,1,2,2"), 30000, "порядок по дню")
+
+        assert.same({ "1", "1", "2", "2" }, column(2))
+        assert.same({ "ios", "web", "ios", "web" }, column(1), "внутри дня сохранился прежний порядок")
+        assert.is_truthy(session.table:status():find("сортировка: день ↑ · площадка ↑", 1, true))
+
+        session.table:get_actions().sort_clear()
+        wait(function() return #session.table.order == 0 end, 30000, "сброс")
+        session.table:get_actions().close()
+    end)
+end)

@@ -13,6 +13,9 @@ local hl = require("jupyter.highlight")
 local M = {}
 
 M.DEFAULT_KEYS = {
+    { mode = "n", key = "s", action = "sort_asc" },
+    { mode = "n", key = "S", action = "sort_desc" },
+    { mode = "n", key = "c", action = "sort_clear" },
     { mode = "n", key = "L", action = "page_next" },
     { mode = "n", key = "H", action = "page_prev" },
     { mode = "n", key = "]]", action = "page_last" },
@@ -49,15 +52,18 @@ local function pad(text, width)
 end
 
 ---Свернуть страницу в строки буфера с выровненными колонками.
+---
+---Вторым значением возвращается раскладка: где на экране начинается и кончается каждая
+---колонка. По ней сортировка понимает, над какой колонкой стоит курсор.
 ---@param header string[]
 ---@param rows string[][]
 ---@param opts? table max_col
----@return string[]
+---@return string[] lines, table[] layout
 function M.format(header, rows, opts)
     opts = opts or {}
     local max_col = opts.max_col or 40
     if #header == 0 then
-        return { "(нет колонок)" }
+        return { "(нет колонок)" }, {}
     end
 
     local widths = {}
@@ -93,7 +99,14 @@ function M.format(header, rows, opts)
     if #rows == 0 then
         table.insert(out, " (пусто)")
     end
-    return out
+
+    -- раскладка в экранных колонках: 1 занимает ведущий пробел
+    local layout, x = {}, 2
+    for i, name in ipairs(header) do
+        table.insert(layout, { name = name, from = x, to = x + widths[i] - 1 })
+        x = x + widths[i] + #GAP
+    end
+    return out, layout
 end
 
 ---@class jupyter.TableView
@@ -114,6 +127,9 @@ function M.new(opts)
         label = nil,
         offset = 0,
         total = 0,
+        layout = {},
+        -- стек сортировки: первый элемент — главный ключ, остальные разрешают равенство
+        order = {},
     }, View)
 end
 
@@ -138,6 +154,7 @@ function View:open(path, label)
     self.path = path
     self.label = label or vim.fn.fnamemodify(path, ":t")
     self.offset = 0
+    self.order = {}
 
     local buf = self:_ensure_buf()
     if not self:is_open() then
@@ -173,6 +190,7 @@ function View:page(offset)
         path = self.path,
         offset = want,
         limit = self.page_size,
+        order_by = #self.order > 0 and self.order or nil,
     }, function(err, page)
         if err then
             common.set_lines(self:_ensure_buf(), {
@@ -183,12 +201,69 @@ function View:page(offset)
         end
         self.offset = page.offset
         self.total = page.total_rows
-        common.set_lines(self:_ensure_buf(), M.format(page.header, page.rows, { max_col = self.max_col }))
+        local lines, layout = M.format(page.header, page.rows, { max_col = self.max_col })
+        self.layout = layout
+        common.set_lines(self:_ensure_buf(), lines)
         self:_render_winbar()
         if self:is_open() then
             pcall(vim.api.nvim_win_set_cursor, self.win, { 1, 0 })
         end
     end)
+end
+
+---Колонка под экранной позицией. Нужна сортировке: клавиша действует на ту колонку,
+---над которой стоит курсор.
+---@param col integer экранная колонка, 1-based
+---@return string|nil
+function View:column_at(col)
+    if #self.layout == 0 then
+        return nil
+    end
+    for _, entry in ipairs(self.layout) do
+        if col >= entry.from and col <= entry.to then
+            return entry.name
+        end
+    end
+    -- курсор в промежутке между колонками или за последней: берём ближайшую слева
+    local nearest
+    for _, entry in ipairs(self.layout) do
+        if entry.from <= col then
+            nearest = entry.name
+        end
+    end
+    return nearest or self.layout[1].name
+end
+
+---Добавить колонку в стек сортировки главным ключом.
+---
+---Прежние ключи не теряются, а становятся тай-брейкерами: так каждая следующая сортировка
+---учитывает предыдущие. Повторный выбор той же колонки поднимает её обратно наверх и меняет
+---направление на заданное.
+---@param column string
+---@param desc boolean
+function View:sort_by(column, desc)
+    local kept = {}
+    for _, item in ipairs(self.order) do
+        if item.column ~= column then
+            table.insert(kept, item)
+        end
+    end
+    table.insert(kept, 1, { column = column, desc = desc or nil })
+    self.order = kept
+    self:page(0) -- после смены порядка страница 1: иначе смотришь в середину чужого порядка
+end
+
+---Описание сортировки для статуса.
+---@return string
+function View:sort_label()
+    if #self.order == 0 then
+        return ""
+    end
+    local parts = {}
+    for _, item in ipairs(self.order) do
+        table.insert(parts, ("%s %s"):format(item.column, item.desc and "↓" or "↑"))
+    end
+    return "сортировка: " .. table.concat(parts, " · ")
 end
 
 ---Строка статуса. Отдельным методом — её удобно проверять тестом.
@@ -201,7 +276,9 @@ function View:status()
     local to = math.min(self.offset + self.page_size, self.total)
     local page = math.floor(self.offset / self.page_size) + 1
     local pages = math.max(1, math.ceil(self.total / self.page_size))
-    return ("строки %d–%d из %d · страница %d/%d"):format(from, to, self.total, page, pages)
+    local base = ("строки %d–%d из %d · страница %d/%d"):format(from, to, self.total, page, pages)
+    local sort = self:sort_label()
+    return sort ~= "" and (sort .. " · " .. base) or base
 end
 
 function View:_render_winbar()
@@ -218,7 +295,25 @@ end
 
 ---@return table<string, fun()>
 function View:get_actions()
+    local function sort(desc)
+        return function()
+            if not self:is_open() then
+                return
+            end
+            local column = self:column_at(vim.fn.virtcol("."))
+            if column then
+                self:sort_by(column, desc)
+            end
+        end
+    end
+
     return {
+        sort_asc = sort(false),
+        sort_desc = sort(true),
+        sort_clear = function()
+            self.order = {}
+            self:page(0)
+        end,
         page_next = function() self:page(self.offset + self.page_size) end,
         page_prev = function() self:page(self.offset - self.page_size) end,
         page_first = function() self:page(0) end,

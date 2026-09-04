@@ -101,3 +101,66 @@ def test_page_selects_requested_columns_in_file_order(parquet):
     got = page(parquet, limit=1, cols=["имя", "id"])
 
     assert got["header"] == ["id", "имя"]
+
+
+@pytest.fixture
+def sortable(tmp_path):
+    path = tmp_path / "sort.parquet"
+    pl.DataFrame(
+        {
+            "площадка": ["web", "ios", "web", "ios", "web"],
+            "день": [3, 1, 1, 2, 2],
+            "сессии": [10, 20, 30, 40, None],
+        }
+    ).write_parquet(path)
+    return path
+
+
+def test_sort_by_one_column(sortable):
+    got = page(sortable, order_by=[{"column": "день"}])
+
+    assert [row[1] for row in got["rows"]] == ["1", "1", "2", "2", "3"]
+    assert got["order_by"] == [{"column": "день"}]
+
+
+def test_sort_descending(sortable):
+    got = page(sortable, order_by=[{"column": "день", "desc": True}])
+
+    assert [row[1] for row in got["rows"]] == ["3", "2", "2", "1", "1"]
+
+
+def test_second_key_breaks_ties(sortable):
+    """Порядок важности — как в списке: первый ключ главный, второй разрешает равенство."""
+    got = page(sortable, order_by=[{"column": "день"}, {"column": "площадка"}])
+
+    assert [(row[1], row[0]) for row in got["rows"]] == [
+        ("1", "ios"),
+        ("1", "web"),
+        ("2", "ios"),
+        ("2", "web"),
+        ("3", "web"),
+    ]
+
+
+def test_null_goes_last(sortable):
+    got = page(sortable, order_by=[{"column": "сессии"}])
+
+    assert [row[2] for row in got["rows"]][-1] == "null"
+
+
+def test_sort_survives_paging(sortable):
+    """Страница 2 продолжает страницу 1, а не сортирует себя отдельно."""
+    first = page(sortable, offset=0, limit=2, order_by=[{"column": "день"}])
+    second = page(sortable, offset=2, limit=2, order_by=[{"column": "день"}])
+
+    assert [row[1] for row in first["rows"]] == ["1", "1"]
+    assert [row[1] for row in second["rows"]] == ["2", "2"]
+
+
+def test_unknown_column_is_reported(sortable):
+    from jupyter_nvim.frames import UnknownColumn
+
+    with pytest.raises(UnknownColumn) as e:
+        page(sortable, order_by=[{"column": "нет_такой"}])
+
+    assert "нет_такой" in str(e.value)

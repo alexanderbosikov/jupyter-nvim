@@ -673,8 +673,10 @@ class KernelSession:
         except ValueError:
             return str(path)
 
-    def table_page(self, path: str, offset: int = 0, limit: int = 100, cols=None) -> dict[str, Any]:
-        return frames.page(path, offset=offset, limit=limit, cols=cols)
+    def table_page(
+        self, path: str, offset: int = 0, limit: int = 100, cols=None, order_by=None
+    ) -> dict[str, Any]:
+        return frames.page(path, offset=offset, limit=limit, cols=cols, order_by=order_by)
 
     def _emit_done(self, ex: Exec) -> None:
         self._emit(

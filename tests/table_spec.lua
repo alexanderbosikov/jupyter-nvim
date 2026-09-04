@@ -95,3 +95,132 @@ describe("статус и листание", function()
         end
     end)
 end)
+
+describe("раскладка колонок", function()
+    it("возвращается вместе со строками и совпадает с отрисовкой", function()
+        local lines, layout = table_view.format({ "id", "имя" }, { { "1", "стр" } })
+
+        assert.equals(2, #layout)
+        assert.equals("id", layout[1].name)
+        assert.equals("имя", layout[2].name)
+        -- колонка начинается там, где в строке стоит её значение
+        local header = lines[1]
+        assert.equals("i", vim.fn.strcharpart(header, layout[1].from - 1, 1))
+        assert.equals("и", vim.fn.strcharpart(header, layout[2].from - 1, 1))
+    end)
+
+    it("без колонок раскладка пустая", function()
+        local _, layout = table_view.format({}, {})
+
+        assert.same({}, layout)
+    end)
+end)
+
+describe("сортировка", function()
+    local view
+
+    local sent
+
+    before_each(function()
+        sent = {}
+        local sidecar = {
+            request = function(_, op, args)
+                table.insert(sent, { op = op, args = args })
+            end,
+        }
+        view = table_view.new({ sidecar = sidecar, page_size = 50 })
+        view.path = "/tmp/df.parquet"
+        local _, layout = table_view.format({ "площадка", "день", "сессии" }, { { "web", "1", "10" } })
+        view.layout = layout
+    end)
+
+    it("определяет колонку под курсором", function()
+        assert.equals("площадка", view:column_at(view.layout[1].from))
+        assert.equals("день", view:column_at(view.layout[2].to))
+        assert.equals("сессии", view:column_at(view.layout[3].from + 1))
+    end)
+
+    it("за последней колонкой берёт ближайшую слева", function()
+        assert.equals("сессии", view:column_at(9999))
+    end)
+
+    it("каждая следующая сортировка становится главным ключом", function()
+        view:sort_by("день", false)
+        view:sort_by("площадка", true)
+
+        assert.same({
+            { column = "площадка", desc = true },
+            { column = "день" },
+        }, view.order)
+    end)
+
+    it("повторный выбор колонки поднимает её наверх и меняет направление", function()
+        view:sort_by("день", false)
+        view:sort_by("площадка", false)
+        view:sort_by("день", true)
+
+        assert.equals(2, #view.order, "дубля быть не должно")
+        assert.same({ column = "день", desc = true }, view.order[1])
+        assert.equals("площадка", view.order[2].column)
+    end)
+
+    it("смена порядка запрашивает первую страницу с новым ключом", function()
+        view.offset = 500
+
+        view:sort_by("день", true)
+
+        assert.equals(1, #sent)
+        assert.equals("table.page", sent[1].op)
+        assert.equals(0, sent[1].args.offset, "иначе смотришь в середину чужого порядка")
+        assert.same({ { column = "день", desc = true } }, sent[1].args.order_by)
+    end)
+
+    it("без сортировки order_by не отправляется", function()
+        view:page(0)
+
+        assert.is_nil(sent[1].args.order_by)
+    end)
+
+    it("листание сохраняет порядок сортировки", function()
+        view:sort_by("день", false)
+        sent = {}
+
+        view:get_actions().page_next()
+
+        assert.same({ { column = "день" } }, sent[1].args.order_by)
+    end)
+
+    it("сортировка видна в статусе", function()
+        view.total = 100
+        assert.equals("строки 1–50 из 100 · страница 1/2", view:status())
+
+        view:sort_by("день", false)
+        view:sort_by("площадка", true)
+
+        assert.is_truthy(view:status():find("сортировка: площадка ↓ · день ↑", 1, true))
+    end)
+
+    it("сброс очищает стек", function()
+        view:sort_by("день", false)
+
+        view:get_actions().sort_clear()
+
+        assert.same({}, view.order)
+        assert.equals("", view:sort_label())
+    end)
+
+    it("действия объявлены и привязаны к дефолтным клавишам", function()
+        local actions = view:get_actions()
+
+        for _, name in ipairs({ "sort_asc", "sort_desc", "sort_clear" }) do
+            assert.equals("function", type(actions[name]), "нет действия " .. name)
+        end
+        local keys = {}
+        for _, spec in ipairs(table_view.DEFAULT_KEYS) do
+            keys[spec.action] = spec.key
+        end
+        assert.equals("s", keys.sort_asc)
+        assert.equals("S", keys.sort_desc)
+        assert.equals("c", keys.sort_clear)
+    end)
+end)

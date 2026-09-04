@@ -70,15 +70,24 @@ def _cell(value: Any) -> str:
     return "null" if value is None else str(value)
 
 
+class UnknownColumn(ValueError):
+    pass
+
+
 def page(
     path: str | Path,
     offset: int = 0,
     limit: int = 100,
     cols: list[str] | None = None,
+    order_by: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Страница parquet-а без чтения файла целиком: `scan_parquet().slice()`.
 
     Значения отдаются строками — выравнивание колонок делает Lua, она знает ширину окна (§3).
+
+    `order_by` — список `{column, desc}` в порядке важности: первый элемент главный ключ,
+    остальные разрешают равенство. Сортировка идёт до нарезки страницы, поэтому листание
+    остаётся согласованным: страница 2 продолжает страницу 1, а не сортирует её отдельно.
     """
     import polars as pl
 
@@ -87,6 +96,17 @@ def page(
     if cols:
         wanted = set(cols)
         names = [name for name in names if name in wanted]
+
+    if order_by:
+        keys = [str(item["column"]) for item in order_by]
+        unknown = [key for key in keys if key not in lazy.collect_schema().names()]
+        if unknown:
+            raise UnknownColumn("нет таких колонок: " + ", ".join(unknown))
+        lazy = lazy.sort(
+            by=keys,
+            descending=[bool(item.get("desc")) for item in order_by],
+            nulls_last=True,
+        )
 
     total = int(lazy.select(pl.len()).collect().item())
     offset = max(0, min(int(offset), total))
@@ -100,4 +120,5 @@ def page(
         "total_rows": total,
         "offset": offset,
         "truncated": offset + len(rows) < total,
+        "order_by": order_by or [],
     }

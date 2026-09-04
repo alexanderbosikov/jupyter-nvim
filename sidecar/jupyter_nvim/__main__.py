@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from . import frames
 from .kernel import KernelSession
 from .outdir import DEFAULT_DIR, OutDir
 from .protocol import ErrCode, Op, V
@@ -92,9 +93,12 @@ class App:
                     offset=args.get("offset", 0),
                     limit=args.get("limit", 100),
                     cols=args.get("cols"),
+                    order_by=args.get("order_by"),
                 )
             except FileNotFoundError:
                 raise RpcError(ErrCode.NOT_FOUND, f"нет файла {args['path']}") from None
+            except frames.UnknownColumn as e:
+                raise RpcError(ErrCode.BAD_ARGS, str(e)) from None
 
         @rpc.op(Op.INTERRUPT)
         def _interrupt(args: dict) -> dict:
