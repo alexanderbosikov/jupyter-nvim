@@ -5,6 +5,10 @@ description = "Сайдкар jupyter.nvim: протокол ядра Jupyter п
 requires-python = ">=3.11"
 dependencies = ["jupyter_client>=8", "polars>=1"]
 
+# ipykernel — не зависимость сайдкара, а то, чем он управляет: тестам нужно живое ядро.
+[project.optional-dependencies]
+dev = ["pytest>=8", "ipykernel>=6"]
+
 [project.scripts]
 jupyter-out = "jupyter_nvim.cli:main"
 

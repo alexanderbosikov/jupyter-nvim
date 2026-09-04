@@ -217,4 +217,5 @@ JUPYTER_NVIM_PYTHON=~/.venvs/jupyter/bin/python ./tests/run.sh
 ./tests/run.sh tests/cells_spec.lua    # один файл
 ```
 
-Устройство и принятые решения — в [ARCHITECTURE.md](ARCHITECTURE.md).
+Устройство и принятые решения — в [ARCHITECTURE.md](ARCHITECTURE.md), окружение
+для разработки и очередь работ — в [CONTRIBUTING.md](CONTRIBUTING.md).
