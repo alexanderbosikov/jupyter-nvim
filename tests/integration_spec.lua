@@ -938,3 +938,78 @@ describe("таблица в окне вывода", function()
         assert.is_truthy(text:find(" a"), "заголовок колонки: " .. text)
     end)
 end)
+
+describe("таблица из окна вывода", function()
+    local buf, session
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+            session = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("открывается, когда курсор стоит в drawer'е", function()
+        local _, b = notebook({ "# %%", "import polars as pl", "pl.DataFrame({'n': range(80)})" })
+        buf, session = b, nil
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok" and r.table ~= nil
+        end, 60000, "таблицу")
+
+        -- уходим курсором в окно вывода
+        vim.api.nvim_set_current_win(session.output.win)
+        assert.are_not.equals(buf, vim.api.nvim_get_current_buf())
+
+        assert.equals(session, jupyter.session(), "сессия ищется по буферу нашего окна")
+        jupyter.open_table()
+        wait(function() return session.table.total == 80 end, 30000, "страницу таблицы")
+
+        assert.is_true(session.table:is_open())
+        assert.is_truthy(vim.wo[session.table.win].winbar:find("прогон", 1, true))
+        session.table:get_actions().close()
+    end)
+
+    it("действие drawer'а открывает ту же таблицу", function()
+        local _, b = notebook({ "# %%", "import polars as pl", "pl.DataFrame({'n': range(5)})" })
+        buf, session = b, nil
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.table ~= nil
+        end, 60000, "таблицу")
+
+        session.output:get_actions().open_table()
+        wait(function() return session.table.total == 5 end, 30000, "страницу таблицы")
+
+        assert.is_true(session.table:is_open())
+        session.table:get_actions().close()
+    end)
+
+    it("клавиша t есть в drawer'е", function()
+        local _, b = notebook({ "# %%", "x = 1" })
+        buf, session = b, nil
+        session = jupyter.session(buf)
+        session.output:open()
+
+        local lhs = {}
+        for _, map in ipairs(vim.api.nvim_buf_get_keymap(session.output.buf, "n")) do
+            lhs[map.lhs] = map.desc
+        end
+
+        assert.equals("jupyter: open_table", lhs["t"])
+    end)
+end)

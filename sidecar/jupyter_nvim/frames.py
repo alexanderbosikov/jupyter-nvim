@@ -62,7 +62,12 @@ def parse_dump(entry: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _cell(value: Any) -> str:
-    return "" if value is None else str(value)
+    """Пустая строка и NULL — разные вещи, и выглядеть должны по-разному.
+
+    Совпадаем с тем, как рисует сам polars: пустая строка пустая, NULL — слово `null`.
+    Неоднозначность со строкой "null" при этом та же, что в polars и в Lab.
+    """
+    return "null" if value is None else str(value)
 
 
 def page(

@@ -55,11 +55,25 @@ def parquet(tmp_path):
     return path
 
 
+def test_null_and_empty_string_look_different(tmp_path):
+    """Иначе в таблице не отличить «нет значения» от «пустая строка»."""
+    path = tmp_path / "df.parquet"
+    pl.DataFrame({"текст": ["есть", "", None]}).write_parquet(path)
+
+    got = page(path)
+
+    assert got["rows"] == [["есть"], [""], ["null"]]
+
+
 def test_page_returns_header_and_strings(parquet):
     got = page(parquet, offset=0, limit=3)
 
     assert got["header"] == ["id", "имя", "пусто"]
-    assert got["rows"] == [["0", "стр-0", ""], ["1", "стр-1", ""], ["2", "стр-2", ""]]
+    assert got["rows"] == [
+        ["0", "стр-0", "null"],
+        ["1", "стр-1", "null"],
+        ["2", "стр-2", "null"],
+    ]
     assert got["total_rows"] == 250
     assert got["truncated"] is True
 

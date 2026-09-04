@@ -120,6 +120,14 @@ function M.session(buf)
         return found
     end
 
+    -- курсор может стоять в наших же окнах — в drawer'е или во вкладке таблицы.
+    -- Тогда сессия та же, что у ноутбука, которому они принадлежат, а не новая.
+    for _, session in pairs(sessions) do
+        if buf == session.output.buf or buf == session.table.buf then
+            return session
+        end
+    end
+
     local sc = require("jupyter.sidecar").new({ python = M.config.python })
     local k = kernel.new({
         sidecar = sc,
@@ -162,6 +170,9 @@ function M.session(buf)
             end)
         end,
         preview_rows = M.config.output.preview_rows,
+        on_open_table = function()
+            M.open_table()
+        end,
     }))
     ex = exec.new({
         kernel = k,
@@ -462,10 +473,14 @@ end
 function M.open_table()
     local s = M.session()
     local run
-    local cell = cells.at(s.buf, vim.api.nvim_win_get_cursor(0)[1])
-    if cell then
-        local cell_id = exec.cell_id(s.buf, cell)
-        run = s.exec:run_for(cell_id) or s.store:last_run(cell_id)
+    -- позиция курсора имеет смысл только в самом ноутбуке: из drawer'а берём
+    -- тот прогон, который в нём сейчас показан
+    if vim.api.nvim_get_current_buf() == s.buf then
+        local cell = cells.at(s.buf, vim.api.nvim_win_get_cursor(0)[1])
+        if cell then
+            local cell_id = exec.cell_id(s.buf, cell)
+            run = s.exec:run_for(cell_id) or s.store:last_run(cell_id)
+        end
     end
     run = run or s.output.run
 

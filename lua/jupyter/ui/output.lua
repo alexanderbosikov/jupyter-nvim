@@ -16,6 +16,7 @@ M.DEFAULT_KEYS = {
     { mode = "n", key = "q", action = "close" },
     { mode = "n", key = "c", action = "clear" },
     { mode = "n", key = "y", action = "yank" },
+    { mode = "n", key = "t", action = "open_table" },
     { mode = "n", key = "gg", action = "top" },
     { mode = "n", key = "G", action = "bottom" },
 }
@@ -44,6 +45,8 @@ function M.new(opts)
         -- поэтому первые строки показываем здесь, а не только в отдельной вкладке
         preview = opts.preview,
         preview_rows = opts.preview_rows or 30,
+        -- чем открыть таблицу: drawer сам про вкладку с parquet знать не должен
+        on_open_table = opts.on_open_table,
         position = opts.position or "bottom",
         size = opts.size or 15,
         keys = opts.keys or M.DEFAULT_KEYS,
@@ -273,6 +276,13 @@ end
 ---@return table<string, fun()>
 function Output:get_actions()
     return {
+        open_table = function()
+            if self.on_open_table then
+                self.on_open_table(self.run)
+            else
+                vim.notify("jupyter.nvim: открывать таблицу нечем", vim.log.levels.WARN)
+            end
+        end,
         close = function() self:close() end,
         clear = function()
             if self.run then
