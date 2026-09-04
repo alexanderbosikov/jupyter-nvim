@@ -24,6 +24,7 @@ function M.setup(api)
             vim.notify("jupyter.nvim: сессии для этого буфера нет", vim.log.levels.WARN)
         end
     end, { desc = "снять все картинки" })
+    cmd("JupyterToc", function() api.show_toc() end, { desc = "оглавление ноутбука" })
     cmd("JupyterRepaint", function() api.repaint() end, { desc = "перерисовать статусы ячеек" })
     cmd("JupyterRunPrev", function() api.prev_run() end, { desc = "предыдущий прогон этой ячейки" })
     cmd("JupyterRunNext", function() api.next_run() end, { desc = "следующий прогон этой ячейки" })

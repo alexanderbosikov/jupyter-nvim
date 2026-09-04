@@ -54,12 +54,13 @@
 | окно вывода | `<leader>jo` |
 | таблица постранично | `<leader>jt` |
 | предыдущий / следующий прогон ячейки | `[r` / `]r` |
+| оглавление ноутбука | `<leader>jT` |
 | прервать / перезапустить ядро | `<leader>ji` / `<leader>jR` |
 
 Команды: `:JupyterRun`, `:JupyterRunAll`, `:JupyterRunBelow`, `:JupyterOutput`,
 `:JupyterTable`, `:JupyterRunPrev`, `:JupyterRunNext`, `:JupyterInterrupt`,
-`:JupyterRestart`, `:JupyterHistory`, `:JupyterRepaint`, `:JupyterClearImages`,
-`:JupyterLog`, `:JupyterStatus`, `:JupyterStop`.
+`:JupyterRestart`, `:JupyterHistory`, `:JupyterToc`, `:JupyterRepaint`,
+`:JupyterClearImages`, `:JupyterLog`, `:JupyterStatus`, `:JupyterStop`.
 
 В окне вывода: `t` — таблица постранично, `y` — скопировать вывод, `c` — очистить,
 `q` — закрыть.
@@ -82,6 +83,27 @@
 - **fenced** — markdown после jupytext; код-ячейка это ```` ```python ````, а также фенс
   с языком магики (```` ```sql ````) — такую ячейку jupytext хранит с `magic_args`
   в info-строке, и строка `%%sql` собирается обратно в момент отправки ядру.
+
+## Оглавление
+
+`:JupyterToc` показывает структуру ноутбука списком: заголовки markdown и ячейки —
+первая содержательная строка кода вместе с состоянием прогона.
+
+```
+# Загрузка данных
+    df = load()                    ✓ 0.7 с · 1240 × 7
+  ## Проверки
+    sql: select count(*) from t    ⟲ ✓ 3.4 с · 04.09 12:16
+    plt.plot(x, y)                 не запускалась
+```
+
+Навигация и обзор состояния в одном месте: видно, где ты, что посчитано, что упало и что
+ни разу не запускалось. У ячейки с магикой показывается сам запрос, а не строка магики —
+иначе в ноутбуке из одних `%%sql` все записи выглядели бы одинаково.
+
+Список рисуется через `vim.ui.select`, то есть появляется, отрабатывает и исчезает,
+не занимая места на экране. Данные доступны и отдельно — `require("jupyter").toc()`,
+если захочешь свой picker.
 
 ## Что плагин пишет в документ
 

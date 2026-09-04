@@ -14,6 +14,7 @@ local kernel = require("jupyter.kernel")
 local output = require("jupyter.ui.output")
 local status_ui = require("jupyter.ui.status")
 local store = require("jupyter.store")
+local toc = require("jupyter.toc")
 local table_view = require("jupyter.ui.table")
 
 local M = {}
@@ -54,6 +55,7 @@ M.defaults = {
         insert_above = "<leader>ja",
         insert_below = "<leader>jb",
         toggle_output = "<leader>jo",
+        show_toc = "<leader>jT",
         open_table = "<leader>jt",
         interrupt = "<leader>ji",
         restart = "<leader>jR",
@@ -691,6 +693,41 @@ end
 
 function M.next_run()
     return M.browse_run(1)
+end
+
+---Оглавление ноутбука: заголовки вместе с ячейками и их состоянием.
+---@param buf? integer
+---@return jupyter.TocEntry[]
+function M.toc(buf)
+    buf = buf or vim.api.nvim_get_current_buf()
+    local s = sessions[buf]
+    return toc.collect(buf, {
+        run_of = s and function(cell)
+            local cell_id = exec.cell_id(buf, cell)
+            return s.exec:run_for(cell_id) or s.store:last_run(cell_id)
+        end or nil,
+    })
+end
+
+---Показать оглавление списком и прыгнуть к выбранному.
+---Списком, а не сайдбаром: он появляется, отрабатывает и исчезает, не занимая места.
+function M.show_toc()
+    local buf = vim.api.nvim_get_current_buf()
+    local entries = M.toc(buf)
+    if #entries == 0 then
+        vim.notify("jupyter.nvim: ни заголовков, ни ячеек не нашлось", vim.log.levels.WARN)
+        return
+    end
+
+    vim.ui.select(entries, {
+        prompt = "Оглавление",
+        format_item = toc.format,
+    }, function(choice)
+        if choice then
+            vim.api.nvim_win_set_cursor(0, { choice.row, 0 })
+            vim.cmd("normal! zz")
+        end
+    end)
 end
 
 ---Перечитать историю прогонов с диска: нужно, если ноутбук считали заново
