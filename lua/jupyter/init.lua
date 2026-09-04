@@ -336,6 +336,12 @@ end
 ---@param gained boolean
 function M.on_focus(gained)
     for _, session in pairs(sessions) do
+        -- в журнал: по нему видно, доходит ли до nvim focus-событие от tmux
+        table.insert(session.log, {
+            at = os.date("%H:%M:%S"),
+            level = "focus",
+            msg = gained and "фокус вернулся" or "фокус потерян, картинки сняты",
+        })
         if not gained then
             session.output.images:clear(session.output.buf)
         elseif session.output:is_open() and session.output.run and session.output.run.image then
