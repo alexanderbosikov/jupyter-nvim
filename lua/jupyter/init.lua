@@ -315,6 +315,19 @@ function M.is_stale(buf, run)
     return s.stale_cache.value[key]
 end
 
+---Снять все картинки этой сессии. Аварийный выход: image.nvim не удаляет картинки из
+---своего состояния сам, и если что-то всё же осталось на экране — это лечится отсюда.
+---@param buf? integer
+function M.clear_images(buf)
+    buf = buf or vim.api.nvim_get_current_buf()
+    local s = sessions[buf]
+    if not s then
+        return false
+    end
+    s.output.images:clear(s.output.buf)
+    return true
+end
+
 ---Перерисовать состояние: статусы под ячейками и строку drawer'а.
 ---Зовётся на правку буфера и на движение курсора — оба дешёвые благодаря кэшу выше.
 ---@param buf? integer

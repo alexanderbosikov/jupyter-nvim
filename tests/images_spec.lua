@@ -5,18 +5,36 @@
 local images = require("jupyter.images")
 local output = require("jupyter.ui.output")
 
+---Заглушка, повторяющая устройство image.nvim: свой реестр всех отрисованных картинок,
+---который сам плагин никогда не чистит, и выборка по буферу.
 local function fake_api()
-    local api = { made = {}, cleared = 0 }
+    local api = { made = {}, cleared = 0, state = { images = {} } }
     api.from_file = function(path, opts)
         local image = {
+            id = opts.id,
             path = path,
             opts = opts,
+            buffer = opts.buffer,
+            window = opts.window,
             rendered = 0,
-            render = function(self) self.rendered = self.rendered + 1 end,
+            global_state = api.state,
             clear = function() api.cleared = api.cleared + 1 end,
         }
+        image.render = function(self)
+            self.rendered = self.rendered + 1
+            api.state.images[self.id] = self -- как renderer.lua
+        end
         table.insert(api.made, image)
         return image
+    end
+    api.get_images = function(opts)
+        local out = {}
+        for _, image in pairs(api.state.images) do
+            if not opts or not opts.buffer or opts.buffer == image.buffer then
+                table.insert(out, image)
+            end
+        end
+        return out
     end
     return api
 end
@@ -56,15 +74,31 @@ describe("картинки", function()
         assert.equals(1, api.cleared, "прошлая картинка снимается перед новой")
     end)
 
-    it("clear снимает текущую", function()
+    it("новая картинка убирает прошлую из состояния image.nvim", function()
+        -- иначе WinScrolled перерисует старую поверх новой: image.nvim свой реестр не чистит
+        local api = fake_api()
+        local im = images.new({ api = api })
+
+        im:show(png(), 1, 2, 0)
+        im:show(png(), 1, 2, 0)
+        im:show(png(), 1, 2, 0)
+
+        assert.equals(1, vim.tbl_count(api.state.images), "в состоянии остаётся только текущая")
+        assert.equals(2, api.cleared)
+    end)
+
+    it("clear по буферу снимает всё, что там нарисовано", function()
         local api = fake_api()
         local im = images.new({ api = api })
         im:show(png(), 1, 2, 0)
+        -- картинка в чужом буфере остаётся нетронутой
+        local other = api.from_file(png(), { id = "чужая", buffer = 99, window = 1 })
+        other:render()
 
-        im:clear()
-        im:clear()
+        im:clear(2)
 
-        assert.equals(1, api.cleared)
+        assert.equals(1, vim.tbl_count(api.state.images), "чужой буфер не трогаем")
+        assert.is_truthy(api.state.images["чужая"])
         assert.is_nil(im.current)
     end)
 
@@ -114,6 +148,7 @@ describe("картинка в окне вывода", function()
 
         out:close()
         assert.equals(1, api.cleared)
+        assert.equals(0, vim.tbl_count(api.state.images), "после закрытия окна ничего не остаётся")
     end)
 
     it("смена прогона снимает прошлую картинку", function()
@@ -126,6 +161,7 @@ describe("картинка в окне вывода", function()
 
         assert.equals(1, api.cleared)
         assert.equals(1, #api.made, "у текстового прогона картинки нет")
+        assert.equals(0, vim.tbl_count(api.state.images), "таблица не должна рисоваться поверх картинки")
         out:close()
     end)
 end)

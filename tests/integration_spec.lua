@@ -1015,3 +1015,22 @@ describe("таблица из окна вывода", function()
         assert.equals("jupyter: open_table", lhs["t"])
     end)
 end)
+
+describe("аварийная чистка картинок", function()
+    it("снимает картинки сессии и сообщает, если сессии нет", function()
+        jupyter.setup({})
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", "x = 1" })
+        vim.bo[buf].filetype = "python"
+
+        local session = jupyter.session(buf)
+        local cleared = false
+        session.output.images.clear = function(_, _) cleared = true end
+
+        assert.is_true(jupyter.clear_images(buf))
+        assert.is_true(cleared)
+
+        jupyter.detach(buf)
+        assert.is_false(jupyter.clear_images(buf), "без сессии — честное false, а не тишина")
+    end)
+end)

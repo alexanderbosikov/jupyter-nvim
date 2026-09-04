@@ -115,8 +115,8 @@ function Output:open()
 end
 
 function Output:close()
-    if self.images then
-        self.images:clear()
+    if self.images and self.buf then
+        self.images:clear(self.buf)
     end
     if self:is_open() then
         vim.api.nvim_win_close(self.win, true)
@@ -197,7 +197,7 @@ function Output:render()
 
     local image_path = self.run and self.run.image
     if self.images then
-        self.images:clear() -- перерисовка не должна оставлять прошлую картинку
+        self.images:clear(buf) -- перерисовка не должна оставлять прошлую картинку
         if image_path then
             table.insert(lines, "") -- строка-якорь под картинку
         end

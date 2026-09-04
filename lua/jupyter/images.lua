@@ -40,13 +40,38 @@ function Images:_api()
     return ok and api or nil
 end
 
-function Images:clear()
-    if self.current then
+---Снять все картинки, нарисованные в этом буфере.
+---
+---Почему не одну текущую: image.nvim держит все когда-либо отрисованные картинки в своём
+---состоянии и **никогда не удаляет их оттуда**, а на WinScrolled/WinResized перерисовывает
+---всё, что знает про окно (image/init.lua:153). Поэтому снятой картинки мало — запись надо
+---убрать из состояния, иначе следующая прокрутка вернёт её на экран поверх новой.
+---@param buf? integer буфер, в котором чистим; без него — только текущая картинка
+function Images:clear(buf)
+    local api = self:_api()
+    -- намеренно без проверки валидности буфера: у выгруженного как раз и остаётся
+    -- мусор в состоянии image.nvim, и его надо снять
+    if api and buf then
+        local ok, list = pcall(api.get_images, { buffer = buf })
+        if ok then
+            for _, image in ipairs(list or {}) do
+                pcall(function()
+                    image:clear()
+                end)
+                pcall(function()
+                    -- своего API для этого нет, а без удаления картинка воскреснет
+                    if image.global_state and image.global_state.images then
+                        image.global_state.images[image.id] = nil
+                    end
+                end)
+            end
+        end
+    elseif self.current then
         pcall(function()
             self.current:clear()
         end)
-        self.current = nil
     end
+    self.current = nil
 end
 
 ---Показать картинку в окне.
@@ -56,7 +81,7 @@ end
 ---@param row integer строка-якорь, 0-based
 ---@return boolean показали
 function Images:show(path, win, buf, row)
-    self:clear()
+    self:clear(buf)
     if not self.enabled or not path then
         return false
     end
