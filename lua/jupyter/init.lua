@@ -83,6 +83,23 @@ function M.setup(opts)
         end,
     })
 
+    -- Своя реакция на потерю фокуса. У image.nvim она есть, но сравнивает текущий
+    -- tmux-window с тем, что был на момент запуска nvim, и при переключении окон
+    -- не срабатывает: картинка остаётся висеть поверх чужого окна. Нам сравнивать
+    -- нечего — потеряли фокус, сняли; вернули — нарисовали заново.
+    vim.api.nvim_create_autocmd({ "FocusLost", "VimSuspend" }, {
+        group = augroup,
+        callback = function()
+            M.on_focus(false)
+        end,
+    })
+    vim.api.nvim_create_autocmd({ "FocusGained", "VimResume" }, {
+        group = augroup,
+        callback = function()
+            M.on_focus(true)
+        end,
+    })
+
     if M.config.keys ~= false then
         vim.api.nvim_create_autocmd("FileType", {
             group = augroup,
@@ -313,6 +330,21 @@ function M.is_stale(buf, run)
             and vim.fn.sha256(cells.text(buf, cell)):sub(1, 8) ~= run.code_sha
     end
     return s.stale_cache.value[key]
+end
+
+---Реакция на фокус окна: без фокуса картинок на экране быть не должно.
+---@param gained boolean
+function M.on_focus(gained)
+    for _, session in pairs(sessions) do
+        if not gained then
+            session.output.images:clear(session.output.buf)
+        elseif session.output:is_open() and session.output.run and session.output.run.image then
+            local drawer = session.output
+            vim.schedule(function()
+                drawer:render()
+            end)
+        end
+    end
 end
 
 ---Снять все картинки этой сессии. Аварийный выход: image.nvim не удаляет картинки из

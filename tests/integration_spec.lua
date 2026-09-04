@@ -1034,3 +1034,59 @@ describe("аварийная чистка картинок", function()
         assert.is_false(jupyter.clear_images(buf), "без сессии — честное false, а не тишина")
     end)
 end)
+
+describe("картинки и фокус окна", function()
+    local buf, session
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+            session = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("потеря фокуса снимает картинку, возврат рисует заново", function()
+        local buffer = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "# %%", "x = 1" })
+        vim.bo[buffer].filetype = "python"
+        buf = buffer
+        session = jupyter.session(buf)
+
+        local cleared, rendered = 0, 0
+        session.output.images.clear = function() cleared = cleared + 1 end
+        session.output:open()
+        session.output.run = { cell_id = "a3f9", run_id = 1, status = "ok", lines = { "x" }, image = "/tmp/x.png" }
+        session.output.render = function() rendered = rendered + 1 end
+
+        jupyter.on_focus(false)
+        assert.equals(1, cleared, "без фокуса картинок быть не должно")
+
+        jupyter.on_focus(true)
+        vim.wait(200, function() return rendered > 0 end, 10)
+        assert.equals(1, rendered, "вернули фокус — рисуем заново")
+    end)
+
+    it("у прогона без картинки возврат фокуса ничего не рисует", function()
+        local buffer = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "# %%", "x = 1" })
+        vim.bo[buffer].filetype = "python"
+        buf = buffer
+        session = jupyter.session(buf)
+
+        local rendered = 0
+        session.output:open()
+        session.output.run = { cell_id = "a3f9", run_id = 1, status = "ok", lines = { "текст" } }
+        session.output.render = function() rendered = rendered + 1 end
+
+        jupyter.on_focus(true)
+        vim.wait(100)
+
+        assert.equals(0, rendered)
+    end)
+end)
