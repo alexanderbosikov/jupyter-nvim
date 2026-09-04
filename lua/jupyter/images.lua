@@ -115,4 +115,19 @@ function Images:show(path, win, buf, row)
     end)
 end
 
+---Стереть вообще все картинки в терминале, включая чужие и осиротевшие.
+---
+---Нужно, когда на экране остались картинки, о которых текущая сессия не знает: например
+---плагин перезагрузили, а нарисованное прошлым процессом осталось. `api.clear()` без id
+---уходит в ветку «delete all placements» kitty-бэкенда, то есть чистит сам терминал.
+---@return boolean
+function Images:clear_terminal()
+    local api = self:_api()
+    if not api then
+        return false
+    end
+    self.current = nil
+    return pcall(api.clear) == true
+end
+
 return M

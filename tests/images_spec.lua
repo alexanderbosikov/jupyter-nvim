@@ -165,3 +165,27 @@ describe("картинка в окне вывода", function()
         out:close()
     end)
 end)
+
+describe("чистка терминала", function()
+    it("зовёт clear без id — ветку «удалить всё» бэкенда", function()
+        local called = { n = 0, args = nil }
+        local api = {
+            from_file = function() end,
+            get_images = function() return {} end,
+            clear = function(id)
+                called.n = called.n + 1
+                called.args = id
+            end,
+        }
+        local im = images.new({ api = api })
+
+        assert.is_true(im:clear_terminal())
+
+        assert.equals(1, called.n)
+        assert.is_nil(called.args, "id не передаётся: иначе стирается одна картинка, а не все")
+    end)
+
+    it("без image.nvim честно отвечает «нет»", function()
+        assert.is_false(images.new({}):clear_terminal())
+    end)
+end)

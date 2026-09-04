@@ -19,11 +19,19 @@ function M.setup(api)
     cmd("JupyterStop", function() api.detach(vim.api.nvim_get_current_buf()) end, { desc = "погасить ядро" })
     cmd("JupyterTable", function() api.open_table() end, { desc = "постраничный просмотр таблицы" })
     cmd("JupyterLog", function() api.show_log() end, { desc = "журнал сайдкара и состояний ядра" })
-    cmd("JupyterClearImages", function()
-        if not api.clear_images() then
-            vim.notify("jupyter.nvim: сессии для этого буфера нет", vim.log.levels.WARN)
+    cmd("JupyterClearImages", function(opts)
+        if api.clear_images(nil, opts.bang) then
+            if opts.bang then
+                vim.notify("jupyter.nvim: терминал очищен от всех картинок")
+            end
+            return
         end
-    end, { desc = "снять все картинки" })
+        vim.notify(
+            opts.bang and "jupyter.nvim: image.nvim недоступен"
+                or "jupyter.nvim: сессии для этого буфера нет, попробуй :JupyterClearImages!",
+            vim.log.levels.WARN
+        )
+    end, { bang = true, desc = "снять картинки; с ! — стереть все в терминале" })
     cmd("JupyterRepaint", function() api.repaint() end, { desc = "перерисовать статусы ячеек" })
     cmd("JupyterRunPrev", function() api.prev_run() end, { desc = "предыдущий прогон этой ячейки" })
     cmd("JupyterRunNext", function() api.next_run() end, { desc = "следующий прогон этой ячейки" })
