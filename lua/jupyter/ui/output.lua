@@ -47,6 +47,8 @@ function M.new(opts)
         preview_rows = opts.preview_rows or 30,
         -- чем открыть таблицу: drawer сам про вкладку с parquet знать не должен
         on_open_table = opts.on_open_table,
+        -- объект с show/clear: картинки рисует image.nvim, мы отдаём путь и якорь
+        images = opts.images,
         position = opts.position or "bottom",
         size = opts.size or 15,
         keys = opts.keys or M.DEFAULT_KEYS,
@@ -113,6 +115,9 @@ function Output:open()
 end
 
 function Output:close()
+    if self.images then
+        self.images:clear()
+    end
     if self:is_open() then
         vim.api.nvim_win_close(self.win, true)
     end
@@ -189,14 +194,27 @@ function Output:render()
         table.insert(lines, "")
         vim.list_extend(lines, self.run._preview)
     end
+
+    local image_path = self.run and self.run.image
+    if self.images then
+        self.images:clear() -- перерисовка не должна оставлять прошлую картинку
+        if image_path then
+            table.insert(lines, "") -- строка-якорь под картинку
+        end
+    end
+
     if #lines == 0 then
         lines = { "" }
     end
     common.set_lines(buf, lines)
     self:_render_winbar()
 
-    -- к концу прокручиваем только текст: у таблицы интереснее начало
-    if self.follow and self:is_open() and not (self.run and self.run._preview) then
+    if self.images and image_path and self:is_open() then
+        self.images:show(image_path, self.win, buf, #lines - 1)
+    end
+
+    -- к концу прокручиваем только текст: у таблицы и картинки интереснее начало
+    if self.follow and self:is_open() and not (self.run and (self.run._preview or self.run.image)) then
         local count = vim.api.nvim_buf_line_count(buf)
         pcall(vim.api.nvim_win_set_cursor, self.win, { count, 0 })
     end

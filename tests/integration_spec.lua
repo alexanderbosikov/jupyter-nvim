@@ -499,7 +499,9 @@ describe("таблица", function()
     local buf, session
 
     before_each(function()
-        jupyter.setup({})
+        -- размер страницы фиксируем: проверки ниже про клампинг и края,
+        -- а не про текущее значение по умолчанию
+        jupyter.setup({ table = { page_size = 50 } })
     end)
 
     after_each(function()

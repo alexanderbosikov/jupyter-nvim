@@ -9,6 +9,7 @@ local cells = require("jupyter.cells")
 local common = require("jupyter.ui.common")
 local exec = require("jupyter.exec")
 local highlight = require("jupyter.highlight")
+local images = require("jupyter.images")
 local kernel = require("jupyter.kernel")
 local output = require("jupyter.ui.output")
 local status_ui = require("jupyter.ui.status")
@@ -26,10 +27,12 @@ M.defaults = {
     out_dir = ".jupyter-out",
     -- false — не определять группы подсветки, если хочешь задать их сам
     highlight = true,
+    -- картинки рисует image.nvim; false — только путь строкой в выводе
+    images = true,
     -- size меньше единицы — доля экрана: 0.5 это половина ширины при position = "right".
     -- preview_rows = 0 — не показывать таблицу в окне вывода, только строку-сводку
     output = { position = "bottom", size = 15, follow_cursor = true, preview_rows = 30 },
-    table = { page_size = 50, max_col = 40 },
+    table = { page_size = 100, max_col = 40 },
     -- статус строкой под ячейкой: enabled = false выключает, position = "eol" ставит в конец строки
     status = { enabled = true, position = "below" },
     -- Клавиши: false — не ставить вовсе, дальше пользователь делает это сам.
@@ -173,6 +176,7 @@ function M.session(buf)
         on_open_table = function()
             M.open_table()
         end,
+        images = images.new({ enabled = M.config.images ~= false }),
     }))
     ex = exec.new({
         kernel = k,

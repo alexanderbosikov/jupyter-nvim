@@ -104,7 +104,7 @@ View.__index = View
 function M.new(opts)
     return setmetatable({
         sidecar = opts.sidecar,
-        page_size = opts.page_size or 50,
+        page_size = opts.page_size or 100,
         max_col = opts.max_col or 40,
         keys = opts.keys or M.DEFAULT_KEYS,
         buf = nil,
