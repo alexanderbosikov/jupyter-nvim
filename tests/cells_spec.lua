@@ -263,3 +263,36 @@ describe("магика языка в фенсе", function()
         assert.equals("%%sql df_name=orders\nselect 1", cells.text(buf, cells.list(buf)[1]))
     end)
 end)
+
+-- Живой сбой: .ipynb открылся, jupytext развернул его в markdown, но filetype к моменту
+-- запуска был не "markdown". Percent-детектор не видел ни одного "# %%" и отдавал ядру
+-- весь документ одной ячейкой; ядро падало SyntaxError на тире из markdown-ячейки.
+describe("представление вопреки filetype", function()
+    it("markdown-текст в python-буфере — это всё равно фенсы", function()
+        local buf = make(FENCE, "python")
+
+        assert.equals("fence", cells.representation(buf))
+        assert.equals(3, #cells.list(buf)) -- а не одна ячейка на весь буфер
+    end)
+
+    it("проза markdown-ячеек не уезжает ядру", function()
+        local buf = make(FENCE, "")
+
+        for _, cell in ipairs(cells.list(buf)) do
+            assert.is_nil(cells.text(buf, cell):find("Текст между ячейками", 1, true))
+        end
+    end)
+
+    it("percent-маркер весомее фенса: в нём фенс — это строка кода", function()
+        local buf = make({ "# %%", 'print("```python")' }, "")
+
+        assert.equals("percent", cells.representation(buf))
+    end)
+
+    it("python без маркеров и без фенсов остаётся одной ячейкой", function()
+        local buf = make({ "import polars as pl", "x = 1" }, "python")
+
+        assert.equals("percent", cells.representation(buf))
+        assert.equals(1, #cells.list(buf))
+    end)
+end)

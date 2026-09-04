@@ -10,7 +10,8 @@
 -- возвращена в тело, поэтому здесь про неё знать не нужно.
 --
 -- Детектор представления вынесен в M.representation: по §1 ARCHITECTURE.md переход на
--- treesitter — это замена одного модуля, а не правки по всему плагину.
+-- treesitter — это замена одного модуля, а не правки по всему плагину. Смотрит он не только
+-- на filetype, но и в текст — см. looks_like_markdown.
 
 local M = {}
 
@@ -41,13 +42,37 @@ end
 ---@field span_end integer последняя строка ячейки вместе с закрывающим фенсом
 ---@field marker_row integer|nil строка маркера или открывающего фенса
 
----@return "fence"|"percent"
-function M.representation(buf)
-    return vim.bo[buf or 0].filetype == "markdown" and "fence" or "percent"
-end
-
 local function lines(buf)
     return vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+end
+
+---Похож ли буфер на markdown-представление по самому тексту.
+---
+---Одного filetype мало: он бывает не тем. Если .ipynb открылся мимо jupytext.nvim или ft
+---сбросили уже после чтения, markdown-документ остаётся python-буфером. Percent-детектор
+---не нашёл бы в нём ни одного "# %%" и по своему же правилу отдал бы ядру весь файл одной
+---ячейкой — вместе с прозой markdown-ячеек, что кончается SyntaxError на первом тире.
+---Текст надёжнее: percent-маркер решает сразу, иначе представление выдаёт фенс.
+---@param buf integer
+---@return boolean
+local function looks_like_markdown(buf)
+    local fence = false
+    for _, line in ipairs(lines(buf)) do
+        if line:match(PERCENT_MARKER) then
+            return false
+        end
+        fence = fence or line:match(FENCE_OPEN) ~= nil
+    end
+    return fence
+end
+
+---@return "fence"|"percent"
+function M.representation(buf)
+    buf = buf or 0
+    if vim.bo[buf].filetype == "markdown" then
+        return "fence"
+    end
+    return looks_like_markdown(buf) and "fence" or "percent"
 end
 
 local function add(cells, cell)
