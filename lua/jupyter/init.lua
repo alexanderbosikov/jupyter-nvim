@@ -242,12 +242,13 @@ function M.session(buf)
         table = tbl,
         status = status_ui.new(M.config.status),
         store = store.new({ notebook = name ~= "" and name or nil, out_dir = M.config.out_dir }),
-        stale_cache = { tick = -1, value = {} },
+        stale_cache = { value = {}, dirty = nil }, -- dirty: диапазон строк, правленных после расчёта
         browse = {}, -- cell_id -> номер просматриваемого прогона в истории
         started = false,
         log = {},
     }
     sessions[buf] = found
+    M.watch_edits(buf) -- диапазоны правок для кэша свежести
 
     -- Диагностика. Без этого любая поломка сайдкара была бы невидимой: события log
     -- приходят, но подписчика нет, и они просто теряются.
@@ -321,28 +322,66 @@ function M.session(buf)
     return found
 end
 
----Код ячейки изменился с момента прогона? Ответ кэшируется по changedtick: функция
----зовётся на каждое движение курсора и на каждую правку.
+---Код ячейки изменился с момента прогона? Считается через sha, как у сайдкара.
+---
+---Зовётся на каждую правку для каждой ячейки с историей, поэтому ответ кэшируется.
+---Сбрасывать кэш целиком по changedtick было дорого: печатают всегда в одной ячейке, а
+---пересчитывались все — на 27 ячейках это 2.4 мс на нажатие, и растёт линейно. Теперь
+---`on_lines` (см. watch_edits) копит диапазон правленых строк, и пересчитываются только
+---ячейки, которые в него попали.
 ---@param buf integer
 ---@param run jupyter.Run|nil
+---@param cell? jupyter.Cell ячейка прогона, если она уже найдена вызывающим
 ---@return boolean
-function M.is_stale(buf, run)
+function M.is_stale(buf, run, cell)
     local s = sessions[buf]
     if not s or not run or not run.code_sha then
         return false
     end
 
-    local tick = vim.api.nvim_buf_get_changedtick(buf)
-    if s.stale_cache.tick ~= tick then
-        s.stale_cache = { tick = tick, value = {} }
-    end
     local key = run.cell_id .. ":" .. run.code_sha
-    if s.stale_cache.value[key] == nil then
-        local cell = cellid.find(buf, run.cell_id)
-        s.stale_cache.value[key] = cell ~= nil
-            and vim.fn.sha256(cells.text(buf, cell)):sub(1, 8) ~= run.code_sha
+    local cached = s.stale_cache.value[key]
+    local dirty = s.stale_cache.dirty
+    cell = cell or cellid.find(buf, run.cell_id)
+    if not cell then
+        return cached or false -- ячейку удалили: последний известный ответ лучше выдумки
     end
-    return s.stale_cache.value[key]
+    -- правка не пересеклась с ячейкой — старый ответ всё ещё верен
+    local touched = dirty ~= nil and not (cell.span_end < dirty.from or cell.span_start > dirty.to)
+    if cached == nil or touched then
+        cached = vim.fn.sha256(cells.text(buf, cell)):sub(1, 8) ~= run.code_sha
+        s.stale_cache.value[key] = cached
+    end
+    return cached
+end
+
+---Следить за правками буфера, чтобы знать, какие ячейки пересчитывать.
+---
+---`nvim_buf_attach`, а не автокоманда: TextChanged говорит только «что-то изменилось»,
+---а on_lines приносит диапазон строк. Копим объединение до следующей перерисовки.
+---@param buf integer
+function M.watch_edits(buf)
+    vim.api.nvim_buf_attach(buf, false, {
+        on_lines = function(_, _, _, first, last_old, last_new)
+            local s = sessions[buf]
+            if not s then
+                return true -- сессии нет: отписываемся
+            end
+            local from, to = first + 1, math.max(last_old, last_new)
+            local dirty = s.stale_cache.dirty
+            if dirty then
+                dirty.from, dirty.to = math.min(dirty.from, from), math.max(dirty.to, to)
+            else
+                s.stale_cache.dirty = { from = from, to = to }
+            end
+        end,
+        on_reload = function()
+            local s = sessions[buf]
+            if s then
+                s.stale_cache = { value = {}, dirty = nil }
+            end
+        end,
+    })
 end
 
 ---Открыть окно вывода при открытии ноутбука — если есть что показать.
@@ -434,11 +473,13 @@ function M.repaint(buf)
         local cell_id = exec.cell_id(buf, cell)
         local run = s.exec:run_for(cell_id) or s.store:last_run(cell_id)
         if run then
-            local text, group = status_ui.text_of(run, M.is_stale(buf, run))
+            local text, group = status_ui.text_of(run, M.is_stale(buf, run, cell))
             local _, last = cells.body(buf, cell)
             table.insert(entries, { row = last, text = text, group = group })
         end
     end
+    -- все ячейки пересчитаны: накопленный диапазон правок больше не нужен
+    s.stale_cache.dirty = nil
 
     local drawn = s.status:render(buf, entries)
     if s.output:is_open() then
