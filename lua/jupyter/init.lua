@@ -61,6 +61,12 @@ M.defaults = {
         interrupt = "<leader>ji",
         restart = "<leader>jR",
     },
+    -- Текстовые объекты ячейки, visual и operator-pending: ic — тело, ac — вместе с
+    -- маркером и закрывающим фенсом. Отдельно от keys, потому что там нормальный режим.
+    textobjects = {
+        inner = "ic",
+        around = "ac",
+    },
 }
 
 M.config = vim.deepcopy(M.defaults)
@@ -142,6 +148,38 @@ function M.set_keys(buf)
             end
         end
     end
+
+    for kind, key in pairs(M.config.textobjects or {}) do
+        if key then
+            common.map({ "x", "o" }, key, function()
+                M.select_cell(kind == "inner")
+            end, {
+                buffer = buf,
+                silent = true,
+                desc = "jupyter: ячейка (" .. kind .. ")",
+            })
+        end
+    end
+end
+
+---Выделить ячейку под курсором: тело или ячейку целиком.
+---
+---Выделение линейное: ячейка — это всегда строки целиком, посимвольное здесь лишено
+---смысла. Годится и для visual, и для operator-pending — оператор применяется к тому,
+---что выделено, поэтому отдельной ветки под `d`/`y`/`c` не нужно.
+---@param inner boolean тело без маркера и закрывающего фенса
+---@return boolean выделили ли что-нибудь
+function M.select_cell(inner)
+    local buf = vim.api.nvim_get_current_buf()
+    local row = vim.api.nvim_win_get_cursor(0)[1]
+    local cell = cells.at(buf, row)
+    if not cell then
+        return false -- курсор в прозе: молча ничего не делаем, как и штатные объекты
+    end
+    local from = inner and cell.start_row or cell.span_start
+    local to = inner and cell.end_row or cell.span_end
+    vim.cmd(("normal! %dGV%dG"):format(from, to))
+    return true
 end
 
 -- --- сессии ---
