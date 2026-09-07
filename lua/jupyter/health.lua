@@ -130,6 +130,18 @@ function M.collect(config)
         add("warn", "image.nvim не найден: картинки будут показаны путём к файлу")
     end
 
+    -- 6. осиротевшие ядра. Сюда попадают только те, чей сайдкар умер не своей смертью:
+    -- при обычном выходе ядро гасится, а след убирается (см. jupyter.orphans).
+    local orphans = require("jupyter.orphans")
+    local dir = vim.fn.expand("%:p:h")
+    local found = dir ~= "" and orphans.scan(dir, config.out_dir) or {}
+    if #found == 0 then
+        add("ok", "осиротевших ядер нет")
+    end
+    for _, orphan in ipairs(found) do
+        add(orphan.stale and "warn" or "error", orphans.describe(orphan) .. " — снять: :JupyterOrphans!")
+    end
+
     return report
 end
 

@@ -294,15 +294,32 @@ describe("гашение", function()
         jupyter.setup({})
     end)
 
-    it("detach дожидается выхода сайдкара, не оставляя процесс", function()
+    it("detach возвращается сразу, а сайдкар уходит сам", function()
+        local _, b = notebook({ "# %%", "x = 1" })
+        jupyter.ensure_started()
+        local session = jupyter.session(b)
+        wait(function() return session.kernel:state() == "ready" end, 60000, "ready")
+        local sidecar = session.kernel.sidecar
+
+        local started = vim.uv.now()
+        jupyter.detach(b)
+        local spent = vim.uv.now() - started
+
+        -- ждать вежливого гашения ядра — это те самые 1.9 с на выходе из редактора
+        assert.is_true(spent < 200, ("гашение заняло %d мс, а не должно ждать вовсе"):format(spent))
+        -- гарантию даёт сайдкар: stdin закрыт, дальше он гасит ядро и выходит без нас
+        wait(function() return not sidecar:is_running() end, 10000, "выход сайдкара")
+    end)
+
+    it("с явным таймаутом detach всё-таки ждёт: это нужно тестам", function()
         local _, b = notebook({ "# %%", "x = 1" })
         jupyter.ensure_started()
         local session = jupyter.session(b)
         wait(function() return session.kernel:state() == "ready" end, 60000, "ready")
 
-        jupyter.detach(b)
+        jupyter.detach(b, 10000)
 
-        assert.is_false(session.kernel.sidecar:is_running(), "сайдкар должен был выйти")
+        assert.is_false(session.kernel.sidecar:is_running(), "с таймаутом ждём до конца")
     end)
 
     it("мёртвое ядро не задерживает гашение", function()
@@ -313,11 +330,27 @@ describe("гашение", function()
         wait(function() return session.kernel:state() == "dead" end, 60000, "смерть ядра")
 
         local started = vim.uv.now()
-        jupyter.detach(b)
+        jupyter.detach(b, 10000) -- даже с таймаутом: гасить нечего, ждать нечего
         local spent = vim.uv.now() - started
 
         assert.is_false(session.kernel.sidecar:is_running())
         assert.is_true(spent < 3000, ("гашение заняло %d мс"):format(spent))
+    end)
+
+    it("след ядра убирается при гашении", function()
+        local orphans = require("jupyter.orphans")
+        local path, b = notebook({ "# %%", "x = 1" })
+        jupyter.ensure_started()
+        local session = jupyter.session(b)
+        wait(function() return session.kernel:state() == "ready" end, 60000, "ready")
+
+        local record = orphans.record_for(path)
+        wait(function() return vim.fn.filereadable(record) == 1 end, 5000, "запись следа")
+        assert.is_nil(orphans.check(record), "живая сессия сиротой быть не может")
+
+        jupyter.detach(b, 10000)
+
+        assert.equals(0, vim.fn.filereadable(record), "след должен быть убран вместе с ядром")
     end)
 end)
 

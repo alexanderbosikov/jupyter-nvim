@@ -117,6 +117,7 @@ function M.setup(opts)
             if M.config.keys ~= false then
                 M.set_keys(ev.buf)
             end
+            M.warn_orphan(ev.buf)
             if M.config.output.open_on_attach then
                 M.open_for(ev.buf)
             end
@@ -556,6 +557,15 @@ end
 ---Ждём намеренно: иначе при выходе из nvim остаются висеть python-процесс и ядро.
 ---@param buf integer
 ---@param timeout_ms? integer
+---Отцепить сессию от буфера и погасить её ядро.
+---
+---По умолчанию завершения не ждём. Ждали 3 секунды, и это была самая заметная плата за
+---плагин: выход из nvim с живым ядром стоил 1.9 с, закрытие буфера — столько же. Ждать
+---незачем: сайдкару закрыт stdin, он гасит ядро с дедлайном в секунду и выходит сам, а
+---если не доживёт до этого — останется `runtime.json`, по которому осиротевшее ядро
+---находится (см. jupyter.orphans и `:checkhealth jupyter`).
+---@param buf integer
+---@param timeout_ms? integer ждать завершения сайдкара; нужно тестам, где важен порядок
 function M.detach(buf, timeout_ms)
     local s = sessions[buf]
     if not s then
@@ -566,7 +576,9 @@ function M.detach(buf, timeout_ms)
     s.output:close()
     s.table:close()
     s.kernel:stop()
-    s.kernel.sidecar:wait(timeout_ms or 3000)
+    if timeout_ms and timeout_ms > 0 then
+        s.kernel.sidecar:wait(timeout_ms)
+    end
 end
 
 ---Погасить все сессии. Вешается на VimLeavePre.
@@ -578,7 +590,7 @@ end
 ---что `BufUnload` успевал снять сессию раньше и копировать было уже нечего.
 function M.detach_all()
     for _, buf in ipairs(vim.tbl_keys(sessions)) do
-        M.detach(buf, 1500)
+        M.detach(buf)
     end
 end
 
@@ -654,6 +666,59 @@ function M.open_table()
         return
     end
     s.table:open(run.table.path, ("ячейка %s · прогон %d"):format(run.cell_id, run.run_id))
+end
+
+---Ядра без хозяина в каталоге текущего файла: показать или снять.
+---@param kill? boolean
+---@return jupyter.Orphan[]
+function M.orphans(kill)
+    local orphans = require("jupyter.orphans")
+    local dir = vim.fn.expand("%:p:h")
+    local found = dir ~= "" and orphans.scan(dir, M.config.out_dir) or {}
+    if #found == 0 then
+        vim.notify("jupyter.nvim: ядер без хозяина нет")
+        return found
+    end
+    for _, orphan in ipairs(found) do
+        if kill then
+            local ok = orphans.kill(orphan)
+            vim.notify(
+                ("jupyter.nvim: %s — %s"):format(orphans.describe(orphan), ok and "снято" or "не удалось"),
+                ok and vim.log.levels.INFO or vim.log.levels.ERROR
+            )
+        else
+            vim.notify("jupyter.nvim: " .. orphans.describe(orphan), vim.log.levels.WARN)
+        end
+    end
+    return found
+end
+
+---Проверить, не осталось ли у этого ноутбука ядра от прошлой жизни.
+---
+---Зовётся при открытии: чтение одного файла, которого обычно нет. Если он есть, а
+---сайдкара нет — один вызов ps. Молчим про следы без процессов: это наша же
+---бухгалтерия, её просто убираем.
+---@param buf integer
+---@return jupyter.Orphan|nil
+function M.warn_orphan(buf)
+    local name = vim.api.nvim_buf_get_name(buf)
+    if name == "" then
+        return nil
+    end
+    local orphans = require("jupyter.orphans")
+    local orphan = orphans.check(orphans.record_for(name, M.config.out_dir))
+    if not orphan then
+        return nil
+    end
+    if orphan.stale then
+        pcall(vim.fn.delete, orphan.path)
+        return nil
+    end
+    vim.notify(
+        ("jupyter.nvim: %s. Снять: :JupyterOrphans!"):format(orphans.describe(orphan)),
+        vim.log.levels.WARN
+    )
+    return orphan
 end
 
 function M.toggle_output()
