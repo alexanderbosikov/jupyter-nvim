@@ -52,7 +52,7 @@ local function read_record(path)
     if not ok or type(lines) ~= "table" or #lines == 0 then
         return nil
     end
-    local decoded, record = pcall(vim.json.decode, table.concat(lines, "\n"), { luanil = { object = true } })
+    local decoded, record = pcall(vim.json.decode, table.concat(lines, "\n"), { luanil = { object = true, array = true } })
     if not decoded or type(record) ~= "table" then
         return nil
     end

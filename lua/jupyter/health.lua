@@ -28,6 +28,24 @@ local function python_of(config)
 end
 
 ---@return table[] список { level, msg }
+---Разобрать JSON от внешней команды.
+---
+---`luanil` тут не украшение: без него JSON `null` становится `vim.NIL`, а она в Lua
+---истинна. Проверка «версия модуля есть» проходила, и в отчёт уезжала зелёная строка
+---«polars vim.NIL» вместо предупреждения, что polars не установлен.
+---@param text string|nil
+---@return table|nil
+local function decode(text)
+    if type(text) ~= "string" or text == "" then
+        return nil
+    end
+    local ok, value = pcall(vim.json.decode, text, { luanil = { object = true, array = true } })
+    if not ok or type(value) ~= "table" then
+        return nil
+    end
+    return value
+end
+
 function M.collect(config)
     config = config or require("jupyter").config
     local report = {}
@@ -56,11 +74,7 @@ function M.collect(config)
         "print(json.dumps(out))",
     }, "\n")
     local result = run({ python, "-c", probe })
-    local versions = {}
-    if result and result.code == 0 then
-        local ok, parsed = pcall(vim.json.decode, result.stdout or "")
-        versions = ok and parsed or {}
-    end
+    local versions = (result and result.code == 0 and decode(result.stdout)) or {}
     if not versions.python then
         add("error", "не удалось опросить python: " .. ((result and result.stderr) or "нет ответа"))
         return report
@@ -86,8 +100,8 @@ function M.collect(config)
     if not reply or reply.code ~= 0 or not reply.stdout or reply.stdout == "" then
         add("error", "сайдкар не отвечает: " .. ((reply and reply.stderr) or "нет вывода"))
     else
-        local ok, message = pcall(vim.json.decode, (reply.stdout:gsub("\n.*", "")))
-        if not ok or not message.data then
+        local message = decode((reply.stdout:gsub("\n.*", "")))
+        if not message or not message.data then
             add("error", "сайдкар ответил непонятным: " .. reply.stdout:sub(1, 120))
         elseif message.data.v ~= sidecar.PROTOCOL_V then
             add("error", ("версия протокола: сайдкар %s, плагин %d"):format(
@@ -109,8 +123,8 @@ function M.collect(config)
             .. "print(json.dumps(sorted(KernelSpecManager().find_kernel_specs())))",
     })
     if specs and specs.code == 0 then
-        local ok, names = pcall(vim.json.decode, specs.stdout or "")
-        if ok and type(names) == "table" then
+        local names = decode(specs.stdout)
+        if names then
             if vim.tbl_contains(names, wanted) then
                 add("ok", ("kernelspec %s найден"):format(wanted))
             else

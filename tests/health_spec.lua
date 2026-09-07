@@ -30,6 +30,25 @@ describe("здоровье", function()
         assert.is_truthy(find(report, "kernelspec python3 найден"))
     end)
 
+    it("модуль без версии — предупреждение, а не зелёная строка с userdata", function()
+        -- Зонд пишет null для модуля, которого нет. В JSON это null, в Lua без luanil —
+        -- vim.NIL, а она истинна, поэтому проверка «версия есть» проходила и в отчёт
+        -- уезжало «polars vim.NIL» со статусом ok.
+        local fake = vim.fn.tempname()
+        vim.fn.writefile({
+            "#!/bin/sh",
+            [[echo '{"python":"3.14.0","jupyter_client":"8.9.1","polars":null,"ipykernel":"6.30.1"}']],
+        }, fake)
+        vim.fn.setfperm(fake, "rwxr-xr-x")
+
+        local report = health.collect({ python = fake, kernel_name = "python3" })
+
+        assert.is_nil(find(report, "vim%.NIL"), "userdata в отчёте: " .. vim.inspect(report))
+        local entry = find(report, "polars не установлен")
+        assert.is_truthy(entry, "ожидали предупреждение про polars: " .. vim.inspect(report))
+        assert.equals("warn", entry.level)
+    end)
+
     it("несуществующий python — ошибка и ранний выход", function()
         local report = health.collect({ python = "/нет/такого/python" })
 
