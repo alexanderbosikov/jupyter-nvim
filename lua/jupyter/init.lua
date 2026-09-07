@@ -529,8 +529,14 @@ function M.detach(buf, timeout_ms)
 end
 
 ---Погасить все сессии. Вешается на VimLeavePre.
+---
+---Снимок именно ключей: `detach` удаляет запись из `sessions`, а править таблицу под
+---`pairs` нельзя. Копировать саму таблицу через `deepcopy` тем более нельзя — в сессии
+---лежат живые объекты (ядро, сайдкар с uv-хендлами, окна), и обход их графа не
+---заканчивается за разумное время. При обычном выходе это не стреляло только потому,
+---что `BufUnload` успевал снять сессию раньше и копировать было уже нечего.
 function M.detach_all()
-    for buf in pairs(vim.deepcopy(sessions)) do
+    for _, buf in ipairs(vim.tbl_keys(sessions)) do
         M.detach(buf, 1500)
     end
 end
