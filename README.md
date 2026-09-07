@@ -60,7 +60,8 @@
 Команды: `:JupyterRun`, `:JupyterRunAll`, `:JupyterRunBelow`, `:JupyterOutput`,
 `:JupyterTable`, `:JupyterRunPrev`, `:JupyterRunNext`, `:JupyterInterrupt`,
 `:JupyterRestart`, `:JupyterHistory`, `:JupyterToc`, `:JupyterRepaint`,
-`:JupyterClearImages`, `:JupyterLog`, `:JupyterStatus`, `:JupyterStop`.
+`:JupyterClearImages`, `:JupyterLog`, `:JupyterStatus`, `:JupyterStop`,
+`:JupyterOrphans` (с `!` — снять).
 
 В окне вывода: `t` — таблица постранично, `y` — скопировать вывод, `c` — очистить,
 `q` — закрыть.
@@ -180,6 +181,23 @@ opts = {
     status = { enabled = true, position = "below" },
 }
 ```
+
+## Ядра и выход из редактора
+
+Выход из nvim ядро не задерживает. Плагин закрывает сайдкару stdin и уходит, а тот гасит
+ядро сам — вежливым `shutdown_request` с дедлайном в секунду, после чего `SIGTERM` и
+`SIGKILL`. Ждать его завершения стоило бы 1.9 с на каждый выход, и незачем.
+
+Пока ядро живо, рядом с выводами лежит `runtime.json` с pid'ами сайдкара, ядра и
+редактора. Он нужен на случай, когда сайдкар умер не своей смертью — `SIGKILL`, падение
+интерпретатора, убитый на полуслове терминал — и погасить ядро не успел. Тогда живой
+файл при мёртвом сайдкаре означает ядро без хозяина. Плагин говорит об этом при открытии
+ноутбука; посмотреть все — `:JupyterOrphans`, снять — `:JupyterOrphans!`; то же видно в
+`:checkhealth jupyter`. Никаких демонов и слежки за процессами для этого не держится:
+проверка — чтение одного файла, которого обычно нет.
+
+Ядро, отвечающее чужому pid, не трогается: опознание идёт по пути connection-файла в
+командной строке процесса, а не по одному номеру.
 
 ## Известные проблемы
 
