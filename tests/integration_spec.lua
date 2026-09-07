@@ -848,6 +848,57 @@ describe("статус под ячейками", function()
         assert.is_true(session.output:is_stale())
     end)
 
+    it("правка под открытым меню автодополнения тоже помечается", function()
+        local _, b = notebook({ "# %%", 'print("исходный")' })
+        buf = b
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok"
+        end, 60000, "прогон")
+
+        local function status_text()
+            local marks = vim.api.nvim_buf_get_extmarks(buf, status_ui.NS, 0, -1, { details = true })
+            local chunks = marks[1] and (marks[1][4].virt_lines and marks[1][4].virt_lines[1] or marks[1][4].virt_text)
+            return chunks and chunks[1][1] or ""
+        end
+        assert.is_nil(status_text():find("⚠"))
+
+        -- пока висит меню, nvim шлёт TextChangedP, а не TextChangedI
+        vim.api.nvim_buf_set_lines(buf, 1, 2, false, { 'print("правка под меню")' })
+        vim.api.nvim_exec_autocmds("TextChangedP", { buffer = buf })
+
+        assert.is_truthy(status_text():find("⚠"), "статус: " .. status_text())
+    end)
+
+    it("движение курсора после правки чинит статус, даже если событие потерялось", function()
+        local _, b = notebook({ "# %%", 'print("исходный")' })
+        buf = b
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+        jupyter.run_cell()
+        session = jupyter.session(buf)
+        wait(function()
+            local r = session.exec:run_for(cid(buf, 2))
+            return r and r.status == "ok"
+        end, 60000, "прогон")
+
+        local function status_text()
+            local marks = vim.api.nvim_buf_get_extmarks(buf, status_ui.NS, 0, -1, { details = true })
+            local chunks = marks[1] and (marks[1][4].virt_lines and marks[1][4].virt_lines[1] or marks[1][4].virt_text)
+            return chunks and chunks[1][1] or ""
+        end
+
+        -- правим, не отправляя вообще никакого события про текст
+        vim.api.nvim_buf_set_lines(buf, 1, 2, false, { 'print("тихая правка")' })
+        assert.is_nil(status_text():find("⚠"), "пока перерисовки не было, статус старый")
+
+        vim.api.nvim_exec_autocmds("CursorMoved", { buffer = buf })
+
+        assert.is_truthy(status_text():find("⚠"), "статус: " .. status_text())
+    end)
+
     it("история рисует статус сразу при открытии, без ядра", function()
         local path, b = notebook({ "# %%", 'print("вчерашний")' })
         buf, session = b, nil

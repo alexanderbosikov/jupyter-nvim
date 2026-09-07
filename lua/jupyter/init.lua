@@ -295,7 +295,10 @@ function M.session(buf)
         end,
     })
 
-    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "InsertLeave" }, {
+    -- TextChangedP отдельно от TextChangedI: пока открыто меню автодополнения, nvim шлёт
+    -- именно его. В ячейках работает LSP через otter, меню там обычное дело, и без этого
+    -- события пометка «код правили после прогона» ждала, пока сработает что-то ещё.
+    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "TextChangedP", "InsertLeave" }, {
         group = augroup or vim.api.nvim_create_augroup("jupyter.nvim", { clear = false }),
         buffer = buf,
         callback = function()
@@ -312,6 +315,20 @@ function M.session(buf)
             end,
         })
     end
+
+    -- Подстраховка на случай правки, о которой не пришло ни одно из событий выше: раз
+    -- диапазон правленых строк непуст, статусы устарели. Стоит это ноль, пока не правили,
+    -- потому что диапазон копится в on_lines, а он не врёт ни в одном режиме.
+    vim.api.nvim_create_autocmd("CursorMoved", {
+        group = augroup or vim.api.nvim_create_augroup("jupyter.nvim", { clear = false }),
+        buffer = buf,
+        callback = function()
+            local session = sessions[buf]
+            if session and session.stale_cache.dirty then
+                M.repaint(buf)
+            end
+        end,
+    })
 
     vim.api.nvim_create_autocmd({ "BufUnload" }, {
         group = augroup or vim.api.nvim_create_augroup("jupyter.nvim", { clear = false }),
