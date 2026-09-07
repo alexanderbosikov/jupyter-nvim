@@ -480,3 +480,59 @@ def test_polars_is_importable_in_the_kernel(live):
 
     assert pick(msgs, Ev.EXEC_ERROR, "a3f9") == []
     assert stream_text(msgs, "a3f9") != ""
+
+def test_runtime_file_marks_live_kernel(live):
+    """След на диске нужен, чтобы опознать осиротевшее ядро: nvim нас не ждёт."""
+    import json
+    import os
+
+    from jupyter_nvim.outdir import RUNTIME_FILE
+
+    session, _sink, outdir = live()
+    path = outdir.base / RUNTIME_FILE
+    assert path.exists(), "пока ядро живо, след обязан быть"
+
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["sidecar_pid"] == os.getpid()
+    assert record["owner_pid"] == os.getppid()
+    assert record["kernel_name"] == "python3"
+    # connection-файл стоит в argv ядра: по нему сироту опознают среди чужих процессов
+    assert record["connection_file"] == session.connection_file()
+    # pid ядра должен быть настоящим и не нашим
+    assert record["kernel_pid"] == session.kernel_pid()
+    assert record["kernel_pid"] not in (None, os.getpid())
+    os.kill(record["kernel_pid"], 0)  # живо: иначе ProcessLookupError
+
+    session.shutdown(deadline=1.0)
+    assert not path.exists(), "ядро погашено — след убран"
+
+
+def test_shutdown_deadline_kills_stubborn_kernel(live):
+    """Дедлайн — это гарантия. Ядро, игнорирующее shutdown_request, добивается сигналом."""
+    import os
+    import time
+
+    session, _sink, _outdir = live()
+    pid = session.kernel_pid()
+    # ядро перестаёт отвечать на shutdown_request: обработчик SIGTERM тоже снят
+    session.execute(
+        code="import signal, os\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)",
+        cell_id="0001",
+        run_id=1,
+    )
+    time.sleep(0.5)
+
+    started = time.monotonic()
+    session.shutdown(deadline=1.0)
+    spent = time.monotonic() - started
+
+    assert spent < 4.0, f"дедлайн не сработал: гасили {spent:.1f} с"
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError(f"ядро {pid} выжило после shutdown с дедлайном")

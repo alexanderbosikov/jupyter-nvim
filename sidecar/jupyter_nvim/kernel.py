@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -28,6 +29,7 @@ from typing import Any, Callable
 
 from . import frames
 from .mime import render as render_mime
+from .outdir import RUNTIME_FILE
 from .protocol import ErrCode, Ev, ExecStatus, KernelState
 from .router import Exec, Router
 from .rpc import Rpc, RpcError
@@ -125,6 +127,8 @@ class KernelSession:
             launch["cwd"] = cwd
         self._km.start_kernel(**launch)
         self._open_client()
+
+        self._write_runtime(kernel_name)
 
         return {
             "kernel_id": os.path.basename(self._km.connection_file),
@@ -307,8 +311,67 @@ class KernelSession:
         self._km.interrupt_kernel()
         return {"active": len(self._router)}
 
-    def shutdown(self) -> dict[str, Any]:
+    def kernel_pid(self) -> int | None:
+        """pid процесса ядра. Путь к нему зависит от версии jupyter_client — идём осторожно."""
+        km = self._km
+        if km is None:
+            return None
+        for owner in (getattr(km, "provisioner", None), km):
+            proc = getattr(owner, "process", None) or getattr(owner, "kernel", None)
+            pid = getattr(proc, "pid", None)
+            if pid:
+                return int(pid)
+        return None
+
+    def connection_file(self) -> str | None:
+        return self._km.connection_file if self._km is not None else None
+
+    def _write_runtime(self, kernel_name: str) -> None:
+        """Оставить след: кто держит ядро и какой у него pid.
+
+        Нужно, чтобы осиротевшее ядро можно было опознать. nvim не ждёт нашего
+        завершения — иначе выход из редактора стоил бы полторы секунды, — а мы можем
+        не дожить до гашения: SIGKILL, падение интерпретатора, что угодно. Тогда ядро
+        останется жить, и заметить это можно только по записи: сайдкара нет, а pid
+        ядра ещё отвечает.
+        """
+        outdir = self._outdir_for()
+        if outdir is None:
+            return
+        record = {
+            "sidecar_pid": os.getpid(),
+            "owner_pid": os.getppid(),  # nvim
+            "kernel_pid": self.kernel_pid(),
+            "kernel_name": kernel_name,
+            # по нему ядро опознаётся в списке процессов: путь уникален и стоит в его argv
+            "connection_file": self._km.connection_file,
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        try:
+            path = outdir.base / RUNTIME_FILE
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        except OSError as e:
+            self._rpc.log("warn", f"не удалось записать {RUNTIME_FILE}: {e}")
+
+    def _clear_runtime(self) -> None:
+        outdir = self._outdir_for()
+        if outdir is None:
+            return
+        try:
+            (outdir.base / RUNTIME_FILE).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def shutdown(self, deadline: float | None = None) -> dict[str, Any]:
+        """Погасить ядро. `deadline` — сколько секунд ждать вежливого выхода.
+
+        jupyter_client шлёт SIGTERM на половине этого срока и SIGKILL в конце, так что
+        малый deadline — это гарантия, что ядро умрёт быстро. Дефолт (5 с) оставлен для
+        явного `kernel.shutdown` от пользователя: там незачем торопиться.
+        """
         if self._km is None:
+            self._clear_runtime()
             return {}
         self._stop_pumps()
         for ex in self._router.abort_all():
@@ -317,10 +380,13 @@ class KernelSession:
             # мёртвое ядро гасить нечем: shutdown_request уйдёт в никуда, а jupyter_client
             # будет ждать его shutdown_wait_time (5 с) впустую
             if self._km.is_alive():
+                if deadline is not None:
+                    self._km.shutdown_wait_time = deadline
                 self._km.shutdown_kernel(now=False)
         except Exception as e:
             self._rpc.log("warn", f"гашение ядра: {type(e).__name__}: {e}")
         finally:
+            self._clear_runtime()
             self._km.cleanup_resources()  # чтобы не оставлять kernel-*.json в runtime/
             if self._kernel_log_fh is not None:
                 self._kernel_log_fh.close()

@@ -17,6 +17,10 @@ CELL_ID = re.compile(r"^[0-9a-f]{4,8}$")
 DEFAULT_DIR = ".jupyter-out"
 INDEX = "index.jsonl"
 
+# След живого ядра: pid сайдкара, pid ядра и pid nvim, который его держит.
+# Существует, только пока ядро живо — по нему опознаются осиротевшие процессы.
+RUNTIME_FILE = "runtime.json"
+
 
 class BadCellId(ValueError):
     pass

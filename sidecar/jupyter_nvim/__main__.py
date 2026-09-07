@@ -111,9 +111,13 @@ class App:
             return session.stdin_reply(str(args["value"]))
 
     def serve(self) -> None:
-        atexit.register(self.session.shutdown)
+        # Короткий дедлайн: nvim закрыл stdin и не ждёт нас — он уже вышел или выходит.
+        # Вежливого гашения хватает секунды, дальше jupyter_client сам добивает ядро
+        # SIGTERM и SIGKILL. Дефолтные 5 с здесь означали бы только время, в течение
+        # которого ядро живёт после закрытого редактора.
+        atexit.register(lambda: self.session.shutdown(deadline=1.0))
         self.rpc.serve()
-        self.session.shutdown()
+        self.session.shutdown(deadline=1.0)
 
 
 def main() -> int:
