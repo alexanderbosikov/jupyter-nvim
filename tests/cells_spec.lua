@@ -296,3 +296,48 @@ describe("представление вопреки filetype", function()
         assert.equals(1, #cells.list(buf))
     end)
 end)
+
+-- Ловушка на ненайденную причину пропажи filetype: explain объясняет, почему выбрано
+-- именно это представление, и помечает случай, когда его пришлось угадывать по тексту.
+describe("объяснение выбора", function()
+    it("markdown-буфер: выбор по filetype, без догадок", function()
+        local buf = make(FENCE, "markdown")
+
+        local info = cells.explain(buf)
+
+        assert.equals("fence", info.representation)
+        assert.equals("markdown", info.filetype)
+        assert.is_false(info.guessed)
+        assert.equals(4, info.fences) -- три ячейки плюс незакрытый фенс
+        assert.equals(0, info.markers)
+    end)
+
+    it("тот же текст с чужим filetype помечается как угаданный", function()
+        local buf = make(FENCE, "python")
+
+        local info = cells.explain(buf)
+
+        assert.equals("fence", info.representation)
+        assert.equals("python", info.filetype)
+        assert.is_true(info.guessed, "это и есть тот случай, ради которого всё затевалось")
+    end)
+
+    it("percent-файл догадкой не считается", function()
+        local buf = make(PERCENT, "python")
+
+        local info = cells.explain(buf)
+
+        assert.equals("percent", info.representation)
+        assert.is_false(info.guessed)
+        assert.equals(4, info.markers)
+    end)
+
+    it("буфер без filetype: пусто, а не nil", function()
+        local buf = make(PERCENT, "")
+
+        local info = cells.explain(buf)
+
+        assert.equals("", info.filetype)
+        assert.equals("percent", info.representation)
+    end)
+end)

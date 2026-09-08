@@ -75,6 +75,36 @@ function M.representation(buf)
     return looks_like_markdown(buf) and "fence" or "percent"
 end
 
+---Почему выбрано именно это представление.
+---
+---Нужно диагностике. Промах filetype однажды стоил дорого: percent-детектор не нашёл ни
+---одного маркера и отдал ядру весь документ одной ячейкой. Цена промаха снята, но причина
+---пропажи filetype так и не найдена (§10 ARCHITECTURE.md), и ловушка должна сработать,
+---когда это повторится.
+---@param buf? integer
+---@return { representation: "fence"|"percent", filetype: string, guessed: boolean, markers: integer, fences: integer }
+function M.explain(buf)
+    buf = buf or 0
+    local markers, fences = 0, 0
+    for _, line in ipairs(lines(buf)) do
+        if line:match(PERCENT_MARKER) then
+            markers = markers + 1
+        elseif line:match(FENCE_OPEN) then
+            fences = fences + 1
+        end
+    end
+    local filetype = vim.bo[buf].filetype
+    local representation = M.representation(buf)
+    return {
+        representation = representation,
+        filetype = filetype,
+        -- фенсы выбраны по тексту, а не по filetype: ровно тот случай, который ловим
+        guessed = representation == "fence" and filetype ~= "markdown",
+        markers = markers,
+        fences = fences,
+    }
+end
+
 local function add(cells, cell)
     if cell.end_row < cell.start_row then
         return -- ячейка без тела: ядру отправлять нечего

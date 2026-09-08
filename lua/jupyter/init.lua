@@ -583,8 +583,53 @@ function M.follow_cursor(buf)
 end
 
 ---Поднять ядро, если оно ещё не поднято.
+---Добавить запись в журнал сессии (виден в :JupyterLog).
+---@param s table
+---@param level string
+---@param msg string
+local function note(s, level, msg)
+    table.insert(s.log, { at = os.date("%H:%M:%S"), level = level, msg = msg })
+    if #s.log > LOG_LIMIT then
+        table.remove(s.log, 1)
+    end
+end
+
+---Запомнить, каким увиделось представление буфера, и предупредить, если оно угадано.
+---
+---Ловушка на ненайденную причину пропажи `filetype` (§10 ARCHITECTURE.md). Зовётся на
+---каждый запуск, но пишет только при смене пары filetype→представление: журнал не должен
+---превращаться в поток. Предупреждение — один раз на такую пару, иначе оно надоест
+---быстрее, чем принесёт пользу.
+---@param s table сессия
+---@return table info результат cells.explain
+function M.note_representation(s)
+    local info = cells.explain(s.buf)
+    local key = ("%s→%s"):format(info.filetype == "" and "нет" or info.filetype, info.representation)
+    if s.repr_seen == key then
+        return info
+    end
+    s.repr_seen = key
+
+    local what = ("представление %s при filetype=%s (маркеров %d, фенсов %d)"):format(
+        info.representation,
+        info.filetype == "" and "нет" or info.filetype,
+        info.markers,
+        info.fences
+    )
+    note(s, info.guessed and "warn" or "info", what)
+    if info.guessed then
+        vim.notify(
+            "jupyter.nvim: " .. what .. ". Выбрано по тексту, а не по filetype — это тот самый "
+                .. "случай, причина которого не найдена; подробности в :JupyterLog",
+            vim.log.levels.WARN
+        )
+    end
+    return info
+end
+
 function M.ensure_started(buf)
     local s = M.session(buf)
+    M.note_representation(s) -- ловушка на промах filetype: зовётся на каждый запуск
     if s.started then
         return s
     end

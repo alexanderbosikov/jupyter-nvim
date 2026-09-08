@@ -142,3 +142,61 @@ describe("границы отказов", function()
         assert.is_nil(jupyter.session_for and jupyter.session_for(b) or nil)
     end)
 end)
+
+-- Ловушка на промах filetype: журнал не должен превращаться в поток, а предупреждение
+-- обязано прозвучать ровно тогда, когда представление пришлось угадывать.
+describe("журнал представления", function()
+    local buf
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("обычный запуск пишет одну строку, сколько ни повторяй", function()
+        local _, b = notebook({ "# %%", "x = 1" })
+        buf = b
+        local session = jupyter.session(buf)
+
+        for _ = 1, 5 do
+            jupyter.note_representation(session)
+        end
+
+        local seen = {}
+        for _, e in ipairs(session.log) do
+            if (e.msg or ""):find("представление", 1, true) then
+                table.insert(seen, e)
+            end
+        end
+        assert.equals(1, #seen, "журнал: " .. vim.inspect(session.log))
+        assert.equals("info", seen[1].level)
+        assert.is_truthy(seen[1].msg:find("percent", 1, true))
+    end)
+
+    it("угаданное представление помечается и говорится вслух", function()
+        local _, b = notebook({ "```python", "x = 1", "```" })
+        buf = b
+        vim.bo[buf].filetype = "python" -- markdown-текст в python-буфере: тот самый промах
+        local session = jupyter.session(buf)
+
+        local notes = {}
+        local notify = vim.notify
+        vim.notify = function(msg) table.insert(notes, msg) end
+        local ok, err = pcall(jupyter.note_representation, session)
+        vim.notify = notify
+        assert.is_true(ok, tostring(err))
+
+        assert.equals(1, #notes, "ожидали одно предупреждение")
+        assert.is_truthy(notes[1]:find("по тексту", 1, true), notes[1])
+        local last = session.log[#session.log]
+        assert.equals("warn", last.level)
+        assert.is_truthy(last.msg:find("filetype=python", 1, true), last.msg)
+    end)
+end)
