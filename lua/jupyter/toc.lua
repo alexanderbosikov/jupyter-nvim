@@ -8,6 +8,7 @@
 -- вне ячеек. В percent весь markdown закомментирован, поэтому заголовок выглядит как
 -- `# # Раздел` внутри ячейки `# %% [markdown]`.
 
+local common = require("jupyter.ui.common")
 local cells = require("jupyter.cells")
 local status_ui = require("jupyter.ui.status")
 
@@ -51,9 +52,7 @@ local function preview_of(buf, cell)
     if prefix ~= "" and body ~= prefix:gsub(": $", "") then
         body = prefix .. body
     end
-    if vim.fn.strdisplaywidth(body) > PREVIEW_WIDTH then
-        body = vim.fn.strcharpart(body, 0, PREVIEW_WIDTH - 1) .. "…"
-    end
+    body = common.clip(body, PREVIEW_WIDTH)
     return body
 end
 

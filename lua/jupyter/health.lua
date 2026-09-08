@@ -6,6 +6,7 @@
 --
 -- Сбор вынесен в collect(): его можно позвать из теста, в отличие от vim.health.
 
+local common = require("jupyter.ui.common")
 local images = require("jupyter.images")
 local sidecar = require("jupyter.sidecar")
 
@@ -102,7 +103,7 @@ function M.collect(config)
     else
         local message = decode((reply.stdout:gsub("\n.*", "")))
         if not message or not message.data then
-            add("error", "сайдкар ответил непонятным: " .. reply.stdout:sub(1, 120))
+            add("error", "сайдкар ответил непонятным: " .. common.clip(reply.stdout, 120))
         elseif message.data.v ~= sidecar.PROTOCOL_V then
             add("error", ("версия протокола: сайдкар %s, плагин %d"):format(
                 tostring(message.data.v), sidecar.PROTOCOL_V

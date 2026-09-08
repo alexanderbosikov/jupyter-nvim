@@ -86,6 +86,30 @@ function M.set_lines(buf, lines)
     vim.bo[buf].modifiable = false
 end
 
+---Обрезать по ширине отображения, а не по байтам и не по символам.
+---
+---Три единицы легко перепутать, и все три встречались в коде: байты режут кириллицу
+---посередине, символы не учитывают, что эмодзи и CJK занимают две клетки. Меряем и режем
+---одним и тем же — клетками экрана.
+---@param text string
+---@param width integer
+---@return string
+function M.clip(text, width)
+    text = tostring(text or "")
+    if vim.fn.strdisplaywidth(text) <= width then
+        return text
+    end
+    local out = ""
+    for _, char in ipairs(vim.fn.str2list(text)) do
+        local candidate = out .. vim.fn.nr2char(char)
+        if vim.fn.strdisplaywidth(candidate) > width - 1 then
+            break
+        end
+        out = candidate
+    end
+    return out .. "…"
+end
+
 ---`%` в winbar/statusline — начало элемента формата, литерал экранируется удвоением (§9 идеи).
 ---@param text string
 ---@return string

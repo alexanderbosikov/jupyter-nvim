@@ -175,6 +175,23 @@ describe("многострочный элемент", function()
         assert.same({ "чисто" }, common.flatten({ "чисто\r" }))
     end)
 
+    it("обрезка считает клетки экрана, а не байты и не символы", function()
+        -- кириллица: два байта на символ, одна клетка
+        assert.equals("привет", common.clip("привет", 10))
+        assert.equals(6, vim.fn.strdisplaywidth(common.clip("привет мир", 6)))
+        -- эмодзи и CJK: один символ, две клетки — по символам обрезка промахнулась бы вдвое
+        for _, text in ipairs({ ("🌍"):rep(20), ("日"):rep(20) }) do
+            local got = common.clip(text, 8)
+            assert.is_true(
+                vim.fn.strdisplaywidth(got) <= 8,
+                ("вышли за 8 клеток: %d в %s"):format(vim.fn.strdisplaywidth(got), got)
+            )
+        end
+        -- обрезанное помечается многоточием, целое — нет
+        assert.is_truthy(common.clip("длинная строка", 6):find("…", 1, true))
+        assert.is_nil(common.clip("коротко", 20):find("…", 1, true))
+    end)
+
     it("drawer отрисовывает трейсбек, а не падает", function()
         local out = output.new({ size = 8 })
         out:show({

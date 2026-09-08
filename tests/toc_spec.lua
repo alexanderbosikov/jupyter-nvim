@@ -244,3 +244,17 @@ describe("фильтрация списка", function()
         assert.is_true(picker.matches("plt.plot(x)  не запускалась", "не запускалась"))
     end)
 end)
+
+describe("ширина превью", function()
+    it("двойные по ширине символы не выходят за отведённые клетки", function()
+        local toc = require("jupyter.toc")
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", ('print("%s")'):format(("日"):rep(60)) })
+        vim.bo[buf].filetype = "python"
+
+        local entry = toc.collect(buf)[1]
+        local width = vim.fn.strdisplaywidth(entry.preview)
+
+        assert.is_true(width <= 48, ("превью заняло %d клеток: %s"):format(width, entry.preview))
+    end)
+end)
