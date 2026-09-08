@@ -182,6 +182,13 @@ function M.select_cell(inner)
     end
     local from = inner and cell.start_row or cell.span_start
     local to = inner and cell.end_row or cell.span_end
+    -- Из visual-режима выходим перед выделением. Нажатое `v` уже поставило якорь, и одно
+    -- движение курсора его не сдвинет: выделение пошло бы от якоря до конца ячейки, то
+    -- есть с середины — половина. В operator-pending якоря нет, поэтому там всё работало
+    -- и тесты на `dic`/`yac` этого не ловили.
+    if vim.fn.mode():match("^[vV\22]") then
+        vim.cmd("normal! \27")
+    end
     vim.cmd(("normal! %dGV%dG"):format(from, to))
     return true
 end
