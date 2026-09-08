@@ -27,6 +27,10 @@ M.defaults = {
     env = {},
     filetypes = { "python", "markdown" },
     out_dir = ".jupyter-out",
+    -- Оставлять ли ядро жить после выхода из редактора. По умолчанию нет: забытое ядро
+    -- держит память и соединения, а заметить его труднее, чем потерять. Кому дороже
+    -- состояние — включает, и тогда :JupyterAttach при следующем открытии вернёт его.
+    keep_kernel_on_exit = false,
     -- false — не определять группы подсветки, если хочешь задать их сам
     highlight = true,
     -- картинки рисует image.nvim; false — только путь строкой в выводе
@@ -690,7 +694,11 @@ end
 ---что `BufUnload` успевал снять сессию раньше и копировать было уже нечего.
 function M.detach_all()
     for _, buf in ipairs(vim.tbl_keys(sessions)) do
-        M.detach(buf)
+        if M.config.keep_kernel_on_exit then
+            M.release(buf)
+        else
+            M.detach(buf)
+        end
     end
 end
 
@@ -791,6 +799,35 @@ function M.orphans(kill)
         end
     end
     return found
+end
+
+---Отпустить ядро: сессия закроется, а процесс останется жить.
+---
+---След на диске сохраняется, наш сайдкар вскоре умрёт — и запись сама превратится в то,
+---что ищет `:JupyterAttach`: живое ядро без хозяина.
+---@param buf? integer
+---@return boolean отпустили ли что-нибудь
+function M.release(buf)
+    buf = buf or vim.api.nvim_get_current_buf()
+    local s = sessions[buf]
+    if not s or not s.started then
+        vim.notify("jupyter.nvim: у этого буфера нет живого ядра", vim.log.levels.WARN)
+        return false
+    end
+    -- Ответа не ждём: запрос уже в трубе, а порядок записи в неё сохраняется, поэтому
+    -- сайдкар прочитает release раньше, чем увидит закрытый stdin.
+    s.kernel:release(function(err, data)
+        if err then
+            vim.notify(
+                ("jupyter.nvim: отпустить ядро не вышло — %s: %s"):format(err.code or "?", err.msg or ""),
+                vim.log.levels.ERROR
+            )
+        elseif data and data.kernel_pid then
+            vim.notify(("jupyter.nvim: ядро %d оставлено жить; вернуться — :JupyterAttach"):format(data.kernel_pid))
+        end
+    end)
+    M.detach(buf)
+    return true
 end
 
 ---Подключиться к ядру, оставшемуся от прошлой сессии редактора.

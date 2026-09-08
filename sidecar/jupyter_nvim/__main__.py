@@ -35,7 +35,7 @@ class App:
                 "v": V,
                 "version": __version__,
                 "python": sys.version.split()[0],
-                "caps": ["execute", "interrupt", "stdin", "table.page", "attach"],
+                "caps": ["execute", "interrupt", "stdin", "table.page", "attach", "release"],
                 "kernel": session.state(),
             }
 
@@ -80,6 +80,10 @@ class App:
                 # лог понадобится, только если это ядро придётся перезапускать своим
                 log_file=str(self.outdir.base / "kernel.log") if self.outdir else None,
             )
+
+        @rpc.op(Op.KERNEL_RELEASE)
+        def _release(args: dict) -> dict:
+            return session.release()
 
         @rpc.op(Op.KERNEL_STATE)
         def _state(args: dict) -> dict:

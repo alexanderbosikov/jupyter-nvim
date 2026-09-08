@@ -123,6 +123,16 @@ function Kernel:start(opts, cb)
     }, cb)
 end
 
+---Отпустить ядро: сайдкар закроет свои каналы, но гасить процесс не станет.
+---@param cb? fun(err: table|nil, data: table|nil)
+function Kernel:release(cb)
+    if not self.sidecar:is_running() then
+        if cb then cb(nil, { released = false }) end
+        return
+    end
+    self.sidecar:request("kernel.release", {}, cb)
+end
+
 ---Подключиться к уже живущему ядру вместо запуска своего.
 ---
 ---Смысл — пережить перезапуск редактора: тяжёлые фреймы после долгого запроса остаются

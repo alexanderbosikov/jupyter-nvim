@@ -67,7 +67,7 @@
 `:JupyterTable`, `:JupyterRunPrev`, `:JupyterRunNext`, `:JupyterInterrupt`,
 `:JupyterRestart`, `:JupyterHistory`, `:JupyterToc`, `:JupyterRepaint`,
 `:JupyterClearImages`, `:JupyterLog`, `:JupyterStatus`, `:JupyterStop`,
-`:JupyterOrphans` (с `!` — снять), `:JupyterAttach`.
+`:JupyterOrphans` (с `!` — снять), `:JupyterAttach`, `:JupyterRelease`.
 
 В окне вывода: `t` — таблица постранично, `y` — скопировать вывод, `c` — очистить,
 `q` — закрыть.
@@ -174,6 +174,7 @@ opts = {
     env = {},                        -- переменные окружения ядра
     filetypes = { "python", "markdown" },
     out_dir = ".jupyter-out",
+    keep_kernel_on_exit = false,     -- true: выход не гасит ядро, вернуться — :JupyterAttach
     images = true,
     highlight = true,                -- свои группы подсветки для winbar
     output = {
@@ -190,9 +191,15 @@ opts = {
 
 ## Ядра и выход из редактора
 
-Выход из nvim ядро не задерживает. Плагин закрывает сайдкару stdin и уходит, а тот гасит
-ядро сам — вежливым `shutdown_request` с дедлайном в секунду, после чего `SIGTERM` и
-`SIGKILL`. Ждать его завершения стоило бы 1.9 с на каждый выход, и незачем.
+По умолчанию выход гасит ядро, но не задерживает редактор: плагин закрывает сайдкару
+stdin и уходит, а тот гасит ядро сам — вежливым `shutdown_request` с дедлайном в секунду,
+после чего `SIGTERM` и `SIGKILL`. Ждать его завершения стоило бы 1.9 с на каждый выход.
+
+Ядро можно и **оставить жить**: `:JupyterRelease` отпускает его прямо сейчас, а
+`keep_kernel_on_exit = true` делает это правилом для всех выходов. Тогда перезапуск
+редактора перестаёт стоить состояния: `:JupyterAttach` возвращает то же ядро вместе с
+памятью. По умолчанию выключено намеренно — забытое ядро держит память и соединения, а
+заметить его труднее, чем потерять.
 
 Пока ядро живо, рядом с выводами лежит `runtime.json` с pid'ами сайдкара, ядра и
 редактора. Он нужен на случай, когда сайдкар умер не своей смертью — `SIGKILL`, падение

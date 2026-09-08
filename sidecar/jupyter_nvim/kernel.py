@@ -76,6 +76,7 @@ class KernelSession:
 
         self._km: Any = None
         self._attached_pid: int | None = None  # не None — ядро чужое, подключённое
+        self._released = False  # ядро отпущено жить дальше: след трогать нельзя
         self._launch_args: dict[str, Any] = {}
         self._client: Any = None
         self._pump_stop = threading.Event()
@@ -135,6 +136,7 @@ class KernelSession:
         self._set_state(KernelState.STARTING)
         self._km = KernelManager(kernel_name=kernel_name)
         self._attached_pid = None
+        self._released = False
         self._launch_args = {
             "kernel_name": kernel_name,
             "cwd": cwd,
@@ -208,6 +210,38 @@ class KernelSession:
             "kernel_log": str(self._kernel_log) if self._kernel_log else "",
             "attached": True,
         }
+
+    def release(self) -> dict[str, Any]:
+        """Отпустить ядро: закрыть свои каналы и забыть о нём, не гася.
+
+        Нужно, чтобы редактор мог выйти, оставив ядро жить, — иначе подключение к живому
+        ядру спасало бы только от аварии, а не от обычного `:qa`. След на диске при этом
+        сохраняется намеренно: наш pid скоро станет мёртвым, и запись сама превратится в
+        то, что ищет `jupyter.orphans` — живое ядро без хозяина, к которому можно
+        подключиться.
+        """
+        if self._km is None:
+            return {"released": False}
+        pid = self.kernel_pid() or self._attached_pid
+        # Файл соединения переживает нас вместе с ядром. Без этой строчки отпущенное ядро
+        # становится недостижимым: KernelManager.__del__ зовёт cleanup_connection_file,
+        # процесс остаётся жить, а подключиться к нему уже нечем.
+        try:
+            self._km._connection_file_written = False
+        except Exception:  # приватное поле: версия могла его переименовать
+            self._rpc.log("warn", "не удалось сохранить connection-файл отпущенного ядра")
+        self._stop_pumps()
+        for ex in self._router.abort_all():
+            self._emit_done(ex)
+        if self._kernel_log_fh is not None:
+            self._kernel_log_fh.close()
+            self._kernel_log_fh = None
+        self._released = True
+        self._km = None
+        self._attached_pid = None
+        self._client = None
+        self._set_state(KernelState.NONE)
+        return {"released": True, "kernel_pid": pid}
 
     def _alive(self) -> bool:
         """Живо ли ядро.
@@ -472,7 +506,8 @@ class KernelSession:
         явного `kernel.shutdown` от пользователя: там незачем торопиться.
         """
         if self._km is None:
-            self._clear_runtime()
+            if not self._released:
+                self._clear_runtime()
             return {}
         self._stop_pumps()
         for ex in self._router.abort_all():

@@ -85,6 +85,81 @@ describe("подключение к живому ядру", function()
         )
     end)
 
+    it("отпущенное ядро переживает обычный выход и ждёт подключения", function()
+        local path, b = notebook({ "# %%", "сокровище = 7", "# %%", "print(сокровище * 6)" })
+        buf = b
+        local session = jupyter.session(buf)
+        run_and_wait(buf, 2, session)
+        local sidecar_pid = session.kernel.sidecar._proc.pid
+
+        assert.is_true(jupyter.release(buf))
+        buf = nil -- сессия уже отцеплена
+        wait(function() return not orphans.alive(sidecar_pid) end, 10000, "выхода сайдкара")
+
+        -- ядро осталось, а след превратился в приглашение подключиться
+        local found = orphans.check(orphans.record_for(path))
+        assert.is_truthy(found, "след обязан пережить отпускание")
+        assert.is_false(found.stale, "ядро должно быть живым")
+        kernel_pid = found.kernel_pid
+        assert.equals(
+            1,
+            vim.fn.filereadable(found.connection_file),
+            "connection-файл обязан пережить отпускание: без него ядро недостижимо"
+        )
+
+        buf = b
+        local fresh = jupyter.session(buf)
+        assert.is_true(jupyter.attach(buf))
+        wait(function() return fresh.kernel:is_usable() end, 60000, "готовности")
+
+        local run = run_and_wait(buf, 4, fresh)
+
+        assert.is_truthy(
+            table.concat(run.lines or {}, "\n"):find("42", 1, true),
+            "состояние должно пережить выход: " .. vim.inspect(run.lines)
+        )
+    end)
+
+    it("при keep_kernel_on_exit выход из редактора ядро не трогает", function()
+        jupyter.setup({ keep_kernel_on_exit = true })
+        local path, b = notebook({ "# %%", "x = 1" })
+        buf = b
+        local session = jupyter.session(buf)
+        run_and_wait(buf, 2, session)
+        local sidecar_pid = session.kernel.sidecar._proc.pid
+
+        jupyter.detach_all() -- ровно то, что делает VimLeavePre
+        buf = nil
+        wait(function() return not orphans.alive(sidecar_pid) end, 10000, "выхода сайдкара")
+
+        local found = orphans.check(orphans.record_for(path))
+        assert.is_truthy(found, "след должен остаться")
+        assert.is_false(found.stale, "ядро обязано пережить выход")
+        kernel_pid = found.kernel_pid
+        jupyter.setup({}) -- вернуть умолчание следующим тестам
+    end)
+
+    it("без флага выход ядро гасит, как и раньше", function()
+        local path, b = notebook({ "# %%", "x = 1" })
+        buf = b
+        local session = jupyter.session(buf)
+        run_and_wait(buf, 2, session)
+        local pid = orphans.check(orphans.record_for(path)) == nil and nil or nil
+        local sidecar_pid = session.kernel.sidecar._proc.pid
+
+        jupyter.detach_all()
+        buf = nil
+        wait(function() return not orphans.alive(sidecar_pid) end, 10000, "выхода сайдкара")
+        vim.wait(3000, function()
+            return orphans.check(orphans.record_for(path)) == nil
+        end, 100)
+
+        assert.is_nil(
+            orphans.check(orphans.record_for(path)),
+            "след должен исчезнуть вместе с ядром"
+        )
+    end)
+
     it("подключаться не к чему — говорим об этом, а не молчим", function()
         local _, b = notebook({ "# %%", "x = 1" })
         buf = b

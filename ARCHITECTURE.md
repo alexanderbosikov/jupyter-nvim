@@ -89,6 +89,7 @@ JSON-lines: одна JSON-строка на сообщение, UTF-8. Верс�
 | `hello` | `{v}` | `{v, version, python, caps[], kernel}` |
 | `kernel.start` | `{kernel_name, cwd, env{}, notebook?, out_dir?, history_limit?}` | `{kernel_id, connection_file, kernel_log, attached: false}` |
 | `kernel.attach` | то же плюс `{connection_file, pid?}` | `{kernel_id, connection_file, kernel_log, attached: true}` |
+| `kernel.release` | `{}` | `{released, kernel_pid?}` |
 | `kernel.state` | — | `{state, since_ms, ...}` |
 | `kernel.restart` / `kernel.shutdown` | `{}` | `{kernel_id, aborted}` / `{}` |
 | `execute` | `{cell_id, run_id, code, result_expr?}` | `{msg_id}` |
@@ -274,6 +275,14 @@ Kernelspec может задавать интерпретатор относит
 Перезапуск подключённого ядра — это погасить чужое и поднять своё: провизионера, которым
 можно было бы его перезапустить, у нас нет. Аргументы запуска для этого запоминаются при
 подключении.
+
+Обратная операция — `kernel.release`: закрыть свои каналы и забыть о ядре, не гася его.
+Без неё подключение спасало бы только от аварии, а не от обычного `:qa`. Тонкость, на
+которой это ломалось: `KernelManager.__del__` зовёт `cleanup_connection_file`, поэтому,
+отпуская ядро, надо отпустить и владение файлом. Иначе процесс остаётся жить, а
+подключиться к нему уже нечем — файла нет. След на диске при отпускании сохраняется
+намеренно: наш pid вскоре станет мёртвым, и запись сама превратится в то, что ищет
+`jupyter.orphans`.
 
 ## 7. Данные на диске
 
