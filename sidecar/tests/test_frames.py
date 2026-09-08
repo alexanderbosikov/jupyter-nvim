@@ -65,6 +65,22 @@ def test_null_and_empty_string_look_different(tmp_path):
     assert got["rows"] == [["есть"], [""], ["null"]]
 
 
+def test_multiline_value_stays_one_row(tmp_path):
+    """Строка таблицы обязана остаться строкой: перевод строки внутри значения ломает вёрстку.
+
+    В данных такое обычное дело — описания, тексты запросов. Раскладывать это по строкам
+    буфера нельзя: колонки разъедутся, а нумерация строк начнёт врать.
+    """
+    path = tmp_path / "df.parquet"
+    pl.DataFrame({"текст": ["первая\nвторая", "с\tтабом", "возврат\rкаретки"]}).write_parquet(path)
+
+    got = page(path)
+
+    assert got["rows"] == [["первая\\nвторая"], ["с\\tтабом"], ["возврат\\rкаретки"]]
+    for row in got["rows"]:
+        assert "\n" not in row[0]
+
+
 def test_page_returns_header_and_strings(parquet):
     got = page(parquet, offset=0, limit=3)
 

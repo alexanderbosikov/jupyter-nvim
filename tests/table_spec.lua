@@ -96,6 +96,30 @@ describe("статус и листание", function()
     end)
 end)
 
+describe("враждебное значение в клетке", function()
+    it("перевод строки не разваливает строку таблицы", function()
+        local lines = table_view.format({ "id", "текст" }, {
+            { "1", "первая\nвторая" },
+            { "2", "обычная" },
+        })
+
+        assert.equals(4, #lines, "заголовок, линейка и ровно две строки данных")
+        for _, line in ipairs(lines) do
+            assert.is_nil(line:find("\n", 1, true), "в строке буфера не может быть перевода строки")
+        end
+    end)
+
+    it("нумерация не сбивается от многострочного значения", function()
+        local lines = table_view.format({ "текст" }, {
+            { "a\nb" },
+            { "c" },
+        }, { first_row = 10 })
+
+        assert.equals("10", lines[3]:match("^%s*(%d+)"))
+        assert.equals("11", lines[4]:match("^%s*(%d+)"))
+    end)
+end)
+
 describe("раскладка колонок", function()
     it("возвращается вместе со строками и совпадает с отрисовкой", function()
         local lines, layout = table_view.format({ "id", "имя" }, { { "1", "стр" } })

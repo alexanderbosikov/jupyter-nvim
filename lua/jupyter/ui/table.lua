@@ -26,25 +26,18 @@ M.DEFAULT_KEYS = {
 
 local GAP = "  "
 local RULE = "─"
-local ELLIPSIS = "…"
 
----Обрезать по ширине отображения, а не по байтам.
----@param text string
----@param width integer
+local clip = common.clip
+
+---Значение в одну строку.
+---
+---Перевод строки внутри клетки разложил бы её по строкам буфера: колонки разъехались бы,
+---а нумерация строк начала врать. Сайдкар такое уже экранирует при чтении parquet, но
+---раскладку держит эта функция — и держать она обязана независимо от источника.
+---@param text any
 ---@return string
-local function clip(text, width)
-    if vim.fn.strdisplaywidth(text) <= width then
-        return text
-    end
-    local out = ""
-    for _, char in ipairs(vim.fn.str2list(text)) do
-        local candidate = out .. vim.fn.nr2char(char)
-        if vim.fn.strdisplaywidth(candidate) > width - 1 then
-            break
-        end
-        out = candidate
-    end
-    return out .. ELLIPSIS
+local function oneline(text)
+    return (tostring(text or ""):gsub("[\r\n]+", " "))
 end
 
 local function pad(text, width)
@@ -77,7 +70,7 @@ function M.format(header, rows, opts)
     end
     for _, row in ipairs(rows) do
         for i, cell in ipairs(row) do
-            local w = math.min(vim.fn.strdisplaywidth(cell), max_col)
+            local w = math.min(vim.fn.strdisplaywidth(oneline(cell)), max_col)
             if w > (widths[i] or 0) then
                 widths[i] = w
             end
@@ -92,7 +85,7 @@ function M.format(header, rows, opts)
     local function line(cells, mark)
         local parts = {}
         for i = 1, #header do
-            table.insert(parts, pad(clip(cells[i] or "", widths[i]), widths[i]))
+            table.insert(parts, pad(clip(oneline(cells[i]), widths[i]), widths[i]))
         end
         local body = vim.trim(table.concat(parts, GAP), " ")
         if gutter == 0 then

@@ -61,13 +61,21 @@ def parse_dump(entry: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+# Управляющие символы в значении: строка таблицы обязана остаться одной строкой.
+# Перевод строки внутри значения разложил бы её по строкам буфера — колонки разъехались
+# бы, а нумерация строк начала врать. Показываем их видимо, как это делает repr.
+_ESCAPES = {ord("\n"): "\\n", ord("\r"): "\\r", ord("\t"): "\\t"}
+_ESCAPES.update({code: f"\\x{code:02x}" for code in range(32) if code not in _ESCAPES})
+_ESCAPES[0x7F] = "\\x7f"
+
+
 def _cell(value: Any) -> str:
     """Пустая строка и NULL — разные вещи, и выглядеть должны по-разному.
 
     Совпадаем с тем, как рисует сам polars: пустая строка пустая, NULL — слово `null`.
     Неоднозначность со строкой "null" при этом та же, что в polars и в Lab.
     """
-    return "null" if value is None else str(value)
+    return "null" if value is None else str(value).translate(_ESCAPES)
 
 
 class UnknownColumn(ValueError):
