@@ -169,3 +169,44 @@ def test_process_exits_cleanly_on_eof(tmp_path):
     s.close()
 
     assert s.proc.returncode == 0
+
+
+def test_readonly_notebook_dir_disables_history_not_kernel(sidecar, tmp_path):
+    """Ноутбук в каталоге без записи: история невозможна, выполнение — вполне.
+
+    Раньше одна упавшая mkdir не давала стартовать ядру: путь к логу ядра лежал внутри
+    каталога выводов. То есть ноутбук на примонтированной только для чтения шаре не
+    работал вовсе, хотя ядру этот каталог не нужен.
+    """
+    ro = tmp_path / "только-чтение"
+    ro.mkdir()
+    notebook = ro / "отчёт.md"
+    notebook.write_text("# отчёт\n", encoding="utf-8")
+    ro.chmod(0o555)
+    try:
+        sidecar.call("hello")
+        sidecar.call("kernel.start", kernel_name="python3", notebook=str(notebook))
+        sidecar.wait(
+            lambda ms: any(
+                m.get("ev") == Ev.KERNEL_STATE and m["data"].get("state") == KernelState.READY
+                for m in ms
+            ),
+            what="готовности ядра",
+        )
+
+        sidecar.call("execute", code="print('вопреки всему')", cell_id="0001", run_id=1)
+        msgs = sidecar.wait(
+            lambda ms: any(m.get("ev") == Ev.EXEC_DONE for m in ms),
+            what="завершения ячейки",
+        )
+
+        done = next(m for m in msgs if m.get("ev") == Ev.EXEC_DONE)
+        assert done["data"]["status"] == "ok", done
+        # и пользователю сказано, почему истории не будет
+        warns = [
+            m for m in msgs
+            if m.get("ev") == Ev.LOG and "история выключена" in m["data"].get("msg", "")
+        ]
+        assert warns, "молча терять историю нельзя"
+    finally:
+        ro.chmod(0o755)

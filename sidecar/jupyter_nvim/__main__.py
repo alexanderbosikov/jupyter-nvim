@@ -47,7 +47,9 @@ class App:
         def _start(args: dict) -> dict:
             notebook = args.get("notebook")
             if notebook:
-                self.outdir = OutDir(Path(notebook), args.get("out_dir") or DEFAULT_DIR)
+                self.outdir = self._usable_outdir(
+                    OutDir(Path(notebook), args.get("out_dir") or DEFAULT_DIR)
+                )
             if args.get("history_limit"):
                 session._history_limit = int(args["history_limit"])
             return session.start(
@@ -109,6 +111,29 @@ class App:
             if "value" not in args:
                 raise RpcError(ErrCode.BAD_ARGS, "нет обязательного args.value")
             return session.stdin_reply(str(args["value"]))
+
+    def _usable_outdir(self, outdir: OutDir) -> OutDir | None:
+        """Каталог выводов — только если в него правда можно писать.
+
+        Ноутбук может лежать там, где записи нет: примонтированная только для чтения
+        шара, чужой каталог, ограниченные права. История в этом случае невозможна, но
+        выполнение — вполне: это разные вещи, и вторая важнее. Раньше одна упавшая
+        mkdir не давала стартовать ядру, то есть ноутбук в таком каталоге не работал
+        вовсе, хотя ядру каталог не нужен.
+        """
+        try:
+            outdir.base.mkdir(parents=True, exist_ok=True)
+            probe = outdir.base / ".writable"
+            probe.touch()
+            probe.unlink()
+        except OSError as e:
+            self.rpc.log(
+                "warn",
+                f"история выключена: в {outdir.base} нельзя писать ({type(e).__name__}). "
+                "Ячейки выполняются, но выводы не сохраняются",
+            )
+            return None
+        return outdir
 
     def serve(self) -> None:
         # Короткий дедлайн: nvim закрыл stdin и не ждёт нас — он уже вышел или выходит.
