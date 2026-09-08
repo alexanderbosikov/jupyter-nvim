@@ -341,3 +341,68 @@ describe("объяснение выбора", function()
         assert.equals("percent", info.representation)
     end)
 end)
+
+-- Параметры магики живут в info-строке фенса. Набранные в теле ломают файл: jupytext
+-- при сохранении допишет свою магику, и в .ipynb окажется `%%sql` дважды.
+describe("параметры магики", function()
+    local function fence(lines)
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+        vim.bo[buf].filetype = "markdown"
+        return buf
+    end
+
+    local function marker(buf)
+        return vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]
+    end
+
+    it("ставятся на фенс и доезжают до ядра", function()
+        local buf = fence({ "```sql", "select 1", "```" })
+        local cell = cells.list(buf)[1]
+
+        assert.is_true(cells.set_magic_args(buf, cell, "df_name=orders"))
+
+        assert.equals('```sql magic_args="df_name=orders"', marker(buf))
+        assert.equals("%%sql df_name=orders\nselect 1", cells.text(buf, cells.list(buf)[1]))
+    end)
+
+    it("заменяются, а не копятся", function()
+        local buf = fence({ '```sql magic_args="df_name=old"', "select 1", "```" })
+
+        cells.set_magic_args(buf, cells.list(buf)[1], "df_name=new limit=0")
+
+        assert.equals('```sql magic_args="df_name=new limit=0"', marker(buf))
+    end)
+
+    it("убираются пустой строкой", function()
+        local buf = fence({ '```sql magic_args="df_name=old"', "select 1", "```" })
+
+        cells.set_magic_args(buf, cells.list(buf)[1], "")
+
+        assert.equals("```sql", marker(buf))
+        assert.equals("%%sql\nselect 1", cells.text(buf, cells.list(buf)[1]))
+    end)
+
+    it("id ячейки на фенсе не страдает", function()
+        local buf = fence({ '```sql jncell="a3f9"', "select 1", "```" })
+
+        cells.set_magic_args(buf, cells.list(buf)[1], "df_name=orders")
+
+        assert.equals('```sql magic_args="df_name=orders" jncell="a3f9"', marker(buf))
+        assert.equals("a3f9", require("jupyter.cellid").parse(marker(buf)))
+    end)
+
+    it("у обычной python-ячейки параметров не бывает", function()
+        local buf = fence({ "```python", "x = 1", "```" })
+
+        assert.is_false(cells.set_magic_args(buf, cells.list(buf)[1], "df_name=orders"))
+        assert.equals("```python", marker(buf))
+    end)
+
+    it("магика, набранная в теле, второй раз не приписывается", function()
+        local buf = fence({ "```sql", "%%sql df_name=inline", "select 1", "```" })
+
+        -- ядру уходит ровно то, что написал человек: дублировать нельзя
+        assert.equals("%%sql df_name=inline\nselect 1", cells.text(buf, cells.list(buf)[1]))
+    end)
+end)

@@ -67,7 +67,8 @@
 `:JupyterTable`, `:JupyterRunPrev`, `:JupyterRunNext`, `:JupyterInterrupt`,
 `:JupyterRestart`, `:JupyterHistory`, `:JupyterToc`, `:JupyterRepaint`,
 `:JupyterClearImages`, `:JupyterLog`, `:JupyterStatus`, `:JupyterStop`,
-`:JupyterOrphans` (с `!` — снять), `:JupyterAttach`, `:JupyterRelease`.
+`:JupyterOrphans` (с `!` — снять), `:JupyterAttach`, `:JupyterRelease`,
+`:JupyterCellArgs`.
 
 В окне вывода: `t` — таблица постранично, `y` — скопировать вывод, `c` — очистить,
 `q` — закрыть.
@@ -90,6 +91,19 @@
 - **fenced** — markdown после jupytext; код-ячейка это ```` ```python ````, а также фенс
   с языком магики (```` ```sql ````) — такую ячейку jupytext хранит с `magic_args`
   в info-строке, и строка `%%sql` собирается обратно в момент отправки ядру.
+
+Параметры магики живут **на строке фенса**, а не в теле:
+
+````
+```sql magic_args="df_name=orders limit=0"
+select 1
+```
+````
+
+Ставит их `:JupyterCellArgs df_name=orders limit=0`, убирает — та же команда без
+аргументов. Набирать `%%sql df_name=...` первой строкой тела не стоит: плагин такую
+ячейку выполнит правильно (второй раз магику не припишет), но jupytext при сохранении
+допишет свою, и в `.ipynb` окажется `%%sql` дважды.
 
 ## Оглавление
 

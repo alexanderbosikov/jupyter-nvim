@@ -258,6 +258,37 @@ function M.text(buf, cell)
     return text
 end
 
+---Записать параметры магики в фенс ячейки.
+---
+---Параметры такой ячейки живут в info-строке (`magic_args="df_name=orders"`), а не в теле:
+---jupytext хранит их именно там. Магика, набранная в теле, ломает файл — при сохранении
+---jupytext допишет свою, и в .ipynb окажется `%%sql` дважды. Отсюда и функция: чтобы
+---правильное место было под рукой, а не запоминалось.
+---@param buf integer
+---@param cell jupyter.Cell
+---@param args string пустая строка — убрать параметры
+---@return boolean записали ли
+function M.set_magic_args(buf, cell, args)
+    if not cell.marker_row or not is_code_lang(cell.lang) or cell.lang == CODE_LANG then
+        return false -- параметры бывают только у ячейки с магикой языка
+    end
+    local row = cell.marker_row
+    local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, false)[1]
+    local stripped = line:gsub('%s*magic_args=".-"', "", 1)
+    local updated = stripped
+    if args ~= "" then
+        local head, tail = stripped:match("^(```+%S+)(.*)$")
+        if not head then
+            return false
+        end
+        updated = head .. ' magic_args="' .. args .. '"' .. tail
+    end
+    if updated ~= line then
+        vim.api.nvim_buf_set_lines(buf, row - 1, row, false, { updated })
+    end
+    return true
+end
+
 ---Вставить пустую ячейку выше или ниже ячейки под строкой.
 ---@param buf? integer
 ---@param row integer

@@ -748,6 +748,32 @@ end
 
 ---Открыть таблицу-результат ячейки под курсором. Если её нет — того прогона, что показан
 ---в drawer'е: так работает и когда курсор стоит в markdown между ячейками.
+---Параметры магики для ячейки под курсором: `df_name=orders`, пусто — убрать.
+---
+---Живут они в info-строке фенса, а не в теле — так их хранит jupytext. Набранные в теле
+---ломают файл: при сохранении магика допишется второй раз.
+---@param args string
+---@return boolean
+function M.cell_args(args)
+    local buf = vim.api.nvim_get_current_buf()
+    local cell = cells.at(buf, vim.api.nvim_win_get_cursor(0)[1])
+    if not cell then
+        vim.notify("jupyter.nvim: под курсором нет ячейки", vim.log.levels.WARN)
+        return false
+    end
+    if not cells.set_magic_args(buf, cell, vim.trim(args or "")) then
+        vim.notify(
+            "jupyter.nvim: параметры бывают только у ячейки с магикой языка (```sql)",
+            vim.log.levels.WARN
+        )
+        return false
+    end
+    local shown = vim.trim(args or "")
+    vim.notify(shown ~= "" and ("jupyter.nvim: параметры ячейки — %s"):format(shown)
+        or "jupyter.nvim: параметры ячейки убраны")
+    return true
+end
+
 function M.open_table()
     local s = M.session()
     local run
