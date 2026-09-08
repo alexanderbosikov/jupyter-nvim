@@ -536,3 +536,107 @@ def test_shutdown_deadline_kills_stubborn_kernel(live):
         time.sleep(0.05)
     else:
         raise AssertionError(f"ядро {pid} выжило после shutdown с дедлайном")
+
+
+def test_attach_keeps_state_of_a_live_kernel():
+    """Смысл подключения: пережить перезапуск редактора, не потеряв память ядра.
+
+    Тяжёлые фреймы после долгого запроса стоят дороже самого редактора, а сейчас они
+    умирали вместе с ним.
+    """
+    import io
+    import os
+    import time
+
+    from conftest import Sink
+
+    from jupyter_nvim.kernel import KernelSession
+    from jupyter_nvim.router import Router
+    from jupyter_nvim.rpc import Rpc
+
+    first_sink = Sink()
+    first = KernelSession(Rpc(stdin=io.StringIO(""), stdout=first_sink), Router(), poll=0.05)
+    first.start(kernel_name="python3")
+    first_sink.wait(is_ready, what="готовности первого")
+    first.execute("a3f9", 1, "сокровище = 42")
+    first_sink.wait(done_for("a3f9"), what="первой ячейки")
+
+    connection, pid = first.connection_file(), first.kernel_pid()
+    first._stop_pumps()  # редактор ушёл, а ядро осталось жить
+
+    second_sink = Sink()
+    second = KernelSession(Rpc(stdin=io.StringIO(""), stdout=second_sink), Router(), poll=0.05)
+    try:
+        info = second.attach(connection_file=connection, kernel_name="python3", pid=pid)
+        assert info["attached"] is True
+        second_sink.wait(is_ready, what="готовности после подключения")
+
+        second.execute("b7e1", 1, "print(сокровище)")
+        msgs = second_sink.wait(done_for("b7e1"), what="ячейки в подключённом ядре")
+
+        assert stream_text(msgs, "b7e1") == "42", "состояние ядра должно пережить смену хозяина"
+        (done,) = pick(msgs, Ev.EXEC_DONE, "b7e1")
+        assert done["data"]["status"] == ExecStatus.OK
+    finally:
+        second.shutdown(deadline=1.0)
+
+    # В жизни подключённое ядро — сирота, и убитого пожинает launchd. Здесь оно осталось
+    # дитём pytest, поэтому после SIGKILL висит зомби, а os.kill(pid, 0) на зомби проходит.
+    # Пожинаем через первую сессию: её poll() и снимет запись из таблицы процессов.
+    try:
+        first.shutdown(deadline=1.0)
+    except Exception:
+        pass
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError(f"подключённое ядро {pid} пережило гашение")
+
+
+def test_attached_kernel_interrupts_by_signal():
+    """interrupt_kernel для чужого ядра бросает RuntimeError — прерываем сигналом."""
+    import io
+    import os
+    import time
+
+    from conftest import Sink
+
+    from jupyter_nvim.kernel import KernelSession
+    from jupyter_nvim.router import Router
+    from jupyter_nvim.rpc import Rpc
+
+    owner_sink = Sink()
+    owner = KernelSession(Rpc(stdin=io.StringIO(""), stdout=owner_sink), Router(), poll=0.05)
+    owner.start(kernel_name="python3")
+    owner_sink.wait(is_ready, what="готовности")
+    connection, pid = owner.connection_file(), owner.kernel_pid()
+    owner._stop_pumps()
+
+    sink = Sink()
+    guest = KernelSession(Rpc(stdin=io.StringIO(""), stdout=sink), Router(), poll=0.05)
+    try:
+        guest.attach(connection_file=connection, kernel_name="python3", pid=pid)
+        sink.wait(is_ready, what="готовности после подключения")
+
+        guest.execute("c001", 1, "import time\nwhile True:\n    time.sleep(0.05)")
+        sink.wait(lambda ms: pick(ms, Ev.EXEC_STARTED, "c001"), what="начала ячейки")
+        time.sleep(0.5)
+        guest.interrupt()
+
+        msgs = sink.wait(done_for("c001"), timeout=30, what="прерывания")
+        (done,) = pick(msgs, Ev.EXEC_DONE, "c001")
+        assert done["data"]["status"] == ExecStatus.ERROR
+        (err,) = pick(msgs, Ev.EXEC_ERROR, "c001")
+        assert err["data"]["ename"] == "KeyboardInterrupt", err["data"]
+    finally:
+        guest.shutdown(deadline=1.0)
+        try:
+            owner.shutdown(deadline=1.0)  # пожать зомби, см. соседний тест
+        except Exception:
+            pass

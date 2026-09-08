@@ -9,6 +9,7 @@ V = 1
 class Op:
     HELLO = "hello"
     KERNEL_START = "kernel.start"
+    KERNEL_ATTACH = "kernel.attach"
     KERNEL_STATE = "kernel.state"
     KERNEL_RESTART = "kernel.restart"
     KERNEL_SHUTDOWN = "kernel.shutdown"

@@ -83,17 +83,13 @@ end
 
 ---@param opts? table notebook, cwd, kernel_name, out_dir, history_limit
 ---@param cb? fun(err: table|nil, started: table|nil)
-function Kernel:start(opts, cb)
-    opts = opts or {}
-    local function boot()
-        self.sidecar:request("kernel.start", {
-            kernel_name = opts.kernel_name or self.kernel_name,
-            cwd = opts.cwd,
-            env = self.env,
-            notebook = opts.notebook,
-            out_dir = opts.out_dir,
-            history_limit = opts.history_limit,
-        }, function(err, data)
+---Поднять сайдкар, если надо, и позвать на нём операцию про ядро.
+---@param op string
+---@param args table
+---@param cb? fun(err: table|nil, data: table|nil)
+function Kernel:_boot(op, args, cb)
+    local function call()
+        self.sidecar:request(op, args, function(err, data)
             if err then
                 self:_drop_queue(err)
             end
@@ -102,7 +98,7 @@ function Kernel:start(opts, cb)
     end
 
     if self.sidecar:is_running() then
-        boot()
+        call()
         return
     end
     self.sidecar:start(function(err)
@@ -111,8 +107,40 @@ function Kernel:start(opts, cb)
             if cb then cb(err) end
             return
         end
-        boot()
+        call()
     end)
+end
+
+function Kernel:start(opts, cb)
+    opts = opts or {}
+    self:_boot("kernel.start", {
+        kernel_name = opts.kernel_name or self.kernel_name,
+        cwd = opts.cwd,
+        env = self.env,
+        notebook = opts.notebook,
+        out_dir = opts.out_dir,
+        history_limit = opts.history_limit,
+    }, cb)
+end
+
+---Подключиться к уже живущему ядру вместо запуска своего.
+---
+---Смысл — пережить перезапуск редактора: тяжёлые фреймы после долгого запроса остаются
+---в памяти ядра. Ядро при этом чужое, поэтому сайдкар управляет им через pid — см. §6.5.
+---@param opts table connection_file, pid, kernel_name, notebook, cwd, out_dir, history_limit
+---@param cb? fun(err: table|nil, data: table|nil)
+function Kernel:attach(opts, cb)
+    opts = opts or {}
+    self:_boot("kernel.attach", {
+        connection_file = opts.connection_file,
+        pid = opts.pid,
+        kernel_name = opts.kernel_name or self.kernel_name,
+        cwd = opts.cwd,
+        env = self.env,
+        notebook = opts.notebook,
+        out_dir = opts.out_dir,
+        history_limit = opts.history_limit,
+    }, cb)
 end
 
 ---@param cb? fun(err: table|nil, data: table|nil)

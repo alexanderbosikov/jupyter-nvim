@@ -35,7 +35,7 @@ class App:
                 "v": V,
                 "version": __version__,
                 "python": sys.version.split()[0],
-                "caps": ["execute", "interrupt", "stdin", "table.page"],
+                "caps": ["execute", "interrupt", "stdin", "table.page", "attach"],
                 "kernel": session.state(),
             }
 
@@ -57,6 +57,27 @@ class App:
                 cwd=args.get("cwd"),
                 env=args.get("env"),
                 # лог ядра рядом с выводами, если ноутбук известен
+                log_file=str(self.outdir.base / "kernel.log") if self.outdir else None,
+            )
+
+        @rpc.op(Op.KERNEL_ATTACH)
+        def _attach(args: dict) -> dict:
+            notebook = args.get("notebook")
+            if notebook:
+                self.outdir = self._usable_outdir(
+                    OutDir(Path(notebook), args.get("out_dir") or DEFAULT_DIR)
+                )
+            if args.get("history_limit"):
+                session._history_limit = int(args["history_limit"])
+            if not args.get("connection_file"):
+                raise RpcError(ErrCode.BAD_REQUEST, "нужен connection_file")
+            return session.attach(
+                connection_file=str(args["connection_file"]),
+                kernel_name=args.get("kernel_name") or "python3",
+                pid=args.get("pid"),
+                cwd=args.get("cwd"),
+                env=args.get("env"),
+                # лог понадобится, только если это ядро придётся перезапускать своим
                 log_file=str(self.outdir.base / "kernel.log") if self.outdir else None,
             )
 

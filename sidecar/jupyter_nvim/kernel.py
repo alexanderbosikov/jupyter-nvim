@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import sys
 import tempfile
 import threading
@@ -47,6 +48,15 @@ SILENT_TYPES = {"execute_input"}
 """Есть родитель, но показывать нечего: код ячейки Lua и так знает."""
 
 
+def _pid_alive(pid: int) -> bool:
+    """Жив ли процесс. Сигнал 0 ничего не делает, только проверяет право его послать."""
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
 class KernelSession:
     def __init__(
         self,
@@ -65,6 +75,8 @@ class KernelSession:
         self._pending: dict[str, dict[str, Any]] = {}
 
         self._km: Any = None
+        self._attached_pid: int | None = None  # не None — ядро чужое, подключённое
+        self._launch_args: dict[str, Any] = {}
         self._client: Any = None
         self._pump_stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -122,6 +134,13 @@ class KernelSession:
 
         self._set_state(KernelState.STARTING)
         self._km = KernelManager(kernel_name=kernel_name)
+        self._attached_pid = None
+        self._launch_args = {
+            "kernel_name": kernel_name,
+            "cwd": cwd,
+            "env": env,
+            "log_file": log_file,
+        }
         launch = {"env": self._launch_env(env), "stderr": self._open_kernel_log(log_file)}
         if cwd:
             launch["cwd"] = cwd
@@ -135,7 +154,79 @@ class KernelSession:
             "connection_file": self._km.connection_file,
             "kernel_name": kernel_name,
             "kernel_log": str(self._kernel_log),
+            "attached": False,
         }
+
+    def attach(
+        self,
+        connection_file: str,
+        kernel_name: str = "python3",
+        pid: int | None = None,
+        cwd: str | None = None,
+        env: dict | None = None,
+        log_file: str | None = None,
+    ) -> dict[str, Any]:
+        """Подключиться к уже живущему ядру по его connection-файлу.
+
+        Смысл — пережить перезапуск редактора, не теряя состояния: тяжёлые фреймы после
+        долгого запроса остаются в памяти ядра. Обмен сообщениями с чужим процессом
+        работает как со своим, а вот управление им — нет: `KernelManager` без провизионера
+        отвечает `is_alive() == False`, `interrupt_kernel` бросает RuntimeError, а
+        `shutdown_kernel` — AssertionError, оставляя ядро живым. Проверено на
+        jupyter_client 8.9.1, поэтому всё управление подключённым ядром идёт через pid.
+
+        Аргументы запуска запоминаются: рестарт подключённого ядра — это погасить чужое и
+        поднять своё, иначе перезапускать было бы нечем.
+        """
+        from jupyter_client.manager import KernelManager
+
+        if self._km is not None:
+            raise RpcError(ErrCode.BAD_REQUEST, "ядро уже запущено; нужен kernel.shutdown")
+        if pid is not None and not _pid_alive(int(pid)):
+            raise RpcError(ErrCode.BAD_REQUEST, f"ядра с pid {pid} нет в живых")
+        if not os.path.exists(connection_file):
+            raise RpcError(ErrCode.BAD_REQUEST, f"нет connection-файла {connection_file}")
+
+        self._set_state(KernelState.STARTING)
+        km = KernelManager(kernel_name=kernel_name)
+        km.load_connection_file(connection_file)
+        self._km = km
+        self._attached_pid = int(pid) if pid else None
+        self._launch_args = {
+            "kernel_name": kernel_name,
+            "cwd": cwd,
+            "env": env,
+            "log_file": log_file,
+        }
+        self._open_client()
+        self._write_runtime(kernel_name)
+
+        return {
+            "kernel_id": os.path.basename(connection_file),
+            "connection_file": connection_file,
+            "kernel_name": kernel_name,
+            "kernel_log": str(self._kernel_log) if self._kernel_log else "",
+            "attached": True,
+        }
+
+    def _alive(self) -> bool:
+        """Живо ли ядро.
+
+        У подключённого чужого процесса спрашивать некого: менеджер без провизионера
+        всегда отвечает «нет», и сторож немедленно объявил бы ядро мёртвым.
+        """
+        if self._km is None:
+            return False
+        if self._attached_pid is not None:
+            return _pid_alive(self._attached_pid)
+        return self._km.is_alive()
+
+    def _interrupt_kernel(self) -> None:
+        """Прервать выполнение. Чужому процессу — сигналом: менеджер этого не умеет."""
+        if self._attached_pid is not None:
+            os.kill(self._attached_pid, signal.SIGINT)
+        else:
+            self._km.interrupt_kernel()
 
     def _launch_env(self, env: dict | None) -> dict[str, str]:
         """Окружение ядра: свой bin впереди PATH.
@@ -253,9 +344,9 @@ class KernelSession:
                 self._maybe_ready()
                 return
             try:
-                if not self._km.is_alive():
+                if not self._alive():
                     return
-                self._km.interrupt_kernel()
+                self._interrupt_kernel()
             except Exception:
                 return
         self._rpc.log("warn", "маршрут stdin не подтверждён: input() в ячейке может не сработать")
@@ -292,6 +383,16 @@ class KernelSession:
 
     def restart(self) -> dict[str, Any]:
         self._require_km()
+        if self._attached_pid is not None:
+            # чужое ядро перезапускать нечем: провизионера нет, спавнить его мы не можем.
+            # Гасим и поднимаем своё — снаружи это ровно то, чего ждут от «перезапустить».
+            args = dict(self._launch_args)
+            aborted = self._router.abort_all()
+            self.shutdown(deadline=1.0)
+            started = self.start(**args)
+            for ex in aborted:
+                self._emit_done(ex)
+            return {"kernel_id": started["kernel_id"], "aborted": len(aborted)}
         self._restarting = True
         try:
             self._stop_pumps()
@@ -308,7 +409,7 @@ class KernelSession:
 
     def interrupt(self) -> dict[str, Any]:
         self._require_km()
-        self._km.interrupt_kernel()
+        self._interrupt_kernel()
         return {"active": len(self._router)}
 
     def kernel_pid(self) -> int | None:
@@ -379,22 +480,59 @@ class KernelSession:
         try:
             # мёртвое ядро гасить нечем: shutdown_request уйдёт в никуда, а jupyter_client
             # будет ждать его shutdown_wait_time (5 с) впустую
-            if self._km.is_alive():
-                if deadline is not None:
-                    self._km.shutdown_wait_time = deadline
-                self._km.shutdown_kernel(now=False)
+            if self._alive():
+                if self._attached_pid is not None:
+                    self._shutdown_attached(deadline or 5.0)
+                else:
+                    if deadline is not None:
+                        self._km.shutdown_wait_time = deadline
+                    self._km.shutdown_kernel(now=False)
         except Exception as e:
             self._rpc.log("warn", f"гашение ядра: {type(e).__name__}: {e}")
         finally:
             self._clear_runtime()
-            self._km.cleanup_resources()  # чтобы не оставлять kernel-*.json в runtime/
+            if self._attached_pid is None:
+                # connection-файл наш, его и убираем; чужой трогаем только если ядро умерло
+                self._km.cleanup_resources()
+            elif not _pid_alive(self._attached_pid):
+                self._km.cleanup_resources()
             if self._kernel_log_fh is not None:
                 self._kernel_log_fh.close()
                 self._kernel_log_fh = None
             self._km = None
+            self._attached_pid = None
+            self._launch_args = {}
             self._client = None
             self._set_state(KernelState.NONE)
         return {}
+
+    def _shutdown_attached(self, deadline: float) -> None:
+        """Погасить чужое ядро: вежливо, потом сигналами.
+
+        `shutdown_kernel` для подключённого ядра бросает AssertionError и оставляет его
+        живым (jupyter_client 8.9.1), поэтому повторяем его лестницу вручную: просьба по
+        протоколу, затем SIGTERM на половине срока, затем SIGKILL.
+        """
+        pid = self._attached_pid
+        try:
+            if self._client is not None:
+                self._client.shutdown()
+        except Exception as e:
+            self._rpc.log("warn", f"просьба погаснуть не дошла: {type(e).__name__}: {e}")
+        if pid is None:
+            return
+        for sig in (None, signal.SIGTERM, signal.SIGKILL):
+            if sig is not None:
+                try:
+                    os.kill(pid, sig)
+                except OSError:
+                    return
+            waited = 0.0
+            while waited < deadline / 2:
+                if not _pid_alive(pid):
+                    return
+                time.sleep(0.05)
+                waited += 0.05
 
     def _stop_pumps(self) -> None:
         self._pump_stop.set()
@@ -481,7 +619,7 @@ class KernelSession:
             if self._restarting or self._km is None:
                 continue
             try:
-                alive = self._km.is_alive()
+                alive = self._alive()
             except Exception:
                 alive = False
             if not alive:

@@ -42,6 +42,7 @@ end
 ---@field sidecar_pid integer
 ---@field kernel_name string|nil
 ---@field started_at string|nil
+---@field connection_file string|nil по нему к ядру можно подключиться (см. jupyter.attach)
 ---@field stale boolean след остался, а ядра уже нет — можно просто убрать файл
 
 ---Прочитать след.
@@ -85,6 +86,7 @@ function M.check(path, opts)
         sidecar_pid = record.sidecar_pid,
         kernel_name = record.kernel_name,
         started_at = record.started_at,
+        connection_file = record.connection_file,
         stale = true,
     }
     if not alive(record.kernel_pid) then

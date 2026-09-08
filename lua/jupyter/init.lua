@@ -793,6 +793,55 @@ function M.orphans(kill)
     return found
 end
 
+---Подключиться к ядру, оставшемуся от прошлой сессии редактора.
+---
+---Ядро переживает и перезапуск nvim, и смерть сайдкара: оно чужой процесс, а не наш
+---потомок. Смысл подключения в том, что в нём осталась память — фреймы после долгого
+---запроса стоят дороже самого редактора. Ядро ищется по следу рядом с выводами, тому же,
+---по которому находятся ядра без хозяина (jupyter.orphans).
+---@param buf? integer
+---@return boolean начали ли подключение
+function M.attach(buf)
+    local s = M.session(buf)
+    if s.started then
+        vim.notify("jupyter.nvim: у этого буфера уже своё ядро", vim.log.levels.WARN)
+        return false
+    end
+    local orphans = require("jupyter.orphans")
+    local name = vim.api.nvim_buf_get_name(s.buf)
+    local found = name ~= "" and orphans.check(orphans.record_for(name, M.config.out_dir)) or nil
+    if not found or found.stale or not found.connection_file then
+        vim.notify(
+            "jupyter.nvim: подключаться не к чему — живого ядра от прошлой сессии нет",
+            vim.log.levels.WARN
+        )
+        return false
+    end
+
+    s.started = true
+    s.kernel:attach({
+        connection_file = found.connection_file,
+        pid = found.kernel_pid,
+        kernel_name = found.kernel_name,
+        notebook = name,
+        cwd = vim.fn.fnamemodify(name, ":h"),
+    }, function(err)
+        if err then
+            s.started = false
+            vim.notify(
+                ("jupyter.nvim: подключиться не удалось — %s: %s"):format(err.code or "?", err.msg or ""),
+                vim.log.levels.ERROR
+            )
+            return
+        end
+        vim.notify(("jupyter.nvim: подключились к ядру %d, живёт с %s"):format(
+            found.kernel_pid,
+            found.started_at or "?"
+        ))
+    end)
+    return true
+end
+
 ---Проверить, не осталось ли у этого ноутбука ядра от прошлой жизни.
 ---
 ---Зовётся при открытии: чтение одного файла, которого обычно нет. Если он есть, а
@@ -815,7 +864,9 @@ function M.warn_orphan(buf)
         return nil
     end
     vim.notify(
-        ("jupyter.nvim: %s. Снять: :JupyterOrphans!"):format(orphans.describe(orphan)),
+        ("jupyter.nvim: %s. Подключиться — :JupyterAttach, снять — :JupyterOrphans!"):format(
+            orphans.describe(orphan)
+        ),
         vim.log.levels.WARN
     )
     return orphan
