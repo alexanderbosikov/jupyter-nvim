@@ -6,6 +6,7 @@
 
 local cellid = require("jupyter.cellid")
 local cells = require("jupyter.cells")
+local edit = require("jupyter.edit")
 local common = require("jupyter.ui.common")
 local exec = require("jupyter.exec")
 local highlight = require("jupyter.highlight")
@@ -63,6 +64,13 @@ M.defaults = {
         show_toc = "<leader>jT",
         open_table = "<leader>jt",
         edit_cell_args = "<leader>jg", -- g как «аргументы»: jа/jb/jc уже заняты
+        -- перестройка ячеек. m и y — как в командном режиме Jupyter, остальное свободно
+        split_cell = "<leader>js",
+        merge_cell = "<leader>jM",
+        move_cell_up = "<leader>jK",
+        move_cell_down = "<leader>jJ",
+        cell_to_markdown = "<leader>jm",
+        cell_to_code = "<leader>jy",
         interrupt = "<leader>ji",
         restart = "<leader>jR",
     },
@@ -807,6 +815,109 @@ function M.edit_cell_args()
         end
         M.cell_args(input)
     end)
+    return true
+end
+
+---Ячейка под курсором вместе с буфером и строкой.
+---@return jupyter.Cell|nil cell, integer buf, integer row
+local function here()
+    local buf = vim.api.nvim_get_current_buf()
+    local row = vim.api.nvim_win_get_cursor(0)[1]
+    return cells.at(buf, row), buf, row
+end
+
+---После перестройки статусы под ячейками стоят не там: extmark'и привязаны к строкам,
+---а строки уехали. Перерисовка дешёвая (около миллисекунды), так что зовём её всегда.
+---@param buf integer
+---@param row integer|nil куда поставить курсор
+local function settle(buf, row)
+    if row then
+        pcall(vim.api.nvim_win_set_cursor, 0, { row, 0 })
+    end
+    M.repaint(buf)
+end
+
+---Разрезать ячейку по курсору: строка под курсором и ниже уезжают в новую.
+---@return boolean
+function M.split_cell()
+    local _, buf, row = here()
+    local at = edit.split(buf, row)
+    if not at then
+        vim.notify("jupyter.nvim: резать нечего — курсор не в теле ячейки", vim.log.levels.WARN)
+        return false
+    end
+    settle(buf, at)
+    return true
+end
+
+---Склеить ячейку со следующей.
+---@return boolean
+function M.merge_cell()
+    local cell, buf = here()
+    if not cell then
+        vim.notify("jupyter.nvim: под курсором нет ячейки", vim.log.levels.WARN)
+        return false
+    end
+    local ok, why = edit.merge(buf, cell)
+    if not ok then
+        vim.notify("jupyter.nvim: не склеить — " .. (why or "?"), vim.log.levels.WARN)
+        return false
+    end
+    settle(buf, nil)
+    return true
+end
+
+---@param dir "up"|"down"
+---@return boolean
+local function move(dir)
+    local cell, buf = here()
+    if not cell then
+        vim.notify("jupyter.nvim: под курсором нет ячейки", vim.log.levels.WARN)
+        return false
+    end
+    local at = edit.move(buf, cell, dir)
+    if not at then
+        vim.notify("jupyter.nvim: двигаться некуда", vim.log.levels.WARN)
+        return false
+    end
+    settle(buf, at)
+    return true
+end
+
+function M.move_cell_up()
+    return move("up")
+end
+
+function M.move_cell_down()
+    return move("down")
+end
+
+---Превратить код-ячейку в markdown.
+---@return boolean
+function M.cell_to_markdown()
+    local cell, buf = here()
+    if not cell then
+        vim.notify("jupyter.nvim: под курсором нет код-ячейки", vim.log.levels.WARN)
+        return false
+    end
+    edit.to_markdown(buf, cell)
+    settle(buf, nil)
+    return true
+end
+
+---Превратить markdown под курсором в код-ячейку.
+---@return boolean
+function M.cell_to_code()
+    local _, buf, row = here()
+    local at = edit.to_code(buf, row)
+    if not at then
+        vim.notify(
+            "jupyter.nvim: тут нечего превращать — это уже код или пустая строка",
+            vim.log.levels.WARN
+        )
+        return false
+    end
+    settle(buf, at)
     return true
 end
 
