@@ -19,6 +19,29 @@
 - [image.nvim](https://github.com/3rd/image.nvim) — опционально, для картинок
 - [jupytext.nvim](https://github.com/GCBallesteros/jupytext.nvim) — если работаешь с `.ipynb`
 
+**Про jupytext.nvim стоит знать одно.** Он кладёт результат конвертации в `<имя>.md` рядом
+с ноутбуком и, если файл уже есть, **заново не конвертирует** — читает его, не сверяя даты
+(`init.lua:81`). Обычно такой файл считается временным и убирается при закрытии буфера, но
+уцелевший однажды — после аварийного выхода или созданный руками — становится постоянным.
+С этого момента nvim показывает его вместо ноутбука: правки, сделанные в Jupyter Lab,
+невидимы, а `:w` затирает их устаревшим содержимым. Плагин тут ни при чём и помочь не может
+— он получает уже готовый буфер. Лечится автокомандой, которая сносит кэш, если ноутбук
+новее:
+
+```lua
+vim.api.nvim_create_autocmd("BufReadCmd", { -- ДО jupytext.setup(): порядок регистрации
+    pattern = "*.ipynb",
+    group = vim.api.nvim_create_augroup("JupytextDropStaleCache", { clear = true }),
+    callback = function(ev)
+        local notebook = vim.fn.resolve(vim.fn.expand(ev.match))
+        local cache = vim.fn.fnamemodify(notebook, ":r") .. ".md"
+        if vim.fn.filereadable(cache) == 1 and vim.fn.getftime(cache) < vim.fn.getftime(notebook) then
+            vim.fn.delete(cache)
+        end
+    end,
+})
+```
+
 ## Установка
 
 ```lua
