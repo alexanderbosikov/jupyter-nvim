@@ -392,6 +392,26 @@ describe("параметры магики", function()
         assert.equals("a3f9", require("jupyter.cellid").parse(marker(buf)))
     end)
 
+    it("клавиша спрашивает, подставив нынешние, и не стирает при отмене", function()
+        local jupyter = require("jupyter")
+        jupyter.setup({})
+        local buf = fence({ '```sql magic_args="df_name=old"', "select 1", "```" })
+        vim.api.nvim_win_set_buf(0, buf)
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        local asked
+        local input = vim.ui.input
+        vim.ui.input = function(opts, cb)
+            asked = opts
+            cb(nil) -- отмена
+        end
+        jupyter.edit_cell_args()
+        vim.ui.input = input
+
+        assert.equals("df_name=old", asked.default, "в приглашении должны стоять нынешние")
+        assert.equals('```sql magic_args="df_name=old"', marker(buf), "отмена ничего не меняет")
+    end)
+
     it("у обычной python-ячейки параметров не бывает", function()
         local buf = fence({ "```python", "x = 1", "```" })
 

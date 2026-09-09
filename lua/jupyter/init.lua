@@ -62,6 +62,7 @@ M.defaults = {
         toggle_output = "<leader>jo",
         show_toc = "<leader>jT",
         open_table = "<leader>jt",
+        edit_cell_args = "<leader>jg", -- g как «аргументы»: jа/jb/jc уже заняты
         interrupt = "<leader>ji",
         restart = "<leader>jR",
     },
@@ -778,6 +779,34 @@ function M.cell_args(args)
     local shown = vim.trim(args or "")
     vim.notify(shown ~= "" and ("jupyter.nvim: параметры ячейки — %s"):format(shown)
         or "jupyter.nvim: параметры ячейки убраны")
+    return true
+end
+
+---Спросить параметры магики, подставив нынешние.
+---
+---Отдельно от `cell_args`, а не «нет аргументов — спросить»: команда без аргументов
+---параметры убирает, и путать эти два смысла в одном имени — способ однажды стереть их
+---нажатием клавиши.
+---@return boolean
+function M.edit_cell_args()
+    local buf = vim.api.nvim_get_current_buf()
+    local cell = cells.at(buf, vim.api.nvim_win_get_cursor(0)[1])
+    if not cell or not cells.MAGIC_LANGS[cell.lang or ""] then
+        vim.notify(
+            "jupyter.nvim: параметры бывают только у ячейки с магикой языка (```sql)",
+            vim.log.levels.WARN
+        )
+        return false
+    end
+    vim.ui.input({
+        prompt = ("параметры %%%%%s: "):format(cell.lang),
+        default = cell.magic_args or "",
+    }, function(input)
+        if input == nil then
+            return -- передумал
+        end
+        M.cell_args(input)
+    end)
     return true
 end
 
