@@ -16,6 +16,7 @@ local output = require("jupyter.ui.output")
 local status_ui = require("jupyter.ui.status")
 local store = require("jupyter.store")
 local picker = require("jupyter.ui.picker")
+local snapshot = require("jupyter.snapshot")
 local toc = require("jupyter.toc")
 local table_view = require("jupyter.ui.table")
 
@@ -1334,6 +1335,35 @@ function M.status()
         history_cells = known_cells,
         history_runs = known_runs,
     }
+end
+
+---Снимок ноутбука одной структурой: ячейки, их id и последний прогон каждой.
+---
+---Нужен тому, кто читает ноутбук снаружи — скрипту или агенту через `--remote-expr`:
+---иначе он повторяет разбор фенсов и раскладку `.jupyter-out` у себя, и эта копия
+---правил расходится с нашей. Ничего не пишет: снимок — производное представление.
+---@param buf? integer
+---@return table
+function M.snapshot(buf)
+    local s = M.session(buf)
+    return snapshot.build(s.buf, { store = s.store, kernel = s.kernel, exec = s.exec })
+end
+
+---Тот же снимок строкой JSON: форма, в которой его забирает `--remote-expr`.
+---@param buf? integer
+---@return string
+function M.snapshot_json(buf)
+    return vim.json.encode(M.snapshot(buf))
+end
+
+---Снимок в файл. Путь возвращается, чтобы вызвавший снаружи сразу знал, что читать.
+---@param path? string без пути — во временный файл
+---@param buf? integer
+---@return string
+function M.write_snapshot(path, buf)
+    path = (path and path ~= "") and vim.fn.fnamemodify(path, ":p") or (vim.fn.tempname() .. ".json")
+    vim.fn.writefile({ M.snapshot_json(buf) }, path)
+    return path
 end
 
 ---Листать историю прогонов ячейки под курсором.
