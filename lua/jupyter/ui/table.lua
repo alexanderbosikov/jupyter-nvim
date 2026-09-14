@@ -21,11 +21,17 @@ M.DEFAULT_KEYS = {
     { mode = "n", key = "]]", action = "page_last" },
     { mode = "n", key = "[[", action = "page_first" },
     { mode = "n", key = "R", action = "refresh" },
+    { mode = "n", key = "y", action = "yank_page" },
+    { mode = "n", key = "Y", action = "yank_all" },
     { mode = "n", key = "q", action = "close" },
 }
 
 local GAP = "  "
 local RULE = "─"
+
+-- Порог для «скопировать целиком»: регистр — не файл, и миллион строк в нём не нужен
+-- никому. Выше порога спрашиваем, а не собираем молча.
+M.YANK_LIMIT = 50000
 
 local clip = common.clip
 
@@ -38,6 +44,45 @@ local clip = common.clip
 ---@return string
 local function oneline(text)
     return (tostring(text or ""):gsub("[\r\n]+", " "))
+end
+
+---Данные как TSV: шапка и строки, разделитель — табуляция.
+---
+---Табы, а не выравнивание пробелами: именно их Slack, Sheets и Excel превращают при
+---вставке в таблицу, а нарисованные рамки и отбивку пришлось бы вычищать руками.
+---Значение с табом или переводом строки внутри сплющиваем — иначе колонки разъедутся
+---и вставленная таблица окажется врущей.
+---@param header string[]
+---@param rows string[][]
+---@return string
+function M.tsv(header, rows)
+    local function cell(value)
+        return (oneline(value):gsub("\t", " "))
+    end
+    local out = { table.concat(vim.tbl_map(cell, header or {}), "\t") }
+    for _, row in ipairs(rows or {}) do
+        out[#out + 1] = table.concat(vim.tbl_map(cell, row), "\t")
+    end
+    return table.concat(out, "\n")
+end
+
+---Положить текст в регистры: безымянный и системный.
+---
+---Без системного копирование теряет главный смысл — унести таблицу в Slack или Sheets, —
+---а `clipboard=unnamedplus` включён далеко не у всех. Провайдера может и не быть, поэтому
+---системный регистр под pcall, и об этом мы говорим вслух, а не молчим.
+---@param text string
+---@return boolean системный регистр удался
+local function to_registers(text)
+    vim.fn.setreg('"', text)
+    return (pcall(vim.fn.setreg, "+", text))
+end
+
+---Хвост сообщения о копировании: куда именно легло.
+---@param ok boolean
+---@return string
+local function where(ok)
+    return ok and "" or ' (только в ", системного буфера обмена нет)'
 end
 
 local function pad(text, width)
@@ -87,7 +132,10 @@ function M.format(header, rows, opts)
         for i = 1, #header do
             table.insert(parts, pad(clip(oneline(cells[i]), widths[i]), widths[i]))
         end
-        local body = vim.trim(table.concat(parts, GAP), " ")
+        -- Срезаем только ХВОСТОВЫЕ пробелы. Обоюдный trim съедал левое поле строки,
+        -- у которой первое значение пустое: колонка схлопывалась, и число из второй
+        -- колонки вставало под заголовок первой — выглядело так, будто значение не то.
+        local body = (table.concat(parts, GAP):gsub("%s+$", ""))
         if gutter == 0 then
             return " " .. body
         end
@@ -135,6 +183,8 @@ function M.new(opts)
         label = nil,
         offset = 0,
         total = 0,
+        header = {},
+        rows = {},
         layout = {},
         -- стек сортировки: первый элемент — главный ключ, остальные разрешают равенство
         order = {},
@@ -209,6 +259,9 @@ function View:page(offset)
         end
         self.offset = page.offset
         self.total = page.total_rows
+        -- страницу держим и данными: из нарисованных строк её обратно не собрать,
+        -- а копировать надо значения, а не рамки
+        self.header, self.rows = page.header, page.rows
         local lines, layout = M.format(page.header, page.rows, {
             max_col = self.max_col,
             first_row = page.offset + 1,
@@ -332,6 +385,46 @@ function View:get_actions()
             self:page(math.floor(math.max(0, self.total - 1) / self.page_size) * self.page_size)
         end,
         refresh = function() self:page(self.offset) end,
+        yank_page = function()
+            if not self.header or #self.header == 0 then
+                return
+            end
+            local ok = to_registers(M.tsv(self.header, self.rows))
+            vim.notify(("jupyter.nvim: страница скопирована, строк — %d%s"):format(#self.rows, where(ok)))
+        end,
+        yank_all = function()
+            if not self.path or self.total == 0 then
+                return
+            end
+            if self.total > M.YANK_LIMIT then
+                local answer = vim.fn.confirm(
+                    ("В таблице %d строк. Скопировать целиком?"):format(self.total),
+                    "&Да\n&Нет",
+                    2
+                )
+                if answer ~= 1 then
+                    return
+                end
+            end
+            -- limit сайдкар сверху не ограничивает, так что отдельная операция протокола
+            -- не нужна: та же table.page, только на всю таблицу и в том же порядке
+            self.sidecar:request("table.page", {
+                path = self.path,
+                offset = 0,
+                limit = self.total,
+                order_by = #self.order > 0 and self.order or nil,
+            }, function(err, page)
+                if err then
+                    vim.notify(
+                        "jupyter.nvim: таблицу целиком прочитать не вышло — " .. (err.msg or "?"),
+                        vim.log.levels.ERROR
+                    )
+                    return
+                end
+                local ok = to_registers(M.tsv(page.header, page.rows))
+                vim.notify(("jupyter.nvim: таблица скопирована, строк — %d%s"):format(#page.rows, where(ok)))
+            end)
+        end,
         close = function() self:close() end,
     }
 end

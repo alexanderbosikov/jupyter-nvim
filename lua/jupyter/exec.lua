@@ -17,11 +17,33 @@ local cells = require("jupyter.cells")
 
 local M = {}
 
+---Состояния, из которых прогон уже не выйдет.
+M.DONE = { ok = true, error = true, aborted = true }
+
+---Прогон завершён?
+---
+---Отдельный предикат, а не сравнение со строкой: пока состояний было четыре, всюду
+---писали `status ~= "running"`, и появление «в очереди» тихо превратило это в «готов» —
+---тест с живым ядром переставал ждать и падал на пустом выводе.
+---@param run jupyter.Run|nil
+---@return boolean
+function M.is_done(run)
+    return run ~= nil and M.DONE[run.status] == true
+end
+
+---Прогон ещё в работе: стоит в очереди ядра или выполняется.
+---@param run jupyter.Run|nil
+---@return boolean
+function M.is_busy(run)
+    return run ~= nil and (run.status == "queued" or run.status == "running")
+end
+
 ---@class jupyter.Run
 ---@field cell_id string
 ---@field run_id integer
 ---@field lines string[] вывод, как он показывается
----@field status "running"|"ok"|"error"|"aborted"
+---@field status "queued"|"running"|"ok"|"error"|"aborted"
+---@field execution_count integer|nil счётчик ядра, тот самый In [12]
 ---@field error table|nil
 ---@field table table|nil результат-датафрейм: path, rows, cols, schema
 ---@field duration_ms integer|nil
@@ -99,7 +121,10 @@ function Exec:run(buf, cell, opts)
         cell_id = cell_id,
         run_id = self._next_run,
         lines = {},
-        status = "running",
+        -- «в очереди», а не «выполняется»: execute_request уходит ядру сразу, но
+        -- выполняются они по одному. Момент, когда очередь стала работой, приносит
+        -- событие exec.started (сайдкар шлёт его на iopub `status: busy`)
+        status = "queued",
         -- та же формула, что в сайдкаре (hashlib.sha256(code)[:8]): по ней видно,
         -- что показанный вывод получен не из того кода, который сейчас в ячейке
         code_sha = vim.fn.sha256(code):sub(1, 8),
@@ -171,9 +196,13 @@ function Exec:on_event(msg)
         run.error = { code = data.ename, msg = data.evalue }
         -- элемент трейсбека IPython может сам содержать несколько строк
         vim.list_extend(run.lines, require("jupyter.ui.common").flatten(data.traceback))
+    elseif msg.ev == "exec.started" then
+        run.status = "running"
+        run.started_at = data.started_at or run.started_at
     elseif msg.ev == "exec.done" then
         run.status = data.status or "ok"
         run.duration_ms = data.duration_ms
+        run.execution_count = data.execution_count
     elseif msg.ev == "clear_output" then
         run.lines = {}
         self._stream_tail[cell_id] = {}

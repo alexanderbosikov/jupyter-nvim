@@ -19,9 +19,20 @@ M.NS = vim.api.nvim_create_namespace("jupyter.status")
 ---@param stale boolean|nil
 ---@return string text, string group
 function M.text_of(run, stale)
+    -- Номер прогона ядра — тот самый `In [12]` из Lab. Он не наш счётчик (`run_id`), а
+    -- счётчик ядра: по нему видно порядок выполнения и то, что ячейку выше прогнали позже.
+    -- Пока прогон не закончен, номера ещё нет — как и в Lab, показываем звёздочку.
     local mark = run.historical and "⟲ " or ""
+    if run.execution_count then
+        mark = mark .. ("[%d] "):format(run.execution_count)
+    elseif run.status == "queued" or run.status == "running" then
+        mark = mark .. "[*] "
+    end
     local group = hl.for_status(run.status)
 
+    if run.status == "queued" then
+        return mark .. "⏳ в очереди", group
+    end
     if run.status == "running" then
         return mark .. "⏳ выполняется", group
     end

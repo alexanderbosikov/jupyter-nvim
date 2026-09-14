@@ -246,3 +246,80 @@ describe("откат одним нажатием", function()
         assert.same(before, after)
     end)
 end)
+
+-- Смена языка ячейки. Механики две, потому что представления два: в фенсах язык — слово
+-- в info-строке, в percent — строка `%%sql` первой строкой тела.
+describe("смена языка", function()
+    local function first_cell(buf)
+        return cells.list(buf)[1]
+    end
+
+    it("фенсы: python становится sql, хвост фенса на месте", function()
+        local buf = make({ '```python jncell="a3f9"', "select 1", "```" }, "markdown")
+
+        assert.is_true(edit.set_lang(buf, first_cell(buf), "sql"))
+
+        assert.same({ '```sql jncell="a3f9"', "select 1", "```" }, text(buf))
+        assert.equals("sql", first_cell(buf).lang)
+        assert.equals("a3f9", require("jupyter.cellid").of(buf, first_cell(buf)))
+    end)
+
+    it("фенсы: уход в python снимает magic_args", function()
+        local buf = make({ '```sql magic_args="df_name=orders" jncell="a3f9"', "select 1", "```" }, "markdown")
+
+        assert.is_true(edit.set_lang(buf, first_cell(buf), "python"))
+
+        assert.same({ '```python jncell="a3f9"', "select 1", "```" }, text(buf))
+        assert.is_nil(first_cell(buf).magic_args)
+    end)
+
+    it("фенсы: магика из тела уходит вместе с языком, и это одна правка", function()
+        local buf = make({ "```sql", "%%sql df_name=orders", "select 1", "```" }, "markdown")
+        local tick = vim.api.nvim_buf_get_changedtick(buf)
+
+        assert.is_true(edit.set_lang(buf, first_cell(buf), "python"))
+
+        assert.same({ "```python", "select 1", "```" }, text(buf))
+        -- одна правка буфера — один шаг changedtick, а значит и один `u` на откат
+        assert.equals(tick + 1, vim.api.nvim_buf_get_changedtick(buf))
+    end)
+
+    it("percent: язык появляется строкой магики в теле", function()
+        local buf = make({ "# %%", "select 1" }, "python")
+
+        assert.is_true(edit.set_lang(buf, first_cell(buf), "sql"))
+
+        assert.same({ "# %%", "%%sql", "select 1" }, text(buf))
+        assert.equals("sql", cells.lang_of(buf, first_cell(buf)))
+    end)
+
+    it("percent: уход в python убирает строку магики", function()
+        local buf = make({ "# %%", "%%sql", "select 1" }, "python")
+
+        assert.is_true(edit.set_lang(buf, first_cell(buf), "python"))
+
+        assert.same({ "# %%", "select 1" }, text(buf))
+    end)
+
+    it("чужая магика в теле — отказ с объяснением", function()
+        local buf = make({ "```python", "%%timeit", "x = 1", "```" }, "markdown")
+
+        local ok, why = edit.set_lang(buf, first_cell(buf), "sql")
+
+        assert.is_false(ok)
+        assert.is_truthy(why:find("timeit"), why)
+        assert.same({ "```python", "%%timeit", "x = 1", "```" }, text(buf), "буфер не тронут")
+    end)
+
+    it("тот же язык и незнакомый язык — отказ", function()
+        local buf = make({ "```sql", "select 1", "```" }, "markdown")
+
+        local same, why_same = edit.set_lang(buf, first_cell(buf), "sql")
+        local alien, why_alien = edit.set_lang(buf, first_cell(buf), "julia")
+
+        assert.is_false(same)
+        assert.is_truthy(why_same:find("уже sql"), why_same)
+        assert.is_false(alien)
+        assert.is_truthy(why_alien:find("не поддержан"), why_alien)
+    end)
+end)

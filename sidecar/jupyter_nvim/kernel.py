@@ -691,6 +691,8 @@ class KernelSession:
                 return
             if phase == "busy":
                 self._set_state(KernelState.BUSY)
+                # именно здесь запрос перестаёт быть очередью и становится работой
+                ex.begin()
                 self._emit(Ev.EXEC_STARTED, ex, False, msg_id=ex.msg_id, started_at=ex.started_at)
             elif phase == "idle":
                 ex.saw_idle = True

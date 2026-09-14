@@ -70,7 +70,8 @@ describe("запуск", function()
             code = 'print("раз")',
             result_expr = "_",
         }, k.sent[1])
-        assert.equals("running", run.status)
+        -- отправлен, но ещё не выполняется: ядро возьмёт его в работу, когда дойдёт
+        assert.equals("queued", run.status)
     end)
 
     it("пустую ячейку не отправляет", function()
@@ -235,5 +236,60 @@ describe("repr и таблица", function()
                  data = { kind = "text", text = "4" } })
 
         assert.same({ "4" }, run.lines)
+    end)
+end)
+
+-- Очередь против выполнения. execute_request уходит ядру сразу для всех ячеек, а
+-- выполняются они по одной, поэтому «Выполнить все» показывало «выполняется» под каждой.
+-- Момент, когда очередь стала работой, приносит exec.started.
+describe("очередь и выполнение", function()
+    local k, ex, buf
+
+    before_each(function()
+        k = stub_kernel()
+        ex = exec.new({ kernel = k, on_update = function() end }):attach()
+        buf = buffer({ "# %%", 'print("раз")', "# %%", 'print("два")' })
+    end)
+
+    it("свежий прогон стоит в очереди, а не выполняется", function()
+        local run = ex:run_at(buf, 2)
+
+        assert.equals("queued", run.status)
+        assert.equals("[*] ⏳ в очереди", require("jupyter.ui.status").text_of(run))
+    end)
+
+    it("exec.started переводит его в выполнение", function()
+        local run = ex:run_at(buf, 2)
+
+        k.emit({
+            ev = "exec.started",
+            cell_id = run.cell_id,
+            run_id = run.run_id,
+            data = { started_at = "2026-09-10T06:00:00Z" },
+        })
+
+        assert.equals("running", run.status)
+        assert.equals("2026-09-10T06:00:00Z", run.started_at)
+        assert.equals("[*] ⏳ выполняется", require("jupyter.ui.status").text_of(run))
+    end)
+
+    it("две ячейки: работает одна, вторая ждёт", function()
+        local first = ex:run_at(buf, 2)
+        local second = ex:run_at(buf, 4)
+
+        k.emit({ ev = "exec.started", cell_id = first.cell_id, run_id = first.run_id, data = {} })
+
+        assert.equals("running", first.status)
+        assert.equals("queued", second.status, "вторая ещё в очереди ядра")
+    end)
+
+    it("exec.done закрывает прогон независимо от того, был ли exec.started", function()
+        local run = ex:run_at(buf, 2)
+
+        k.emit({ ev = "exec.done", cell_id = run.cell_id, run_id = run.run_id,
+            data = { status = "ok", duration_ms = 12 } })
+
+        assert.equals("ok", run.status)
+        assert.equals(12, run.duration_ms)
     end)
 end)

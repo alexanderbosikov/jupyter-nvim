@@ -426,3 +426,59 @@ describe("параметры магики", function()
         assert.equals("%%sql df_name=inline\nselect 1", cells.text(buf, cells.list(buf)[1]))
     end)
 end)
+
+-- Язык новой ячейки. За sql-ячейкой почти всегда идёт sql, и переключать язык руками
+-- после каждой вставки — работа на пустом месте.
+describe("вставка ячейки наследует язык", function()
+    local function make(lines, filetype)
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+        vim.bo[buf].filetype = filetype
+        return buf
+    end
+
+    it("фенсы: под sql-ячейкой появляется sql-ячейка", function()
+        local buf = make({ "```sql", "select 1", "```" }, "markdown")
+
+        local row = cells.insert(buf, 2, "below")
+
+        assert.same({ "```sql", "select 1", "```", "", "```sql", "", "```" },
+            vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+        assert.equals(6, row, "курсор — на пустой строке тела новой ячейки")
+        assert.equals("sql", cells.list(buf)[2].lang)
+    end)
+
+    it("фенсы: параметры магики не копируются", function()
+        local buf = make({ '```sql magic_args="df_name=orders"', "select 1", "```" }, "markdown")
+
+        cells.insert(buf, 2, "below")
+
+        assert.is_nil(cells.list(buf)[2].magic_args, "df_name у двух ячеек разом — столкновение имён")
+    end)
+
+    it("percent: магика языка попадает первой строкой тела", function()
+        local buf = make({ "# %%", "%%sql", "select 1" }, "python")
+
+        local row = cells.insert(buf, 3, "below")
+
+        assert.same({ "# %%", "%%sql", "select 1", "", "# %%", "%%sql", "" },
+            vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+        assert.equals(7, row)
+    end)
+
+    it("под python-ячейкой остаётся python", function()
+        local buf = make({ "```python", "x = 1", "```" }, "markdown")
+
+        cells.insert(buf, 2, "below")
+
+        assert.equals("python", cells.list(buf)[2].lang)
+    end)
+
+    it("в прозе берёт язык ближайшей ячейки выше", function()
+        local buf = make({ "```sql", "select 1", "```", "", "просто текст" }, "markdown")
+
+        cells.insert(buf, 5, "below")
+
+        assert.equals("sql", cells.list(buf)[2].lang)
+    end)
+end)

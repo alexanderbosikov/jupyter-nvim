@@ -22,6 +22,7 @@ M.DEFAULT_KEYS = {
 }
 
 local STATUS = {
+    queued = "⏳ в очереди",
     running = "⏳ выполняется",
     ok = "✓",
     error = "✗",
@@ -155,6 +156,17 @@ function Output:show(run)
     self:render()
 end
 
+---Запомнить прогон, не поднимая окна.
+---
+---Нужно, когда ноутбука сейчас не видно: его прогоны идут дальше, но всплывать поверх
+---чужого документа окну незачем. Текст при этом рисуется — буфер свой, показывать его
+---никому не мешает, — так что к возвращению всё уже готово.
+---@param run jupyter.Run
+function Output:stage(run)
+    self.run = run
+    self:render()
+end
+
 ---Подстроить картинку под ячейку, на которой стоит курсор.
 ---
 ---Текст в окне может спокойно относиться к другой ячейке — он маленький и лежит в своём
@@ -250,6 +262,9 @@ function Output:status()
     if not run then
         return "нет вывода"
     end
+    if run.status == "queued" then
+        return STATUS.queued
+    end
     if run.status == "running" then
         return STATUS.running
     end
@@ -333,8 +348,20 @@ function Output:get_actions()
         yank = function()
             local buf = self:_ensure_buf()
             local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-            vim.fn.setreg('"', table.concat(lines, "\n"))
-            vim.notify(("jupyter.nvim: скопировано строк — %d"):format(#lines))
+            local text = table.concat(lines, "\n")
+            vim.fn.setreg('"', text)
+            -- и в системный: копируют, чтобы унести наружу, а clipboard=unnamedplus
+            -- включён далеко не у всех. Провайдера может не быть — поэтому pcall
+            pcall(vim.fn.setreg, "+", text)
+            -- У табличного прогона в окне лежит предпросмотр (output.preview_rows), и
+            -- молчать об этом нельзя: «скопировано 50 строк» из миллиона выглядит как
+            -- полная выгрузка. Данные целиком копирует таблица, там для этого Y.
+            local rows = self.run and self.run.table and self.run.table.rows
+            local hint = ""
+            if rows and rows > #lines then
+                hint = (" — это предпросмотр; всю таблицу (%d строк) копирует Y в окне таблицы, оно на t"):format(rows)
+            end
+            vim.notify(("jupyter.nvim: скопировано строк — %d%s"):format(#lines, hint))
         end,
         top = function()
             if self:is_open() then

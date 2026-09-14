@@ -100,7 +100,7 @@ function M.for_status(status)
     if status == "error" then
         return "JupyterWinBarError"
     end
-    if status == "running" then
+    if status == "running" or status == "queued" then
         return "JupyterWinBarInfo"
     end
     if status == "aborted" then

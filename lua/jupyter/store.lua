@@ -139,6 +139,7 @@ function Store:to_run(record)
         historical = true, -- drawer покажет это в статусе
         record = record,
         code_sha = record.code_sha,
+        execution_count = record.execution_count,
         at = M.local_time(record.started_at),
     }
 
@@ -184,6 +185,18 @@ function Store:latest_record()
         end
     end
     return newest
+end
+
+---Id всех ячеек, о которых знаем историю.
+---@return string[]
+function Store:cell_ids()
+    self:ensure_loaded()
+    local ids = {}
+    for cell_id in pairs(self.history) do
+        ids[#ids + 1] = cell_id
+    end
+    table.sort(ids)
+    return ids
 end
 
 ---Сколько прогонов знаем по всем ячейкам.

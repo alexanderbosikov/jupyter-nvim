@@ -35,6 +35,11 @@ M.defaults = {
     -- false — не определять группы подсветки, если хочешь задать их сам
     highlight = true,
     -- картинки рисует image.nvim; false — только путь строкой в выводе
+    -- Прыжок по ячейкам центрирует экран. Без этого следующая ячейка встаёт у нижнего
+    -- края, и её тело остаётся за кадром — а прыгают именно чтобы его увидеть.
+    center_on_jump = true,
+    -- Новая ячейка пустая: сразу встаём в insert, чтобы не нажимать `i` после каждой вставки.
+    insert_on_new_cell = true,
     images = true,
     -- size меньше единицы — доля экрана: 0.5 это половина ширины при position = "right".
     -- preview_rows = 0 — не показывать таблицу в окне вывода, только строку-сводку
@@ -71,6 +76,10 @@ M.defaults = {
         move_cell_down = "<leader>jJ",
         cell_to_markdown = "<leader>jm",
         cell_to_code = "<leader>jy",
+        cell_lang = "<leader>jl", -- l как «language»: переключает python ↔ sql
+        -- начало и конец своей ячейки: пара к ]c/[c, которые ходят по соседним
+        cell_start = "[C",
+        cell_end = "]C",
         interrupt = "<leader>ji",
         restart = "<leader>jR",
     },
@@ -129,6 +138,32 @@ function M.setup(opts)
         end,
     })
 
+    -- Окно вывода принадлежит ноутбуку, а не экрану. Сессия своя на каждый буфер, и
+    -- drawer вместе с ней, поэтому открыть второй ноутбук поверх первого (через yazi,
+    -- :e, что угодно) означало два окна вывода на экране: одно от ноутбука, которого
+    -- уже не видно, второе от нового. Правило простое: окна вывода следуют за тем, какие
+    -- ноутбуки сейчас на экране — ушёл с глаз, окно ушло; вернулся, окно вернулось.
+    --
+    -- Проверяем по всем вкладкам (win_findbuf), а не по текущей: два ноутбука в разных
+    -- вкладках — законный случай, и закрывать чужой drawer при переключении вкладки
+    -- нельзя. Два ноутбука рядом в сплитах тоже переживут: оба буфера показаны.
+    vim.api.nvim_create_autocmd({ "BufWinEnter", "WinClosed" }, {
+        group = augroup,
+        callback = function(ev)
+            -- Появление наших собственных окон — не повод для проверки. Drawer,
+            -- открываясь, шлёт BufWinEnter сам за себя, и без этой оговорки закрывал
+            -- бы себя же в тот же миг, если буфер ноутбука в этот момент нигде не
+            -- показан. Событие от чужого буфера (в том числе не-ноутбука: открыли
+            -- в том же окне текстовый файл) проверку по-прежнему запускает.
+            for _, session in pairs(sessions) do
+                if ev.buf == session.output.buf or ev.buf == session.table.buf then
+                    return
+                end
+            end
+            M.sync_output_windows()
+        end,
+    })
+
     vim.api.nvim_create_autocmd("FileType", {
         group = augroup,
         pattern = M.config.filetypes,
@@ -142,6 +177,41 @@ function M.setup(opts)
             end
         end,
     })
+end
+
+---Свести окна вывода с тем, какие ноутбуки сейчас на экране.
+---
+---Ноутбук пропал с глаз — его окно вывода уходит; вернулся — окно возвращается таким же.
+---Второе не менее важно первого: без него переключение через telescope, harpoon или yazi
+---оставляло бы после себя пустое место, а поднимать окно приходилось бы руками.
+---
+---Закрытое нами помечается (`output_hidden`), и возвращаем мы только его. Окно, закрытое
+---руками по `toggle_output`, обратно не всплывает: пользователь его закрыл, значит не
+---хотел видеть.
+---
+---Сессия при этом не трогается вовсе: ядро работает, переменные живы, прогоны идут,
+---история копится. Уходит только окно (и картинки вместе с ним — они рисуются поверх
+---и без окна висели бы над чужим текстом).
+---@return integer скрыли, integer вернули
+function M.sync_output_windows()
+    local hidden, shown = 0, 0
+    for buf, session in pairs(sessions) do
+        local visible = #vim.fn.win_findbuf(buf) > 0
+        if not visible and session.output:is_open() then
+            session.output:close()
+            session.output_hidden = true
+            hidden = hidden + 1
+        elseif visible and session.output_hidden and not session.output:is_open() then
+            if session.output.run then
+                session.output:show(session.output.run) -- с последним прогоном, он мог смениться
+            else
+                session.output:open()
+            end
+            session.output_hidden = nil
+            shown = shown + 1
+        end
+    end
+    return hidden, shown
 end
 
 ---Поставить буфер-локальные мапы. Значением действия может быть как одна клавиша,
@@ -204,6 +274,30 @@ end
 
 -- --- сессии ---
 
+---Выполнить, когда сайдкар поднят, подняв его при необходимости.
+---
+---Parquet читает сайдкар — polars живёт там, — поэтому и предпросмотр таблицы в окне
+---вывода, и само окно таблицы без него не работают. А поднимается он лениво, при первом
+---прогоне ячейки. История же обещана и БЕЗ ядра: открыл ноутбук — вчерашний вывод на
+---месте (README, «Свежий вывод и старый»). Для таблиц это обещание не держалось: до
+---первого прогона в окне стояло «не удалось прочитать таблицу: сайдкар не запущен».
+---
+---Ядро при этом не поднимается: сайдкар и ядро — разные процессы, `hello` ядра не
+---требует, так что лень ядра остаётся в силе.
+---@param sc table
+---@param cb fun(err?: table)
+local function with_sidecar(sc, cb)
+    if sc:is_running() then
+        return cb()
+    end
+    sc:start(function(err)
+        if err and err.code ~= "already_running" then
+            return cb(err)
+        end
+        cb()
+    end)
+end
+
 ---@return table
 function M.session(buf)
     buf = buf or vim.api.nvim_get_current_buf()
@@ -237,7 +331,7 @@ function M.session(buf)
             local shown = drawer.run and drawer.run.cell_id
             local count = 0
             for cell_id, run in pairs(ex.runs) do
-                if run.status == "running" and cell_id ~= shown then
+                if exec.is_busy(run) and cell_id ~= shown then
                     count = count + 1
                 end
             end
@@ -249,6 +343,10 @@ function M.session(buf)
             return M.is_stale(buf, run)
         end,
         preview = function(run, limit, cb)
+            with_sidecar(sc, function(start_err)
+            if start_err then
+                return cb({ "(сайдкар не поднялся: " .. (start_err.msg or start_err.code or "?") .. ")" })
+            end
             sc:request("table.page", { path = run.table.path, offset = 0, limit = limit }, function(err, page)
                 if err then
                     return cb({ "(не удалось прочитать таблицу: " .. (err.msg or err.code or "?") .. ")" })
@@ -259,6 +357,7 @@ function M.session(buf)
                     table.insert(lines, (" … ещё %d строк · :JupyterTable"):format(page.total_rows - shown))
                 end
                 cb(lines)
+            end)
             end)
         end,
         preview_rows = M.config.output.preview_rows,
@@ -278,7 +377,17 @@ function M.session(buf)
                 if session then
                     session.browse[run.cell_id] = nil -- новый прогон снимает просмотр истории
                 end
-                drawer:show(run)
+                -- Ноутбука не видно — окно не поднимаем: прогоны спрятанного ноутбука
+                -- идут своим чередом, но всплывать поверх чужого документа они не право.
+                -- Прогон запоминаем и помечаем сессию: вернёшься — окно откроется с ним.
+                if #vim.fn.win_findbuf(buf) > 0 then
+                    drawer:show(run)
+                else
+                    drawer:stage(run)
+                    if session then
+                        session.output_hidden = true
+                    end
+                end
             elseif not drawer:update(run) then
                 drawer:refresh_status()
             end
@@ -296,6 +405,7 @@ function M.session(buf)
     found = {
         buf = buf,
         kernel = k,
+        sidecar = sc,
         exec = ex,
         output = drawer,
         table = tbl,
@@ -550,8 +660,11 @@ function M.repaint(buf)
         local run = s.exec:run_for(cell_id) or s.store:last_run(cell_id)
         if run then
             local text, group = status_ui.text_of(run, M.is_stale(buf, run, cell))
-            local _, last = cells.body(buf, cell)
-            table.insert(entries, { row = last, text = text, group = group })
+            -- последняя строка ЯЧЕЙКИ, а не последняя непустая: `cells.body` срезает
+            -- хвостовые пустые строки, и это правильно для кода, который уходит ядру,
+            -- но статус из-за этого оставался висеть над только что добавленной строкой
+            -- до первого непробельного символа в ней — перевод строки его не двигал
+            table.insert(entries, { row = cell.end_row, text = text, group = group })
         end
     end
     -- все ячейки пересчитаны: накопленный диапазон правок больше не нужен
@@ -739,8 +852,12 @@ function M.run_below()
 end
 
 local function jump(cell)
-    if cell then
-        vim.api.nvim_win_set_cursor(0, { cell.start_row, 0 })
+    if not cell then
+        return
+    end
+    vim.api.nvim_win_set_cursor(0, { cell.start_row, 0 })
+    if M.config.center_on_jump ~= false then
+        vim.cmd("normal! zz")
     end
 end
 
@@ -752,14 +869,27 @@ function M.prev_cell()
     jump(cells.prev(0, vim.api.nvim_win_get_cursor(0)[1]))
 end
 
-function M.insert_above()
-    local row = cells.insert(0, vim.api.nvim_win_get_cursor(0)[1], "above")
+---Встать в тело новой ячейки и, если так настроено, сразу начать печатать.
+---
+---Новая ячейка пустая, и делать в ней в normal-режиме нечего — а руками это ещё одно
+---нажатие после каждой вставки. `insert_on_new_cell = false` возвращает прежнее поведение.
+---@param row integer|nil строка тела новой ячейки
+local function land_in_new_cell(row)
+    if not row then
+        return
+    end
     vim.api.nvim_win_set_cursor(0, { row, 0 })
+    if M.config.insert_on_new_cell ~= false then
+        vim.cmd("startinsert")
+    end
+end
+
+function M.insert_above()
+    land_in_new_cell(cells.insert(0, vim.api.nvim_win_get_cursor(0)[1], "above"))
 end
 
 function M.insert_below()
-    local row = cells.insert(0, vim.api.nvim_win_get_cursor(0)[1], "below")
-    vim.api.nvim_win_set_cursor(0, { row, 0 })
+    land_in_new_cell(cells.insert(0, vim.api.nvim_win_get_cursor(0)[1], "below"))
 end
 
 ---Открыть таблицу-результат ячейки под курсором. Если её нет — того прогона, что показан
@@ -837,6 +967,39 @@ local function settle(buf, row)
     M.repaint(buf)
 end
 
+---Курсор в начало тела ячейки под курсором.
+---
+---Отдельно от `prev_cell`: тот из середины ячейки уходит к предыдущей, а вернуться к
+---началу своей нечем. Экран не двигаем — движение внутри ячейки, она и так на виду.
+---@return boolean
+function M.cell_start()
+    local cell, buf = here()
+    if not cell then
+        vim.notify("jupyter.nvim: под курсором нет ячейки", vim.log.levels.WARN)
+        return false
+    end
+    local first = cells.body(buf, cell)
+    pcall(vim.api.nvim_win_set_cursor, 0, { first, 0 })
+    return true
+end
+
+---Курсор в конец тела ячейки: последняя непустая строка, последний символ.
+---
+---Дописать что-то в конец ячейки — самое частое движение в ноутбуке, а руками это
+---`]n` и потом три раза `k` через пустую строку и закрывающий фенс.
+---@return boolean
+function M.cell_end()
+    local cell, buf = here()
+    if not cell then
+        vim.notify("jupyter.nvim: под курсором нет ячейки", vim.log.levels.WARN)
+        return false
+    end
+    local _, last = cells.body(buf, cell)
+    local line = vim.api.nvim_buf_get_lines(buf, last - 1, last, false)[1] or ""
+    pcall(vim.api.nvim_win_set_cursor, 0, { last, math.max(0, #line - 1) })
+    return true
+end
+
 ---Разрезать ячейку по курсору: строка под курсором и ниже уезжают в новую.
 ---@return boolean
 function M.split_cell()
@@ -905,6 +1068,33 @@ function M.cell_to_markdown()
     return true
 end
 
+---Сменить язык ячейки под курсором. Без аргумента — переключить python ↔ sql.
+---
+---Переключатель, а не выбор из списка, потому что на клавише выбирать не из чего: языков
+---магики у нас ровно один. Явный язык остаётся у команды — `:JupyterCellLang python`.
+---@param lang? string
+---@return boolean
+function M.cell_lang(lang)
+    local cell, buf = here()
+    if not cell then
+        vim.notify("jupyter.nvim: под курсором нет код-ячейки", vim.log.levels.WARN)
+        return false
+    end
+    lang = vim.trim(lang or "")
+    if lang == "" then
+        lang = cells.lang_of(buf, cell) == cells.CODE_LANG and "sql" or cells.CODE_LANG
+    end
+
+    local ok, why = edit.set_lang(buf, cell, lang)
+    if not ok then
+        vim.notify("jupyter.nvim: " .. (why or "язык не сменить"), vim.log.levels.WARN)
+        return false
+    end
+    settle(buf, nil)
+    vim.notify(("jupyter.nvim: ячейка теперь %s"):format(lang))
+    return true
+end
+
 ---Превратить markdown под курсором в код-ячейку.
 ---@return boolean
 function M.cell_to_code()
@@ -946,7 +1136,16 @@ function M.open_table()
         )
         return
     end
-    s.table:open(run.table.path, ("ячейка %s · прогон %d"):format(run.cell_id, run.run_id))
+    with_sidecar(s.sidecar, function(err)
+        if err then
+            vim.notify(
+                "jupyter.nvim: сайдкар не поднялся — " .. (err.msg or err.code or "?"),
+                vim.log.levels.ERROR
+            )
+            return
+        end
+        s.table:open(run.table.path, ("ячейка %s · прогон %d"):format(run.cell_id, run.run_id))
+    end)
 end
 
 ---Ядра без хозяина в каталоге текущего файла: показать или снять.

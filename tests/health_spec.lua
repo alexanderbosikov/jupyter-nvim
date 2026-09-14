@@ -80,3 +80,94 @@ describe("здоровье", function()
         assert.equals("ok", find(report, "картинки выключены").level)
     end)
 end)
+
+-- Отчёт про историю прогонов. Проверяем разбор и арифметику, а не отрисовку: collect()
+-- и history() возвращают список записей. Python и сайдкар тут не нужны — отчёт читает
+-- только индекс на диске и текст буфера.
+describe("история прогонов", function()
+    local function fixture(records, files, lines, name)
+        local dir = vim.fn.tempname()
+        vim.fn.mkdir(dir, "p")
+        local notebook = vim.fs.joinpath(dir, (name or "nb") .. (name and ".ipynb" or ".py"))
+        vim.fn.writefile(lines, notebook)
+
+        local base = vim.fs.joinpath(dir, ".jupyter-out", vim.fn.fnamemodify(notebook, ":t:r"))
+        vim.fn.mkdir(base, "p")
+        vim.fn.writefile(vim.tbl_map(vim.json.encode, records), vim.fs.joinpath(base, "index.jsonl"))
+        for path, size in pairs(files) do
+            local full = vim.fs.joinpath(base, path)
+            vim.fn.mkdir(vim.fn.fnamemodify(full, ":h"), "p")
+            vim.fn.writefile({ string.rep("x", size - 1) }, full) -- +1 байт на перевод строки
+        end
+
+        vim.cmd.edit(notebook)
+        return vim.api.nvim_get_current_buf()
+    end
+
+    local function record(cell_id, run_id, path)
+        return { cell_id = cell_id, run_id = run_id, status = "ok", path = path,
+            started_at = "2026-09-09T10:00:00Z", code_sha = "0badc0de" }
+    end
+
+    after_each(function()
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("считает вес и отделяет сирот от порядковых id", function()
+        local buf = fixture({
+            record("a3f9", 1, "a3f9/1.txt"), -- ячейка на месте
+            record("b7e1", 1, "b7e1/1.txt"), -- id настоящий, а ячейки в документе нет
+            record("0002", 1, "0002/1.txt"), -- порядковый: в документ такой id не пишется
+        }, {
+            ["a3f9/1.txt"] = 2048, ["b7e1/1.txt"] = 2048, ["0002/1.txt"] = 2048,
+        }, { '# %% jncell="a3f9"', "x = 1" })
+
+        local report = health.history({ out_dir = ".jupyter-out" }, buf)
+
+        assert.is_truthy(find(report, "история: 3 ячеек, 3 прогонов, 6 КБ"), vim.inspect(report))
+        local orphans = find(report, "нет в документе")
+        assert.is_truthy(orphans, vim.inspect(report))
+        assert.equals("warn", orphans.level)
+        assert.is_truthy(orphans.msg:find("b7e1"), orphans.msg)
+        assert.is_nil(orphans.msg:find("0002"), "порядковый id не сирота, а мусор: " .. orphans.msg)
+        assert.is_truthy(orphans.msg:find("2 КБ"), "вес сирот: " .. orphans.msg)
+        local ordinal = find(report, "под порядковым id")
+        assert.equals("info", ordinal.level)
+        assert.is_truthy(ordinal.msg:find("1 ячеек"), ordinal.msg)
+    end)
+
+    it("замечает файлы, на которые индекс не ссылается", function()
+        local buf = fixture({ record("a3f9", 1, "a3f9/1.txt") },
+            { ["a3f9/1.txt"] = 1024, ["a3f9/99.parquet"] = 4096 },
+            { '# %% jncell="a3f9"', "x = 1" })
+
+        local stray = find(health.history({ out_dir = ".jupyter-out" }, buf), "не упомянуты в индексе")
+
+        assert.is_truthy(stray)
+        assert.equals("warn", stray.level)
+        assert.is_truthy(stray.msg:find("4 КБ"), stray.msg)
+    end)
+
+    it("в неконвертированном .ipynb не объявляет всю историю осиротевшей", function()
+        -- в сыром json id лежит полем `"jncell": "a3f9"`, формы `jncell="a3f9"` там нет,
+        -- и наивная проверка сочла бы сиротой каждую ячейку сразу
+        local buf = fixture({ record("a3f9", 1, "a3f9/1.txt") }, { ["a3f9/1.txt"] = 1024 }, {
+            '{"cells": [{"cell_type": "code", "metadata": {"jncell": "a3f9"}, "source": ["x = 1"]}],',
+            ' "nbformat": 4, "nbformat_minor": 5}',
+        }, "raw")
+
+        local report = health.history({ out_dir = ".jupyter-out" }, buf)
+
+        assert.is_nil(find(report, "нет в документе"), vim.inspect(report))
+        assert.is_truthy(find(report, "ячеек в этом буфере не видно"), vim.inspect(report))
+        assert.is_truthy(find(report, "история: 1 ячеек"), vim.inspect(report))
+    end)
+
+    it("без истории на диске молчит", function()
+        local dir = vim.fn.tempname()
+        vim.fn.mkdir(dir, "p")
+        vim.cmd.edit(vim.fs.joinpath(dir, "empty.py"))
+
+        assert.same({}, health.history({ out_dir = ".jupyter-out" }, vim.api.nvim_get_current_buf()))
+    end)
+end)

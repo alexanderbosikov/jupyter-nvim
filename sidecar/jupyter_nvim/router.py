@@ -24,6 +24,7 @@ class Exec:
     run_id: int
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     _t0: float = field(default_factory=time.monotonic)
+    _t_begin: float | None = None
     status: str | None = None
     duration_ms: int | None = None
     reply_status: str | None = None
@@ -33,9 +34,27 @@ class Exec:
     saw_reply: bool = False
     code_sha: str | None = None
 
+    def begin(self) -> bool:
+        """Ядро взяло запрос в работу: до этого он стоял в очереди.
+
+        Отметка нужна, потому что `execute_request` уходит сразу, а выполняются они по
+        одному. Без неё «Выполнить все» давало 25 прогонов, у каждого из которых
+        длительность считалась от постановки в очередь: двенадцать ячеек по 20 мс
+        отчитывались одинаковыми семью минутами — ровно тем временем, что они ждали.
+        Возвращает False, если начало уже отмечено: `status: busy` приходит один раз,
+        но повтор ломать ничего не должен.
+        """
+        if self._t_begin is not None:
+            return False
+        self._t_begin = time.monotonic()
+        self.started_at = datetime.now(timezone.utc).isoformat()
+        return True
+
     def close(self, status: str) -> None:
         self.status = status
-        self.duration_ms = int((time.monotonic() - self._t0) * 1000)
+        # от реального начала, а не от постановки в очередь; если ядро так и не взяло
+        # запрос в работу (прервали в очереди) — считаем от постановки
+        self.duration_ms = int((time.monotonic() - (self._t_begin or self._t0)) * 1000)
 
 
 @dataclass

@@ -14,6 +14,28 @@ local M = {}
 
 local TIMEOUT = 15000
 
+local UNITS = { { 1024 ^ 3, "ГБ" }, { 1024 ^ 2, "МБ" } }
+
+local function human(bytes)
+    for _, unit in ipairs(UNITS) do
+        if bytes >= unit[1] then
+            return ("%.1f %s"):format(bytes / unit[1], unit[2])
+        end
+    end
+    return ("%d КБ"):format(math.ceil(bytes / 1024))
+end
+
+---Похоже ли, что id порядковый — тот, что выдаёт exec.fallback_id ("%04x" от номера ячейки).
+---
+---Отличать их от настоящих сирот важно: настоящая сирота означает, что из документа
+---исчезла ячейка с результатами, а порядковый id в документ не пишется НИКОГДА, так что
+---его история осиротевшая с рождения и ни о какой потере не говорит. В индексе пометки
+---нет, поэтому различаем по форме — отсюда осторожное «похоже»: sha-префикс тоже бывает
+---вида 00xx. Ставить пометку в индекс (сайдкар) стоило бы, тогда угадывать не придётся.
+local function looks_ordinal(cell_id)
+    return cell_id:match("^00%x%x$") ~= nil
+end
+
 local function run(cmd, opts)
     local ok, result = pcall(function()
         return vim.system(cmd, vim.tbl_extend("force", { text = true }, opts or {})):wait(TIMEOUT)
@@ -157,6 +179,111 @@ function M.collect(config)
         add(orphan.stale and "warn" or "error", orphans.describe(orphan) .. " — снять: :JupyterOrphans!")
     end
 
+    -- 7. история прогонов: её вес и ячейки, которых в документе больше нет
+    vim.list_extend(report, M.history(config))
+
+    return report
+end
+
+---Отчёт про историю прогонов текущего буфера.
+---
+---Зачем в checkhealth: осиротевшую историю не подчистит никто. `prune` оставляет последние
+---`history_limit` прогонов, но зовётся только по той ячейке, которую прогнали, — а под
+---исчезнувшим id уже ничего не запускается. Сам отчёт ничего не удаляет: он показывает
+---цену вопроса, чтобы решение про уборку принималось по числам, а не на глаз.
+---@param config? table
+---@param buf? integer
+---@return table[] список { level, msg }
+function M.history(config, buf)
+    config = config or require("jupyter").config
+    buf = buf or vim.api.nvim_get_current_buf()
+    local report = {}
+    local function add(level, msg)
+        table.insert(report, { level = level, msg = msg })
+    end
+
+    local notebook = vim.api.nvim_buf_get_name(buf)
+    if notebook == "" then
+        return report
+    end
+    local store = require("jupyter.store").new({ notebook = notebook, out_dir = config.out_dir })
+    local index = store:index_path()
+    if not index or vim.fn.filereadable(index) == 0 then
+        return report -- истории ещё нет, говорить не о чем
+    end
+    store:load()
+
+    local cells_count, runs = store:size()
+
+    -- Живые id читаем из текста документа, а не из списка ячеек: id лежит на строке
+    -- маркера, и этого достаточно — ячейка, которую ни разу не прогоняли, id не имеет.
+    -- Но сперва убеждаемся, что в буфере вообще видны ячейки: в НЕ конвертированном
+    -- .ipynb (сырой json, без jupytext) id лежит json-полем `"jncell": "a3f9"`, форму
+    -- `jncell="a3f9"` там не найти, и отчёт объявил бы осиротевшей всю историю сразу.
+    local shape = require("jupyter.cells").explain(buf)
+    if shape.markers == 0 and shape.fences == 0 then
+        add("ok", ("история: %d ячеек, %d прогонов в %s"):format(
+            cells_count, runs, vim.fn.fnamemodify(store.base, ":~:.")
+        ))
+        add("info", "ячеек в этом буфере не видно — какие id ещё живые, отсюда не проверить")
+        return report
+    end
+    local live = require("jupyter.cellid").used(buf)
+
+    local total, referenced = 0, {}
+    local orphan = { count = 0, bytes = 0, ids = {} }
+    local ordinal = { count = 0, bytes = 0 }
+    for _, cell_id in ipairs(store:cell_ids()) do
+        local bytes = 0
+        for _, record in ipairs(store:records_of(cell_id)) do
+            local path = store:path_of(record)
+            local size = path and vim.fn.getfsize(path) or -1
+            if size > 0 then
+                bytes = bytes + size
+                referenced[vim.fs.normalize(path)] = true
+            end
+        end
+        total = total + bytes
+        if not live[cell_id] then
+            local bucket = looks_ordinal(cell_id) and ordinal or orphan
+            bucket.count, bucket.bytes = bucket.count + 1, bucket.bytes + bytes
+            if bucket.ids then
+                table.insert(bucket.ids, cell_id)
+            end
+        end
+    end
+
+    add("ok", ("история: %d ячеек, %d прогонов, %s в %s"):format(
+        cells_count, runs, human(total), vim.fn.fnamemodify(store.base, ":~:.")
+    ))
+
+    if orphan.count > 0 then
+        add("warn", ("%d ячеек с историей нет в документе (%s): %s. Под исчезнувшим id "):format(
+            orphan.count, human(orphan.bytes), table.concat(orphan.ids, " ")
+        ) .. "чистка не работает — prune идёт только по прогнанной ячейке; уборка вся сразу: снести каталог")
+    else
+        add("ok", "все ячейки с историей есть в документе")
+    end
+
+    if ordinal.count > 0 then
+        add("info", ("%d ячеек под порядковым id (%s): такой id в документ не пишется, "):format(
+            ordinal.count, human(ordinal.bytes)
+        ) .. "поэтому его история осиротевшая с рождения — это не потеря ячейки, а мусор")
+    end
+
+    -- файлы, на которые индекс не ссылается: обычно остатки прерванной записи. Смотрим
+    -- только в каталогах ячеек (<base>/<id>/*), чтобы не считать index.jsonl и kernel.log
+    local stray, stray_bytes = 0, 0
+    for _, path in ipairs(vim.fn.glob(store.base .. "/*/*", false, true)) do
+        local size = vim.fn.getfsize(path)
+        if size > 0 and not referenced[vim.fs.normalize(path)] then
+            stray, stray_bytes = stray + 1, stray_bytes + size
+        end
+    end
+    if stray > 0 then
+        add("warn", ("%d файлов в каталоге не упомянуты в индексе (%s)"):format(stray, human(stray_bytes)))
+    end
+
     return report
 end
 
@@ -165,6 +292,11 @@ function M.check()
     for _, entry in ipairs(M.collect()) do
         if entry.level == "ok" then
             vim.health.ok(entry.msg)
+        elseif entry.level == "info" then
+            -- info появился в 0.10; требования плагина — 0.10+, но падать на старом
+            -- незачем: сообщение важнее уровня
+            local info = vim.health.info or vim.health.ok
+            info(entry.msg)
         elseif entry.level == "warn" then
             vim.health.warn(entry.msg)
         else

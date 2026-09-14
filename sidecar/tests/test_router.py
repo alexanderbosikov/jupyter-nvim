@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from jupyter_nvim.protocol import ExecStatus
@@ -93,3 +95,37 @@ def test_started_at_is_utc_iso(router):
     ex = router.start("m1", "a3f9", 1)
 
     assert ex.started_at.endswith("+00:00")
+
+
+def test_duration_counts_work_not_queue_wait(router):
+    """`Выполнить все` отправляет запросы разом, а ядро берёт их по одному.
+
+    Пока длительность считалась от постановки в очередь, двенадцать ячеек по 20 мс
+    отчитывались одинаковыми семью минутами — ровно тем, что они простояли в очереди.
+    """
+    ex = router.start("m1", "a3f9", 1)
+    time.sleep(0.05)  # постояла в очереди
+    assert ex.begin() is True
+    time.sleep(0.02)  # и только тут работала
+    router.finish("m1")
+
+    assert ex.duration_ms is not None
+    assert ex.duration_ms < 45, f"в длительность просочилось ожидание очереди: {ex.duration_ms} мс"
+
+
+def test_begin_is_idempotent(router):
+    """`status: busy` приходит один раз, но повтор не должен сдвигать начало."""
+    ex = router.start("m1", "a3f9", 1)
+    assert ex.begin() is True
+    first = ex.started_at
+    assert ex.begin() is False
+    assert ex.started_at == first
+
+
+def test_duration_falls_back_to_queue_time_when_never_started(router):
+    """Прогон сняли, пока он стоял в очереди: считать всё равно от чего-то надо."""
+    ex = router.start("m1", "a3f9", 1)
+    time.sleep(0.02)
+    router.finish("m1", "aborted")
+
+    assert ex.duration_ms is not None and ex.duration_ms >= 15

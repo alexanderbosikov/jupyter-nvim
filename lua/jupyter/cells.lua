@@ -27,6 +27,7 @@ local CODE_LANG = "python"
 ---отправки ядру (M.text). Разворачивать её в буфере не нужно: тогда работает родная подсветка
 ---SQL, а jupytext пишет .ipynb без промежуточных преобразований.
 M.MAGIC_LANGS = { sql = true }
+M.CODE_LANG = CODE_LANG
 
 ---@param lang string|nil
 ---@return boolean
@@ -232,6 +233,30 @@ function M.body(buf, cell)
     return cell.start_row, cell.start_row + last - 1
 end
 
+---Язык, на котором ядро увидит эту ячейку.
+---
+---Смотрим не только в фенс, но и в первую строку тела: магика там (`%%sql`) — форма,
+---которую README не советует, но плагин её понимает, и для вопроса «какой язык у ячейки
+---сейчас» она сильнее фенса. Иначе смена языка увидела бы python там, где ядру уедет sql.
+---@param buf integer
+---@param cell jupyter.Cell
+---@return string
+function M.lang_of(buf, cell)
+    local first = vim.api.nvim_buf_get_lines(buf, cell.start_row - 1, cell.start_row, false)[1]
+    local magic = first and first:match("^%%%%(%a+)")
+    if magic and is_code_lang(magic) then
+        return magic
+    end
+    return cell.lang or CODE_LANG
+end
+
+---Язык, который мы считаем кодом: python или язык магики.
+---@param lang string|nil
+---@return boolean
+function M.is_code_lang(lang)
+    return is_code_lang(lang)
+end
+
 ---Код ячейки одной строкой, готовый к отправке ядру.
 ---
 ---Для ячейки с магикой языка (```sql в markdown-представлении) строка `%%sql` собирается
@@ -298,26 +323,42 @@ function M.insert(buf, row, where)
     buf = buf or 0
     local cell = M.at(buf, row)
     local fence = M.representation(buf) == "fence"
-    local at, body_offset
-
+    local at
     if where == "above" then
         at = cell and cell.span_start - 1 or row - 1
-        body_offset = 2 -- маркер занимает первую вставленную строку
     else
         at = cell and cell.span_end or row
-        body_offset = 3 -- перед маркером стоит пустая строка-разделитель
     end
 
-    local text
+    -- Язык берём у соседней ячейки: за sql-ячейкой почти всегда идёт sql, и переключать
+    -- язык руками после каждой вставки — работа на пустом месте. Ориентир — ячейка, рядом
+    -- с которой вставляем; если курсор в прозе, ближайшая выше. Параметры магики
+    -- (`magic_args`) при этом НЕ копируются: `df_name` у двух ячеек разом — это столкновение
+    -- имён, а не удобство.
+    local neighbour = cell or M.prev(buf, row)
+    local lang = neighbour and M.lang_of(buf, neighbour) or CODE_LANG
+    -- в percent магика живёт первой строкой тела, в фенсах язык несёт сам фенс
+    local magic = (not fence) and lang ~= CODE_LANG and ("%%" .. lang) or nil
+
+    local text = {}
+    if where ~= "above" then
+        text[#text + 1] = "" -- пустая строка отделяет новую ячейку от предыдущей
+    end
+    text[#text + 1] = fence and ("```" .. lang) or "# %%"
+    if magic then
+        text[#text + 1] = magic
+    end
+    local cursor = at + #text + 1 -- первая строка тела: туда и ставим курсор
+    text[#text + 1] = ""
     if fence then
-        text = where == "above" and { "```" .. CODE_LANG, "", "```", "" }
-            or { "", "```" .. CODE_LANG, "", "```" }
-    else
-        text = where == "above" and { "# %%", "", "" } or { "", "# %%", "" }
+        text[#text + 1] = "```"
+    end
+    if where == "above" then
+        text[#text + 1] = ""
     end
 
     vim.api.nvim_buf_set_lines(buf, at, at, false, text)
-    return at + body_offset
+    return cursor
 end
 
 return M

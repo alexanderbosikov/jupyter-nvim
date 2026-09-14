@@ -134,6 +134,66 @@ function M.move(buf, cell, dir)
     return first.span_start + #tail + #middle + offset
 end
 
+---Сменить язык ячейки: python ↔ sql.
+---
+---Механики две, потому что представления два, и это не прихоть формата:
+---
+---* **фенсы** — язык это слово в info-строке (```` ```sql ````), а строка `%%sql`
+---  собирается из него в момент отправки ядру. Значит правим фенс и НЕ трогаем тело;
+---* **percent** — фенса нет вовсе, и магика живёт первой строкой тела: именно так её
+---  хранит jupytext. Значит правим тело и трогать больше нечего.
+---
+---`magic_args` при уходе в python снимаются: на ```` ```python ```` они не имеют смысла,
+---а в `.ipynb` уехали бы мусором в cell metadata.
+---
+---Чужая магика в теле (`%%timeit`) — отказ, а не молчаливая правка: `cells.text` не
+---приписывает вторую магику к телу, которое уже с неё начинается, поэтому ячейка
+---выглядела бы как sql, а ядру уехал бы `%%timeit`.
+---@param buf integer
+---@param cell jupyter.Cell
+---@param lang string
+---@return boolean ok, string|nil почему нет
+function M.set_lang(buf, cell, lang)
+    if not cells.is_code_lang(lang) then
+        return false, ("язык не поддержан: %s (можно python или sql)"):format(lang)
+    end
+    if cells.lang_of(buf, cell) == lang then
+        return false, ("ячейка уже %s"):format(lang)
+    end
+
+    local body_magic = (lines(buf, cell.start_row, cell.start_row)[1] or ""):match("^%%%%(%a+)")
+    if body_magic and not cells.is_code_lang(body_magic) then
+        return false, ("в теле ячейки магика %%%%%s — язык ей не сменить"):format(body_magic)
+    end
+
+    if cells.representation(buf) == "fence" then
+        if not cell.marker_row then
+            return false, "у ячейки нет фенса"
+        end
+        local fence = lines(buf, cell.marker_row, cell.marker_row)[1] or ""
+        local ticks, _, tail = fence:match("^(```+)(%S*)(.*)$")
+        tail = tail or ""
+        if lang == cells.CODE_LANG then
+            tail = tail:gsub('%s*magic_args=".-"', "", 1)
+        end
+        -- одна правка на операцию: строка тела с магикой идёт сразу за фенсом, поэтому
+        -- при уходе в python снимаем её тем же set_lines
+        local last = (body_magic and lang == cells.CODE_LANG) and cell.start_row or cell.marker_row
+        vim.api.nvim_buf_set_lines(buf, cell.marker_row - 1, last, false, { (ticks or "```") .. lang .. tail })
+        return true
+    end
+
+    if lang == cells.CODE_LANG then
+        if not body_magic then
+            return false, "магики в теле нет — снимать нечего"
+        end
+        vim.api.nvim_buf_set_lines(buf, cell.start_row - 1, cell.start_row, false, {})
+        return true
+    end
+    vim.api.nvim_buf_set_lines(buf, cell.start_row - 1, cell.start_row - 1, false, { "%%" .. lang })
+    return true
+end
+
 ---Превратить код-ячейку в markdown.
 ---@param buf integer
 ---@param cell jupyter.Cell

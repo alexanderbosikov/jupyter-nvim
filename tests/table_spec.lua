@@ -96,6 +96,25 @@ describe("статус и листание", function()
     end)
 end)
 
+describe("пустое значение в клетке", function()
+    it("пустая первая колонка не схлопывает строку", function()
+        local header = { "feature_source", "users" }
+        local rows = { { "Bond Screener registration bottom bar", "316" }, { "", "253" } }
+
+        local lines, layout = table_view.format(header, rows)
+
+        local users = layout[2]
+        assert.equals("253", lines[4]:sub(users.from, users.from + 2),
+            "число должно стоять в своей колонке, а не под соседним заголовком: «" .. lines[4] .. "»")
+    end)
+
+    it("хвостовые пробелы всё-таки срезаются", function()
+        local lines = table_view.format({ "колонка", "x" }, { { "значение", "" } })
+
+        assert.is_nil(lines[3]:find("%s$"), "у строки не должно быть хвоста из пробелов")
+    end)
+end)
+
 describe("враждебное значение в клетке", function()
     it("перевод строки не разваливает строку таблицы", function()
         local lines = table_view.format({ "id", "текст" }, {
@@ -284,5 +303,78 @@ describe("сортировка", function()
         assert.equals("s", keys.sort_asc)
         assert.equals("S", keys.sort_desc)
         assert.equals("c", keys.sort_clear)
+    end)
+end)
+
+-- Копирование результата. Проверяется содержимое регистра: копирование кончается им,
+-- а не промежуточной структурой.
+describe("копирование", function()
+    local view, sent, replies
+
+    before_each(function()
+        sent, replies = {}, {}
+        local sidecar = {
+            request = function(_, op, args, cb)
+                table.insert(sent, { op = op, args = args })
+                if cb and replies[1] then
+                    cb(nil, table.remove(replies, 1))
+                end
+            end,
+        }
+        view = table_view.new({ sidecar = sidecar, page_size = 2 })
+        view.path = "/tmp/df.parquet"
+        vim.fn.setreg('"', "")
+    end)
+
+    it("TSV: шапка и строки через табуляцию, без выравнивания", function()
+        local text = table_view.tsv({ "event_date", "uids", "users" }, {
+            { "2026-09-08", "3181", "2941" },
+            { "2026-09-09", "751", "726" },
+        })
+
+        assert.equals(
+            "event_date\tuids\tusers\n2026-09-08\t3181\t2941\n2026-09-09\t751\t726",
+            text
+        )
+    end)
+
+    it("таб и перевод строки внутри значения не ломают колонки", function()
+        local text = table_view.tsv({ "a", "b" }, { { "раз\tдва", "три\nчетыре" } })
+
+        assert.equals("a\tb\nраз два\tтри четыре", text)
+        assert.equals(2, #vim.split(text, "\n"), "строк ровно две: шапка и одна запись")
+    end)
+
+    it("y копирует показанную страницу", function()
+        view.header, view.rows = { "день", "сессии" }, { { "2026-09-01", "10" } }
+
+        view:get_actions().yank_page()
+
+        assert.equals("день\tсессии\n2026-09-01\t10", vim.fn.getreg('"'))
+    end)
+
+    it("Y просит всю таблицу в текущем порядке и копирует её", function()
+        view.header, view.rows = { "день" }, { { "2026-09-01" } }
+        view.total = 3
+        view.order = { { column = "день", desc = true } }
+        replies[1] = { header = { "день" }, rows = { { "3" }, { "2" }, { "1" } }, offset = 0, total_rows = 3 }
+
+        view:get_actions().yank_all()
+
+        assert.equals("table.page", sent[1].op)
+        assert.equals(0, sent[1].args.offset)
+        assert.equals(3, sent[1].args.limit, "лимит — вся таблица, а не страница")
+        assert.same({ { column = "день", desc = true } }, sent[1].args.order_by)
+        assert.equals("день\n3\n2\n1", vim.fn.getreg('"'))
+    end)
+
+    it("пустая таблица не копируется и не падает", function()
+        view.header, view.rows, view.total = {}, {}, 0
+
+        view:get_actions().yank_page()
+        view:get_actions().yank_all()
+
+        assert.equals("", vim.fn.getreg('"'))
+        assert.equals(0, #sent)
     end)
 end)

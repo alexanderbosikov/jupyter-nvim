@@ -716,7 +716,7 @@ describe("устаревший и исторический вывод", function
         local want = session.exec._next_run
         wait(function()
             local r = session.exec:run_for(cid(buf, row))
-            return r and r.run_id == want and r.status ~= "running"
+            return r and r.run_id == want and exec.is_done(r)
         end, 60000, "прогон в строке " .. row)
     end
 
@@ -1344,5 +1344,280 @@ describe("повторное открытие ноутбука", function()
 
         jupyter.detach(buf)
         jupyter.setup({})
+    end)
+end)
+
+-- История таблицы без ядра. Parquet читает сайдкар (polars живёт там), а поднимается он
+-- лениво, при первом прогоне — из-за этого предпросмотр таблицы из истории показывал
+-- «сайдкар не запущен» вместо данных, хотя история обещана и без ядра. Ядро тут и не
+-- нужно: сайдкар и ядро — разные процессы.
+describe("таблица из истории без ядра", function()
+    local buf
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("предпросмотр читается сразу после открытия, ядро не поднимается", function()
+        local dir = vim.fn.tempname()
+        vim.fn.mkdir(dir, "p")
+        local file = vim.fs.joinpath(dir, "nb.py")
+        vim.fn.writefile({ '# %% jncell="a3f9"', "df" }, file)
+
+        local base = vim.fs.joinpath(dir, ".jupyter-out", "nb")
+        vim.fn.mkdir(vim.fs.joinpath(base, "a3f9"), "p")
+        local parquet = vim.fs.joinpath(base, "a3f9", "1.parquet")
+        -- parquet собираем тем же python, что и сайдкаром: polars в нём гарантирован
+        -- прогонщиком тестов (tests/run.sh проверяет модули до запуска)
+        local made = vim.system({
+            vim.g.jupyter_python or "python3",
+            "-c",
+            ("import polars as pl; pl.DataFrame({'день': ['2026-09-01'], 'сессии': [42]}).write_parquet(%q)")
+                :format(parquet),
+        }):wait(30000)
+        assert.equals(0, made.code, "parquet не собрался: " .. (made.stderr or ""))
+
+        vim.fn.writefile({
+            vim.json.encode({
+                cell_id = "a3f9",
+                run_id = 1,
+                status = "ok",
+                kind = "table",
+                path = "a3f9/1.parquet",
+                rows = 1,
+                cols = 2,
+                code_sha = "0badc0de",
+                started_at = "2026-09-09T10:00:00Z",
+                duration_ms = 100,
+            }),
+        }, vim.fs.joinpath(base, "index.jsonl"))
+
+        vim.cmd.edit(file)
+        vim.bo.filetype = "python"
+        buf = vim.api.nvim_get_current_buf()
+        local session = jupyter.session(buf)
+        jupyter.open_for(buf)
+        session.output:show(session.store:last_run("a3f9"))
+
+        local shown = ""
+        wait(function()
+            shown = table.concat(vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false), "\n")
+            return shown:find("сессии") ~= nil
+        end, 30000, "предпросмотр таблицы из истории")
+
+        assert.is_nil(shown:find("сайдкар не запущен"), shown)
+        assert.is_truthy(shown:find("2026%-09%-01"), shown)
+        assert.equals("none", session.kernel:state(), "ядро подниматься не должно")
+    end)
+end)
+
+-- Второй ноутбук поверх первого. Сессия своя на каждый буфер, drawer вместе с ней,
+-- поэтому раньше на экране оставалось окно вывода от ноутбука, которого уже не видно,
+-- и рядом открывалось второе. Ядро для проверки не нужно: речь про окна.
+describe("окно вывода при смене ноутбука", function()
+    local first, second
+
+    before_each(function()
+        jupyter.setup({})
+    end)
+
+    after_each(function()
+        for _, b in ipairs({ first, second }) do
+            if b and vim.api.nvim_buf_is_valid(b) then
+                jupyter.detach(b)
+            end
+        end
+        first, second = nil, nil
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("окно уходит вместе с ноутбуком, которого больше не видно", function()
+        notebook({ "# %%", "a = 1" })
+        first = vim.api.nvim_get_current_buf()
+        jupyter.session(first).output:open()
+        assert.is_true(jupyter.session(first).output:is_open())
+
+        notebook({ "# %%", "b = 2" }) -- тот же окно, буфер первого ноутбука спрятался
+        second = vim.api.nvim_get_current_buf()
+
+        assert.is_false(jupyter.session(first).output:is_open(), "старое окно вывода должно было уйти")
+        jupyter.session(second).output:open()
+        assert.is_true(jupyter.session(second).output:is_open())
+    end)
+
+    it("два ноутбука рядом в сплитах сохраняют оба окна", function()
+        notebook({ "# %%", "a = 1" })
+        first = vim.api.nvim_get_current_buf()
+        jupyter.session(first).output:open()
+
+        vim.cmd("vsplit")
+        notebook({ "# %%", "b = 2" }) -- оба буфера показаны, закрывать нечего
+        second = vim.api.nvim_get_current_buf()
+        jupyter.session(second).output:open()
+
+        assert.is_true(jupyter.session(first).output:is_open(), "видимый ноутбук своё окно не теряет")
+        assert.is_true(jupyter.session(second).output:is_open())
+    end)
+
+    it("вернулся к ноутбуку — окно вывода вернулось", function()
+        notebook({ "# %%", "a = 1" })
+        first = vim.api.nvim_get_current_buf()
+        jupyter.session(first).output:open()
+
+        notebook({ "# %%", "b = 2" })
+        second = vim.api.nvim_get_current_buf()
+        assert.is_false(jupyter.session(first).output:is_open())
+
+        vim.api.nvim_set_current_buf(first) -- как прыжок из telescope или harpoon
+        vim.api.nvim_exec_autocmds("BufWinEnter", { buffer = first })
+
+        assert.is_true(jupyter.session(first).output:is_open(), "окно должно вернуться само")
+    end)
+
+    it("закрытое руками окно само не всплывает", function()
+        notebook({ "# %%", "a = 1" })
+        first = vim.api.nvim_get_current_buf()
+        local session = jupyter.session(first)
+        session.output:open()
+        session.output:close() -- как <leader>no
+
+        notebook({ "# %%", "b = 2" })
+        second = vim.api.nvim_get_current_buf()
+        vim.api.nvim_set_current_buf(first)
+        vim.api.nvim_exec_autocmds("BufWinEnter", { buffer = first })
+
+        assert.is_false(session.output:is_open(), "его закрыл пользователь — значит не хотел видеть")
+    end)
+
+    it("прогон спрятанного ноутбука не поднимает его окно поверх чужого", function()
+        notebook({ "# %%", "a = 1" })
+        first = vim.api.nvim_get_current_buf()
+        local session = jupyter.session(first)
+        session.output:open()
+
+        notebook({ "# %%", "b = 2" }) -- ушли на другой ноутбук, окно первого закрылось
+        second = vim.api.nvim_get_current_buf()
+        assert.is_false(session.output:is_open())
+
+        -- как будто у спрятанного ноутбука доехал очередной прогон из очереди
+        session.exec.on_update({ cell_id = "a3f9", run_id = 1, status = "ok", lines = { "готово" } }, true)
+
+        assert.is_false(session.output:is_open(), "окно спрятанного ноутбука всплывать не должно")
+
+        vim.api.nvim_set_current_buf(first)
+        vim.api.nvim_exec_autocmds("BufWinEnter", { buffer = first })
+
+        assert.is_true(session.output:is_open(), "вернулись — окно открылось")
+        local shown = table.concat(vim.api.nvim_buf_get_lines(session.output.buf, 0, -1, false), "\n")
+        assert.is_truthy(shown:find("готово"), "и показывает тот самый прогон: " .. shown)
+    end)
+
+    it("сессия при этом жива: закрывается окно, а не ядро", function()
+        notebook({ "# %%", "a = 1" })
+        first = vim.api.nvim_get_current_buf()
+        local session = jupyter.session(first)
+        session.output:open()
+
+        notebook({ "# %%", "b = 2" })
+        second = vim.api.nvim_get_current_buf()
+
+        assert.is_false(session.output:is_open())
+        assert.equals(session, jupyter.session(first), "сессия та же, её никто не сносил")
+    end)
+end)
+
+-- Центрирование при прыжке по ячейкам. Проверяется положение курсора в окне, а не
+-- вызов zz: важно, что тело ячейки видно, а не то, какой командой это сделано.
+describe("прыжок по ячейкам", function()
+    local buf
+
+    local function long_notebook()
+        local lines = {}
+        for i = 1, 200 do
+            lines[i] = (i % 20 == 1) and "# %%" or ("x = " .. i)
+        end
+        notebook(lines)
+        buf = vim.api.nvim_get_current_buf()
+        vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    end
+
+    after_each(function()
+        if buf then
+            jupyter.detach(buf)
+            buf = nil
+        end
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("следующая ячейка встаёт по центру экрана", function()
+        jupyter.setup({})
+        long_notebook()
+
+        jupyter.next_cell()
+        jupyter.next_cell()
+        jupyter.next_cell()
+
+        local middle = math.floor(vim.api.nvim_win_get_height(0) / 2)
+        assert.is_true(
+            math.abs(vim.fn.winline() - middle) <= 2,
+            ("курсор должен быть у середины окна: строка в окне %d, середина %d"):format(
+                vim.fn.winline(), middle
+            )
+        )
+    end)
+
+    it("конец и начало своей ячейки", function()
+        jupyter.setup({})
+        notebook({ "# %%", "первая = 1", "вторая = 2", "", "# %%", "x = 3" })
+        buf = vim.api.nvim_get_current_buf()
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.cell_end()
+        assert.same({ 3, #"вторая = 2" - 1 }, vim.api.nvim_win_get_cursor(0),
+            "конец тела — последняя непустая строка, а не пустая перед следующим маркером")
+
+        jupyter.cell_start()
+        assert.same({ 2, 0 }, vim.api.nvim_win_get_cursor(0))
+    end)
+
+    it("вставка ставит курсор в тело новой ячейки", function()
+        -- Про сам insert-режим теста нет намеренно: headless его не видит — ни
+        -- startinsert, ни feedkeys не переключают режим без настоящего цикла ввода
+        -- (проверено). Поэтому переход в insert живёт в списке ручной проверки
+        -- CONTRIBUTING.md, а здесь проверяется то, что наблюдаемо: куда встал курсор.
+        jupyter.setup({})
+        notebook({ "# %%", "x = 1" })
+        buf = vim.api.nvim_get_current_buf()
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.insert_below()
+
+        -- строки: маркер, тело старой, пустая-разделитель, маркер новой, её тело
+        assert.same({ 5, 0 }, vim.api.nvim_win_get_cursor(0))
+        assert.same({ "# %%", "x = 1", "", "# %%", "" },
+            vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    end)
+
+    it("center_on_jump = false оставляет прокрутку как есть", function()
+        jupyter.setup({ center_on_jump = false })
+        long_notebook()
+
+        jupyter.next_cell()
+        jupyter.next_cell()
+        jupyter.next_cell()
+
+        local middle = math.floor(vim.api.nvim_win_get_height(0) / 2)
+        assert.is_true(
+            vim.fn.winline() > middle + 2,
+            "без центрирования ячейка остаётся у нижнего края: " .. vim.fn.winline()
+        )
     end)
 end)

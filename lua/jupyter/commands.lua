@@ -31,6 +31,17 @@ function M.setup(api)
     cmd("JupyterMoveDown", function() api.move_cell_down() end, { desc = "переставить ячейку ниже" })
     cmd("JupyterToMarkdown", function() api.cell_to_markdown() end, { desc = "ячейку в markdown" })
     cmd("JupyterToCode", function() api.cell_to_code() end, { desc = "markdown под курсором в код" })
+    cmd("JupyterCellStart", function() api.cell_start() end, { desc = "курсор в начало ячейки" })
+    cmd("JupyterCellEnd", function() api.cell_end() end, { desc = "курсор в конец ячейки" })
+    cmd("JupyterCellLang", function(a)
+        api.cell_lang(a.args)
+    end, {
+        nargs = "?",
+        complete = function()
+            return { "python", "sql" }
+        end,
+        desc = "язык ячейки: python или sql, без аргумента — переключить",
+    })
     cmd("JupyterCellArgs", function(a)
         api.cell_args(a.args)
     end, { nargs = "*", desc = "параметры магики ячейки: df_name=orders" })
