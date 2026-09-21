@@ -460,6 +460,32 @@ same id on a re-run and does not lose its history. A cell with no marker (code b
 first `# %%`) has nowhere to write an id — there the cell's number remains, and the history
 of such a cell does not survive a neighbour being inserted. That is a deliberate boundary.
 
+### 7.2.2. A markdown cell is not a cell here
+
+The id above is a code cell's. Prose has none, and the reason is one level below ids: in the
+fence representation a markdown cell is **plain text with no fence at all** (converting a
+cell to markdown literally strips the fences — `edit.lua:to_markdown`), while `cells.lua`
+collects only fences whose language is a code language. Prose is therefore invisible to the
+whole model: no enumeration, no id, no anchor, no claim. An outside reader can read it and
+cannot be offered any safe way to change it (§8).
+
+That is a decision of ours, not a limit of the format. Measured on jupytext 1.19.5:
+
+| question | answer |
+|---|---|
+| where is the boundary between two markdown cells? | a run of **two** blank lines. One blank line keeps the text in the same cell — checked both ways: `Абзац.\n\nАбзац.` comes back as one cell, `\n\n\n` as two |
+| can a markdown cell carry metadata? | yes: with metadata it is written as `<!-- #region jncell="m1f2" -->` … `<!-- #endregion -->` and returns to the `.ipynb` with that metadata intact |
+| can we write that region ourselves? | yes — a hand-written region becomes its own markdown cell with that id, exactly as `jncell="…"` in an info string does for code |
+| does the round trip lose cells? | no: `ipynb → md → ipynb` over six cells kept all six, adjacent metadata-less markdown cells included |
+
+So the mechanism for making prose first-class is jupytext's own, and an HTML comment is
+invisible once the markdown is rendered. What stands in the way is not the format but
+`cells.list`: everything that executes hangs off it — Run All, the `index` numbering,
+statuses under cells, `]c`/`[c`, split/join/move, the text objects — 18 call sites in 8
+modules. Let prose into that list and Run All walks over the headings. Making markdown a
+cell therefore means **splitting the list by kind, not widening it**: a code-only list for
+whatever runs, and a full one for the snapshot, the agent and the outline.
+
 ### 7.2.1. Sorting a table
 
 `order_by` is a list of `{column, desc}` in order of importance. The sidecar does the
@@ -737,6 +763,14 @@ as a neighbour is inserted. The plugin does this at the first run anyway (§7.2)
 ipywidgets, interactive widgets and HTML tables; exporting output back into the `.ipynb`
 and saving a session; a remote Jupyter server over HTTP; image providers other than
 image.nvim; non-Python kernels.
+
+**Editing prose from outside.** A markdown cell is not a cell in this model (§7.2.2), so it
+has no id to name, nothing for a claim to anchor to and no sha to check. Inserting one is
+not supported either — `cells.insert` writes a code fence, and markdown put there lands
+inside ```` ``` ```` and breaks the next Run All. There is no fallback: writing to the
+`.ipynb` or to the jupytext `.md` while the notebook is open in nvim is the one thing that
+reliably breaks the document, so an outside reader hands the prose back in its reply and the
+user places it.
 
 `text/html` in v1: if the bundle has a `text/plain`, we take it; if it is HTML only, we
 save a file and show it in the status.

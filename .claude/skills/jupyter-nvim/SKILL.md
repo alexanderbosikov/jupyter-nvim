@@ -251,6 +251,14 @@ client code and the rules are in `reference.md`.
 - **Do not write to the notebook file** (`.ipynb` or the jupytext `.md`) while it is open
   in nvim: their `:w` will overwrite your edit, and your write will overwrite what they
   have not saved. Edits go through `edit_begin`/`edit_apply`.
+- **Existing prose cannot be edited at all, and the file is not the way round it.** In this
+  representation a markdown cell is plain text with no fence, so it is not a cell: it has no
+  id, `edit_begin`/`edit_adopt` have nothing to address, and the snapshot does not list it.
+  That part is a real limit — say so. But do **not** fall back to writing the `.ipynb` or the
+  `.md`: besides the clash above, a write to the `.ipynb` never reaches the open buffer at
+  all (it was converted by jupytext when opened), so it looks like it worked and is gone at
+  the next save. Give the prose in your reply, or say which lines to change, and let the user
+  place it.
 - **Do not use `--remote-send`** (sending keys): it moves the cursor, and it turns into
   garbage if the user is in insert mode. Only `--remote-expr` and the API by buffer number.
 - **Do not move the cursor.** Everything you need takes a buffer and a line; read the
