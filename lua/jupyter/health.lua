@@ -8,6 +8,7 @@
 
 local common = require("jupyter.ui.common")
 local images = require("jupyter.images")
+local python_mod = require("jupyter.python")
 local sidecar = require("jupyter.sidecar")
 
 local M = {}
@@ -46,10 +47,6 @@ local function run(cmd, opts)
     return result, nil
 end
 
-local function python_of(config)
-    return (config and config.python) or vim.g.jupyter_python or "python3"
-end
-
 ---@return table[] список { level, msg }
 ---Разобрать JSON от внешней команды.
 ---
@@ -76,14 +73,16 @@ function M.collect(config)
         table.insert(report, { level = level, msg = msg })
     end
 
-    -- 1. интерпретатор
-    local python = python_of(config)
-    local resolved = vim.fn.exepath(python)
-    if resolved == "" and vim.fn.filereadable(python) == 0 then
-        add("error", ("python не найден: %s. Задай vim.g.jupyter_python или opts.python"):format(python))
+    -- 1. интерпретатор — теми же правилами, что и сессия, и с указанием источника:
+    -- когда python «не тот», первый вопрос — откуда он взялся
+    local ctx = python_mod.context()
+    local python, source, tried = python_mod.resolve(config.python, ctx)
+    if not python then
+        add("error", ("python не найден (%s): %s. Задай opts.python — строку, список кандидатов или функцию")
+            :format(source, table.concat(tried, ", ")))
         return report
     end
-    add("ok", ("python: %s"):format(resolved ~= "" and resolved or python))
+    add("ok", ("python: %s (%s)"):format(python, source))
 
     -- 2. библиотеки в нём
     local probe = table.concat({
@@ -137,25 +136,54 @@ function M.collect(config)
         end
     end
 
-    -- 4. kernelspec
+    -- 4. kernelspec: не только есть ли, но и какой интерпретатор он запускает.
+    -- Абсолютный argv на чужой python — самый частый способ получить ядро без polars (§6.3);
+    -- относительный безопасен: сайдкар кладёт свой каталог первым в PATH ядра
     local wanted = config.kernel_name or "python3"
-    local specs = run({
-        python,
-        "-c",
-        "import json;from jupyter_client.kernelspec import KernelSpecManager;"
-            .. "print(json.dumps(sorted(KernelSpecManager().find_kernel_specs())))",
-    })
+    if type(wanted) == "function" then
+        wanted = wanted(ctx)
+    end
+    local spec_probe = table.concat({
+        "import json,os,sys",
+        "from jupyter_client.kernelspec import KernelSpecManager, NoSuchKernel",
+        "ksm=KernelSpecManager()",
+        "out={'names':sorted(ksm.find_kernel_specs())}",
+        "try:",
+        "    spec=ksm.get_kernel_spec(sys.argv[1])",
+        "    argv0=spec.argv[0] if spec.argv else ''",
+        "    out['dir']=spec.resource_dir",
+        "    out['argv0']=argv0",
+        "    out['relative']=not os.path.isabs(argv0)",
+        "    out['same']=out['relative'] or os.path.realpath(argv0)==os.path.realpath(sys.executable)",
+        "except NoSuchKernel:",
+        "    pass",
+        "print(json.dumps(out))",
+    }, "\n")
+    local specs = run({ python, "-c", spec_probe, wanted })
+    local info
     if specs and specs.code == 0 then
-        local names = decode(specs.stdout)
-        if names then
-            if vim.tbl_contains(names, wanted) then
-                add("ok", ("kernelspec %s найден"):format(wanted))
-            else
-                add("error", ("kernelspec %s не найден. Доступны: %s"):format(wanted, table.concat(names, ", ")))
-            end
+        -- decode(), а не vim.json.decode: там уже стоит luanil, без которого JSON null
+        -- стал бы vim.NIL и прошёл проверку «поле задано»
+        local parsed = decode(specs.stdout)
+        if type(parsed) == "table" and type(parsed.names) == "table" then
+            info = parsed
         end
-    else
+    end
+    if not info then
         add("warn", "не удалось перечислить kernelspec'и")
+    elseif not info.dir then
+        add("error", ("kernelspec %s не найден. Доступны: %s"):format(wanted, table.concat(info.names, ", ")))
+    else
+        add("ok", ("kernelspec %s найден: %s"):format(wanted, info.dir))
+        if info.same == false then
+            add("warn", ("kernelspec %s запускает другой интерпретатор: %s. Ядро и сайдкар должны быть "
+                .. "из одного окружения, иначе в ядре не будет polars и результат-датафрейм не соберётся")
+                :format(wanted, info.argv0))
+        elseif info.relative then
+            add("ok", ("argv kernelspec относительный (%s): ядро возьмётся из окружения сайдкара"):format(info.argv0))
+        else
+            add("ok", "kernelspec запускает тот же интерпретатор, что и сайдкар")
+        end
     end
 
     -- 5. картинки

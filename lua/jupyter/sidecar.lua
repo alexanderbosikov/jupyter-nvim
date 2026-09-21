@@ -8,6 +8,8 @@
 -- порядка сообщений. Обработчики выполняются под pcall: упавший обработчик не должен
 -- ронять канал, иначе плагин молча перестанет получать вывод.
 
+local python = require("jupyter.python")
+
 local M = {}
 
 M.PROTOCOL_V = 1
@@ -28,10 +30,12 @@ end
 function M.new(opts)
     opts = opts or {}
     return setmetatable({
-        python = opts.python or vim.g.jupyter_python or "python3",
+        -- без явного пути интерпретатор ищется по общим правилам (python.lua)
+        python = opts.python or python.resolve(nil) or "python3",
         root = opts.root or plugin_root(),
         on_exit = opts.on_exit,
         _proc = nil,
+        _stderr_tail = nil,
         _next_id = 0,
         _pending = {},
         _handlers = {},
@@ -60,8 +64,17 @@ function Sidecar:start(cb)
         if cb then cb({ code = "already_running", msg = "сайдкар уже запущен" }) end
         return
     end
+    -- vim.system на несуществующем бинарнике бросает исключение, а не зовёт колбэк:
+    -- проверяем сами, чтобы ошибка конфигурации пришла тем же путём, что и остальные
+    if vim.fn.executable(self.python) ~= 1 then
+        if cb then
+            cb({ code = "python_not_found", msg = ("python не найден: %s"):format(self.python) })
+        end
+        return
+    end
 
     self._exited = nil
+    self._stderr_tail = nil
     self._proc = vim.system({ self.python, "-m", "jupyter_nvim" }, {
         stdin = true,
         text = true,
@@ -72,13 +85,20 @@ function Sidecar:start(cb)
         end,
         stderr = function(err, data)
             if err or not data or not data:match("%S") then return end
+            -- последняя непустая строка stderr: если процесс сейчас умрёт, это и есть причина
+            -- («No module named jupyter_client»), и она должна попасть в ошибку, а не только в журнал
+            self._stderr_tail = data:match("([^\n]*%S[^\n]*)%s*$")
             self:_emit_local("log", { level = "stderr", msg = data })
         end,
     }, function(res)
         self._exited = res
         self._proc = nil
         vim.schedule(function()
-            self:_fail_pending({ code = "sidecar_exited", msg = "сайдкар завершился", code_exit = res.code })
+            local why = "сайдкар завершился"
+            if self._stderr_tail then
+                why = why .. ": " .. self._stderr_tail
+            end
+            self:_fail_pending({ code = "sidecar_exited", msg = why, code_exit = res.code })
             if self.on_exit then self.on_exit(res) end
         end)
     end)

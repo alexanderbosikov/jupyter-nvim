@@ -10,23 +10,30 @@ Three things are needed: nvim with plenary, the sidecar's python environment, an
 registered kernel.
 
 ```sh
-# 1. the sidecar's environment (python 3.11+): jupyter_client, polars + pytest, ipykernel
+# 1. the sidecar's environment (python 3.11+): jupyter_client, polars + pytest, ipykernel.
+#    Any path will do — ~/.venvs/jupyter is an example. A work project's environment fits
+#    too, as long as it has these packages
 python3 -m venv ~/.venvs/jupyter
 ~/.venvs/jupyter/bin/pip install -e 'sidecar[dev]'
 
-# 2. a kernel named python3 — the tests use this one
-~/.venvs/jupyter/bin/python -m ipykernel install --user --name python3
-jupyter kernelspec list   # check that it showed up
+# 2. the python3 kernelspec does not have to be registered: once ipykernel is in the
+#    environment, jupyter_client finds its own kernelspec inside the venv
+~/.venvs/jupyter/bin/jupyter kernelspec list   # python3 should be in the list
 
 # 3. plenary for the Lua tests: through any plugin manager, or by hand
 git clone https://github.com/nvim-lua/plenary.nvim \
     ~/.local/share/nvim/lazy/plenary.nvim
 ```
 
-**The kernelspec's `argv` must point at the same python as the sidecar.** A relative path
-or a different interpreter, and the kernel comes up without `polars` while a dataframe
-result silently fails to be assembled. This has already gone off once; the post-mortem is
-in §6.3 of ARCHITECTURE.md.
+**The kernel has to be started by the same python as the sidecar.** Otherwise it comes up
+without `polars` and a dataframe result silently fails to be assembled; this has already
+gone off once, the post-mortem is in §6.3 of ARCHITECTURE.md. A relative `argv` in the
+kernelspec is safe — the sidecar puts its own directory first in the kernel's PATH. What is
+dangerous is a user-level `python3` kernelspec
+(`~/.local/share/jupyter/kernels/python3`, on a mac `~/Library/Jupyter/kernels/python3`):
+it takes priority over the one in the venv and may point at another interpreter.
+`:checkhealth jupyter` shows which kernelspec was taken and whether its python is the right
+one.
 
 ## Running the tests
 
@@ -38,6 +45,10 @@ JUPYTER_NVIM_PYTHON=~/.venvs/jupyter/bin/python ./tests/run.sh
 # the sidecar: pytest, no nvim
 cd sidecar && PYTHONPATH=. ~/.venvs/jupyter/bin/python -m pytest -q
 ```
+
+Without `JUPYTER_NVIM_PYTHON` the plugin's own search is used: an activated environment
+(`source ~/.venvs/jupyter/bin/activate && ./tests/run.sh`) or a `.venv` in the root of the
+repository.
 
 If plenary is not where `tests/minimal_init.lua` looks for it, the path can be given
 explicitly: `JUPYTER_NVIM_PLENARY=/path/to/plenary.nvim ./tests/run.sh`.

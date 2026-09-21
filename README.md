@@ -64,19 +64,25 @@ vim.api.nvim_create_autocmd("BufReadCmd", { -- BEFORE jupytext.setup(): registra
     "alexanderbosikov/jupyter-nvim",
     ft = { "python", "markdown" },
     main = "jupyter",
-    init = function()
-        -- the interpreter the sidecar is started with
-        vim.g.jupyter_python = vim.fn.expand("~/.venvs/jupyter/bin/python")
-    end,
     opts = {
+        -- the sidecar's interpreter: a string, a list of candidates (the first existing one
+        -- wins) or a function. Without it the plugin looks by itself: the active
+        -- $VIRTUAL_ENV, then a .venv up the tree from the notebook's directory, then
+        -- python3 from PATH — see "The interpreter" below
+        python = { "~/work/.venv/bin/python", "~/.venvs/jupyter/bin/python" },
         kernel_name = "python3",
         output = { position = "right", size = 0.5 },
     },
 }
 ```
 
-Check the environment with `:checkhealth jupyter` — the interpreter, library versions, the
-handshake with the sidecar, the presence of a kernelspec and of image.nvim. The same report
+The kernel and the sidecar have to come from the same environment. If that environment has
+`ipykernel` in it, the `python3` kernelspec is already there: jupyter_client finds the one
+inside the venv, and nothing has to be registered separately.
+
+Check the environment with `:checkhealth jupyter` — which interpreter was picked and where
+from, library versions, the handshake with the sidecar, the kernelspec and whether it runs
+the same python, and image.nvim. The same report
 covers the run history of the open notebook: its weight and the cells that are no longer in
 the document (see "Where outputs live").
 
@@ -585,8 +591,8 @@ different processes, and the kernel's laziness still holds.
 
 ```lua
 opts = {
-    kernel_name = "python3",
-    python = nil,                    -- defaults to vim.g.jupyter_python
+    kernel_name = "python3",         -- kernelspec name; may be a function of the context
+    python = nil,                    -- see "The interpreter" below
     env = {},                        -- environment variables for the kernel
     filetypes = { "python", "markdown" },
     out_dir = ".jupyter-out",
@@ -621,6 +627,31 @@ queries then shows `0%` from the first second to the last and looks stuck. So on
 plugin asks the kernel for the text bar instead — the one made of `\r`, which the output
 window redraws in place. `false` leaves the kernel alone, and the bar then does not move at
 all.
+
+### The interpreter
+
+`python` takes a string, a list or a function — which is what makes one config fit several
+machines, where the environment lives at different paths:
+
+- **a string** — a path or a name in PATH. If there is no such thing, that is an error; no
+  other interpreter is substituted, so that a typo in the path cannot hide behind a random
+  environment with no polars;
+- **a list** — candidates, the first existing one wins:
+  `{ "~/work/.venv/bin/python", "~/.venvs/jupyter/bin/python" }`;
+- **a function** `function(ctx) ... end` gets `ctx.dir` — the notebook's directory — and
+  `ctx.venv` — the python of the nearest environment (the active `$VIRTUAL_ENV`, otherwise a
+  `.venv` up the tree) — and returns a string, a list or `nil`.
+  `{ ctx.venv, "~/.venvs/jupyter/bin/python" }` reads as "the project's environment, and the
+  common one if there is none".
+
+If `python` is not set, `vim.g.jupyter_python` is looked at, then `$JUPYTER_NVIM_PYTHON`,
+then the search: `$VIRTUAL_ENV`, a `.venv` up the tree from the notebook's directory,
+`python3` from PATH. The choice is made per notebook, not per nvim session: notebooks in
+different projects may have different environments. What was picked and where from is
+visible in `:JupyterLog` and `:checkhealth jupyter`; the same report warns when the
+kernelspec starts an interpreter other than the sidecar's.
+
+`kernel_name` may be a function of the same context.
 
 ## Kernels and leaving the editor
 

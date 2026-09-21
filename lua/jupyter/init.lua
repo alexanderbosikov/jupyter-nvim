@@ -20,6 +20,7 @@ local picker = require("jupyter.ui.picker")
 local agent = require("jupyter.agent")
 local ask = require("jupyter.ask")
 local pane = require("jupyter.pane")
+local python = require("jupyter.python")
 local snapshot = require("jupyter.snapshot")
 local toc = require("jupyter.toc")
 local table_view = require("jupyter.ui.table")
@@ -28,8 +29,14 @@ local M = {}
 
 ---@class jupyter.Config
 M.defaults = {
+    -- имя kernelspec; строка или функция от контекста ноутбука (см. python ниже).
+    -- Если в окружении сайдкара стоит ipykernel, kernelspec python3 там уже есть
     kernel_name = "python3",
-    python = nil, -- путь к интерпретатору сайдкара; по умолчанию vim.g.jupyter_python
+    -- интерпретатор сайдкара: строка, список кандидатов (берётся первый существующий)
+    -- или функция от контекста { buf, dir, venv }. nil — vim.g.jupyter_python,
+    -- потом $JUPYTER_NVIM_PYTHON, потом автопоиск: $VIRTUAL_ENV, .venv вверх от каталога
+    -- ноутбука, python3 из PATH. Подробности и порядок — lua/jupyter/python.lua
+    python = nil,
     env = {},
     filetypes = { "python", "markdown" },
     out_dir = ".jupyter-out",
@@ -379,10 +386,18 @@ function M.session(buf)
         end
     end
 
-    local sc = require("jupyter.sidecar").new({ python = M.config.python })
+    -- Интерпретатор выбирается на сессию, а не в setup(): у ноутбуков в разных проектах
+    -- могут быть разные окружения. Что выбрано и почему — в журнале сессии (:JupyterLog)
+    local ctx = python.context(buf)
+    local py, py_source, py_tried = python.resolve(M.config.python, ctx)
+    local kernel_name = M.config.kernel_name
+    if type(kernel_name) == "function" then
+        kernel_name = kernel_name(ctx)
+    end
+    local sc = require("jupyter.sidecar").new({ python = py or py_tried[1] or "python3" })
     local k = kernel.new({
         sidecar = sc,
-        kernel_name = M.config.kernel_name,
+        kernel_name = kernel_name,
         env = M.config.env,
         text_progress = M.config.text_progress,
     })
@@ -499,10 +514,21 @@ function M.session(buf)
         stale_cache = { value = {}, dirty = nil }, -- dirty: диапазон строк, правленных после расчёта
         browse = {}, -- cell_id -> номер просматриваемого прогона в истории
         started = false,
+        python = py, -- nil, если ни один кандидат не существует
+        python_source = py_source,
+        python_tried = py_tried,
         log = {},
     }
     sessions[buf] = found
     M.watch_edits(buf) -- диапазоны правок для кэша свежести
+    -- первая запись в журнале сессии: какой python выбран и откуда. Когда ядро окажется
+    -- «не тем», первый вопрос — про источник интерпретатора
+    table.insert(found.log, {
+        at = os.date("%H:%M:%S"),
+        level = py and "info" or "error",
+        msg = py and ("python: %s (%s) · kernelspec: %s"):format(py, py_source, tostring(kernel_name))
+            or ("python не найден (%s), проверены: %s"):format(py_source, table.concat(py_tried, ", ")),
+    })
 
     -- Диагностика. Без этого любая поломка сайдкара была бы невидимой: события log
     -- приходят, но подписчика нет, и они просто теряются.
@@ -871,6 +897,18 @@ function M.ensure_started(buf)
     local s = M.session(buf)
     M.note_representation(s) -- ловушка на промах filetype: зовётся на каждый запуск
     if s.started then
+        return s
+    end
+    -- Без интерпретатора стартовать нечему: говорим, что искали и где, вместо
+    -- «сайдкар не запущен» из глубины. started не выставляем — после правки конфига
+    -- и :JupyterStop можно попробовать снова
+    if not s.python then
+        vim.notify(
+            ("jupyter.nvim: python для сайдкара не найден (%s). Проверены: %s"):format(
+                s.python_source, table.concat(s.python_tried, ", ")
+            ),
+            vim.log.levels.ERROR
+        )
         return s
     end
     s.started = true

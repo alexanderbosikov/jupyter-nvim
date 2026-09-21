@@ -18,7 +18,7 @@ already taken by the metapackage), and the CLI is a `jupyter-out` binary that
 | cell boundaries | **regexes behind a detector interface** | they work, and the interface makes treesitter a one-module replacement | edge cases such as a fence inside a string |
 | output | **one scratch buffer per notebook plus a status under the cell** | output is copied, searched and scrolled by the usual means; the state of every cell is visible at once | you cannot see the output of two cells at the same time |
 | cell id | **a short hash in the document's text** | output is found outside the editor, without starting nvim | a cell's first run edits the buffer (one undo-able edit) |
-| interpreter | **a path from the config** | the kernel and the sidecar have to come from the same environment | no isolation of dependencies |
+| interpreter | **an explicit path from the config; otherwise a search: `$VIRTUAL_ENV`, a `.venv` next to the notebook, PATH** | the kernel and the sidecar have to come from the same environment; one nvim config lives on several machines, and the path to the environment differs on each | a guessed environment may turn out to have no `jupyter_client` — the sidecar then does not start, and the session journal and `:checkhealth` say which python was taken and where from |
 
 ## 2. Processes and data flows
 
@@ -185,6 +185,7 @@ Messages outside that table fall into three cases, and they must not be mixed:
 | `cells.lua` | cell boundaries behind a detector interface: percent and fences; collecting, jumping, inserting | knows nothing about output or about the kernel |
 | `cellid.lua` | generating, parsing and inserting an id in the text, checking for collisions | — |
 | `sidecar.lua` | the process, the JSON-lines codec, correlating `id`↔reply, dispatching events | does not know what the events mean |
+| `python.lua` | choosing the sidecar's interpreter: a string, a list, a function of the notebook's context, a search across environments | starts nothing; never substitutes what was set explicitly |
 | `kernel.lua` | the state machine, a queue of runs until readiness | — |
 | `exec.lua` | runs, `run_id`, rejecting stale events, `result_expr` | does not draw |
 | `store.lua` | reading `index.jsonl` back, assembling a run for drawing; where a notebook's directory is | does not write |
@@ -832,7 +833,7 @@ what has to be checked is the buffer's contents.
 Done: the protocol and the sidecar, running cells, output into a buffer, paged tables,
 stable ids and run history, the status under a cell, images, `:checkhealth`, text objects,
 restructuring cells (§5, `edit.lua`), magic arguments, finding kernels with no owner and
-attaching to a live kernel (§6.5).
+attaching to a live kernel (§6.5), choosing the interpreter from the notebook's environment.
 
 A "cell navigation mode" is no longer in the plans, and that is a decision rather than
 forgetfulness: an input shell would be wrapping emptiness, because nvim already has a

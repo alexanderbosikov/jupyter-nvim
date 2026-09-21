@@ -50,6 +50,8 @@ vim.opt.runtimepath:append(plenary)
 vim.opt.swapfile = false
 vim.opt.shadafile = "NONE"
 
--- Сайдкару нужен python с jupyter_client, ipykernel и polars.
--- Задаётся переменной окружения: JUPYTER_NVIM_PYTHON=/path/to/venv/bin/python ./tests/run.sh
-vim.g.jupyter_python = vim.env.JUPYTER_NVIM_PYTHON or "python3"
+-- Сайдкару нужен python с jupyter_client, ipykernel и polars. Явно:
+--   JUPYTER_NVIM_PYTHON=/path/to/venv/bin/python ./tests/run.sh
+-- Без переменной работает автопоиск плагина (lua/jupyter/python.lua): активное
+-- окружение $VIRTUAL_ENV, .venv вверх от каталога, python3 из PATH.
+vim.g.jupyter_python = vim.env.JUPYTER_NVIM_PYTHON
