@@ -111,6 +111,36 @@ describe("снимок ноутбука", function()
         assert.is_false(snapshot.build(buf, { store = fresh_store }).cells[1].stale)
     end)
 
+    it("в очереди и выполняется — разные состояния, а не один признак «занята»", function()
+        local runs = {
+            a3f9 = { status = "running", run_id = 12, lines = { "Периоды: 0%" } },
+            ["0002"] = { status = "queued", run_id = 13, lines = {} },
+        }
+        local fake_exec = {
+            run_for = function(_, cell_id) return runs[cell_id] end,
+        }
+
+        local snap = snapshot.build(buf, { exec = fake_exec })
+
+        assert.is_true(snap.cells[1].running, "занята: ядро считает её прямо сейчас")
+        assert.is_true(snap.cells[2].running, "занята: стоит в очереди ядра")
+        assert.equals("running", snap.cells[1].live.status)
+        assert.equals("queued", snap.cells[2].live.status, "«run all» — это очередь, а не работа")
+        assert.equals("Периоды: 0%", snap.cells[1].live.tail, "по хвосту видно, движется ли прогон")
+        assert.equals(0, snap.cells[2].live.lines)
+    end)
+
+    it("завершённый прогон ячейку не занимает", function()
+        local fake_exec = {
+            run_for = function() return { status = "aborted", run_id = 3, lines = {} } end,
+        }
+
+        local snap = snapshot.build(buf, { exec = fake_exec })
+
+        assert.is_false(snap.cells[1].running, "прервано — тоже конец прогона")
+        assert.equals("aborted", snap.cells[1].live.status)
+    end)
+
     it("кодируется в JSON: в такой форме его и забирают снаружи", function()
         local st = make_store({ record({ ename = nil }) })
 

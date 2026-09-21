@@ -18,6 +18,15 @@ M.GROUPS = {
     JupyterWinBarInfo = { from = "DiagnosticInfo", fallback = "Special" },
 }
 
+-- Пометки агентской правки. Они линкуются, а не считаются от Normal: области правки
+-- нужен фон, а не контраст текста, и «как выделение» каждая тема уже рисует сама.
+M.LINKS = {
+    JupyterAgentPending = "Visual", -- область, которую агент держит под правку
+    JupyterAgentText = "DiagnosticInfo", -- подпись «✎ кто правит»
+    JupyterAgentStale = "DiagnosticWarn", -- та же подпись, когда о заявке давно нет вестей
+    JupyterAgentFlash = "IncSearch", -- вспышка на только что вставленном
+}
+
 local function fg_of(name)
     if not name then
         return nil
@@ -61,6 +70,11 @@ function M.setup()
             vim.api.nvim_set_hl(0, name, vim.tbl_extend("force", value, { default = true }))
             ours[name] = value
         end
+    end
+
+    for name, target in pairs(M.LINKS) do
+        -- default = true: пользовательское определение сильнее нашего
+        pcall(vim.api.nvim_set_hl, 0, name, { link = target, default = true })
     end
 end
 

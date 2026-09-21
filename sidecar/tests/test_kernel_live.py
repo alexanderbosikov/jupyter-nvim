@@ -11,6 +11,7 @@ from conftest import Sink, wait_until
 
 from jupyter_nvim.kernel import KernelSession
 from jupyter_nvim.outdir import OutDir
+from jupyter_nvim.progress import TEXT_TQDM_SOURCE
 from jupyter_nvim.protocol import ErrCode, Ev, ExecStatus, KernelState
 from jupyter_nvim.router import Router
 from jupyter_nvim.rpc import Rpc, RpcError
@@ -54,14 +55,14 @@ def live(tmp_path):
     """Поднимает настоящее ядро и гарантированно гасит его после теста."""
     started = []
 
-    def start(env=None, with_outdir=True, history_limit=5):
+    def start(env=None, with_outdir=True, history_limit=5, text_progress=True):
         sink = Sink()
         rpc = Rpc(stdin=io.StringIO(""), stdout=sink)
         outdir = OutDir(tmp_path / "отчёт.md") if with_outdir else None
         session = KernelSession(
             rpc, Router(), outdir_for=lambda: outdir, poll=0.05, history_limit=history_limit
         )
-        session.start(kernel_name="python3", env=env)
+        session.start(kernel_name="python3", env=env, text_progress=text_progress)
         started.append(session)
         sink.wait(is_ready, what="kernel.state=ready")
         return session, sink, outdir
@@ -640,3 +641,61 @@ def test_attached_kernel_interrupts_by_signal():
             owner.shutdown(deadline=1.0)  # пожать зомби, см. соседний тест
         except Exception:
             pass
+
+
+def _bar_module(live, **opts) -> str:
+    """Какой класс достаётся ядру по `from tqdm.auto import tqdm` — так же, как коду пользователя."""
+    session, sink, _ = live(**opts)
+    session.execute(
+        "a3f9",
+        1,
+        "import importlib.util as u\n"
+        "if u.find_spec('tqdm') is None or u.find_spec('ipywidgets') is None:\n"
+        "    print('нет')\n"
+        "else:\n"
+        "    from tqdm.auto import tqdm\n"
+        # класс, собранный самим tqdm.auto, называет своим модулем себя же — что он такое
+        # на самом деле, видно по первому предку
+        "    name = tqdm.__module__\n"
+        "    print(tqdm.__mro__[1].__module__ if name == 'tqdm.auto' else name)\n",
+    )
+    return stream_text(sink.wait(done_for("a3f9")), "a3f9")
+
+
+def test_progress_bar_is_text_not_widget(live):
+    """§6.6: виджетный бар мы не нарисуем, поэтому ядру подменяем его на текстовый."""
+    module = _bar_module(live)
+
+    if module == "нет":
+        pytest.skip("в ядре нет tqdm или ipywidgets — подменять нечего")
+    assert module == "tqdm.std", "тумблер включён: бар должен быть текстовым"
+
+
+def test_text_progress_can_be_turned_off(live):
+    """Выключенный тумблер ядро не трогает: бар остаётся тем, что выбрал сам tqdm."""
+    module = _bar_module(live, text_progress=False)
+
+    if module == "нет":
+        pytest.skip("в ядре нет tqdm или ipywidgets — подменять нечего")
+    assert module == "tqdm.notebook", "ядро с ipywidgets само выбирает виджетный бар"
+
+
+def test_text_progress_reaches_an_already_imported_consumer(live):
+    """Случай `kernel.attach`: пакет забрал бар себе до того, как мы пришли."""
+    session, sink, _ = live()
+    session.execute(
+        "a3f9",
+        1,
+        "import sys, types\n"
+        "import tqdm.auto\n"
+        "widget_bar = getattr(tqdm.auto, 'notebook_tqdm')\n"
+        "жилец = types.ModuleType('жилец')\n"
+        "жилец.tqdm = widget_bar\n"
+        "sys.modules['жилец'] = жилец\n"
+        + TEXT_TQDM_SOURCE
+        + "\nprint(sys.modules['жилец'].tqdm.__module__)\n",
+    )
+
+    module = stream_text(sink.wait(done_for("a3f9")), "a3f9")
+
+    assert module == "tqdm.std", "чужая ссылка на виджетный бар тоже должна быть подменена"

@@ -29,6 +29,28 @@ describe("ядро", function()
         end
     end
 
+    -- Подставной сайдкар: проверяем не поведение ядра, а что до него доехало.
+    local function fake_sidecar()
+        local sc = { requests = {} }
+        function sc:on() end
+        function sc:is_running() return true end
+        function sc:request(op, args, cb)
+            table.insert(self.requests, { op = op, args = args })
+            if cb then cb(nil, {}) end
+        end
+        return sc
+    end
+
+    it("просит у ядра текстовый прогресс-бар, пока не сказано иначе", function()
+        local on, off = fake_sidecar(), fake_sidecar()
+
+        kernel.new({ sidecar = on }):start()
+        kernel.new({ sidecar = off, text_progress = false }):attach({ connection_file = "/tmp/c.json" })
+
+        assert.is_true(on.requests[1].args.text_progress, "виджетный бар нам не нарисовать")
+        assert.is_false(off.requests[1].args.text_progress, "выключенный тумблер ядро не трогает")
+    end)
+
     it("проходит none → starting → ready", function()
         local seq = {}
         k.on_state = function(state) table.insert(seq, state) end

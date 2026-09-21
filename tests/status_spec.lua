@@ -116,6 +116,30 @@ describe("отрисовка", function()
         assert.equals(1, st:render(buf, { { row = 9999, text = "x", group = "JupyterWinBarOk" } }))
     end)
 
+    -- Обход бага прокрутки nvim 0.12: `virt_lines` снизу у строки, за которой идёт
+    -- скрытая целиком (`conceal_lines` — так render-markdown прячет закрывающий фенс),
+    -- ломают пересчёт высоты, и строки под курсором двоятся или пропадают. Тест держит
+    -- именно способ отрисовки: он тут не деталь реализации, а лекарство.
+    it("виртуальная строка цепляется за следующую строку, а не за свою", function()
+        local st = status_ui.new({})
+
+        st:render(buf, { { row = 2, text = "x", group = "JupyterWinBarOk" } })
+
+        local mark = vim.api.nvim_buf_get_extmarks(buf, status_ui.NS, 0, -1, { details = true })[1]
+        assert.equals(2, mark[2], "якорь на строке 3 (0-based 2), то есть на следующей")
+        assert.is_true(mark[4].virt_lines_above, "и рисуется над ней — визуально там же")
+    end)
+
+    it("под последней строкой буфера статус остаётся снизу", function()
+        local st = status_ui.new({})
+
+        assert.equals(1, st:render(buf, { { row = 4, text = "x", group = "JupyterWinBarOk" } }))
+
+        local mark = vim.api.nvim_buf_get_extmarks(buf, status_ui.NS, 0, -1, { details = true })[1]
+        assert.equals(3, mark[2], "цепляться не за что: якорь на самой строке")
+        assert.is_not_true(mark[4].virt_lines_above)
+    end)
+
     it("режим eol тоже рисует", function()
         local st = status_ui.new({ position = "eol" })
 
@@ -146,10 +170,10 @@ describe("позиция под ячейкой", function()
         vim.cmd("silent! %bwipeout!")
     end)
 
-    local function notebook_with_history(lines)
+    local function notebook_with_history(lines, name)
         local dir = vim.fn.tempname()
         vim.fn.mkdir(dir, "p")
-        local file = vim.fs.joinpath(dir, "nb.py")
+        local file = vim.fs.joinpath(dir, name or "nb.py")
         vim.fn.writefile(lines, file)
 
         local out = vim.fs.joinpath(dir, ".jupyter-out", "nb")
@@ -165,17 +189,27 @@ describe("позиция под ячейкой", function()
             }),
         }, vim.fs.joinpath(out, "index.jsonl"))
 
-        vim.cmd.edit(file)
+        -- noautocmd: ftplugin markdown в тестовом окружении лезет в treesitter, а парсеров
+        -- там нет. Представление всё равно определится по тексту — фенс решает сам (cells)
+        vim.cmd("noautocmd edit " .. vim.fn.fnameescape(file))
         vim.bo.filetype = "python"
         local b = vim.api.nvim_get_current_buf()
         jupyter.session(b) -- сессия создаётся по требованию; ядро при этом не поднимается
         return b
     end
 
-    ---Строка буфера (1-based), под которой нарисован статус.
+    ---Строка буфера (1-based), под которой статус ВИДЕН.
+    ---
+    ---Не то же, что строка якоря: якорь стоит на следующей строке с `virt_lines_above`
+    ---(обход бага прокрутки nvim, см. ui/common.lua), поэтому считаем от него.
     local function status_row(b)
-        local marks = vim.api.nvim_buf_get_extmarks(b, status_ui.NS, 0, -1, {})
-        return marks[1] and marks[1][2] + 1
+        local marks = vim.api.nvim_buf_get_extmarks(b, status_ui.NS, 0, -1, { details = true })
+        local mark = marks[1]
+        if not mark then
+            return nil
+        end
+        local row = mark[2] + 1
+        return mark[4].virt_lines_above and row - 1 or row
     end
 
     it("перевод строки в конце ячейки уводит статус вниз сразу", function()
@@ -189,6 +223,25 @@ describe("позиция под ячейкой", function()
         jupyter.repaint(buf)
 
         assert.equals(3, status_row(buf), "статус должен уйти под новую строку, а не остаться над ней")
+    end)
+
+    -- Частый случай: jupytext кончает документ закрывающим фенсом последней ячейки, а
+    -- render-markdown прячет его целиком. Якорь «следующая строка» там взять неоткуда, и
+    -- пока запасного не было, статус последней ячейки пропадал с экрана совсем.
+    it("документ кончается фенсом — статус остаётся видимым", function()
+        buf = notebook_with_history({
+            "# Край",
+            "",
+            '```python jncell="a3f9"',
+            "x = 1",
+            "```",
+        }, "nb.md")
+
+        assert.equals(1, jupyter.repaint(buf))
+
+        local mark = vim.api.nvim_buf_get_extmarks(buf, status_ui.NS, 0, -1, { details = true })[1]
+        assert.equals(3, mark[2], "якорь на строке тела (0-based 3), а не на скрытом фенсе")
+        assert.is_not_true(mark[4].virt_lines_above)
     end)
 
     it("строка из одних пробелов тоже часть ячейки", function()

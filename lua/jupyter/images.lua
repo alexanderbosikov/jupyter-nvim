@@ -47,8 +47,15 @@ end
 ---состоянии и **никогда не удаляет их оттуда**, а на WinScrolled/WinResized перерисовывает
 ---всё, что знает про окно (image/init.lua:153). Поэтому снятой картинки мало — запись надо
 ---убрать из состояния, иначе следующая прокрутка вернёт её на экран поверх новой.
+---Последовательность удаления уходит в терминал **только если было что снимать**.
+---Раньше она уходила на каждый вызов, а зовётся он на каждую перерисовку окна вывода,
+---то есть на каждый переход между ячейками: 23 байта мимо рендера nvim в терминал в
+---ноутбуке, где картинок нет вовсе. Писать в tty из main-loop, пока в тот же tty пишет
+---поток TUI, — не то, что стоит делать вхолостую.
 ---@param buf? integer оставлен для совместимости вызовов; чистим всё равно всё
-function Images:clear(buf)
+---@param force? boolean послать удаление, даже если своих картинок не помним (аварийный выход)
+function Images:clear(buf, force)
+    local had = self.current ~= nil
     local api = self:_api()
     if api then
         -- Без фильтра по буферу. С фильтром (`get_images({ buffer = buf })`) картинка на
@@ -58,6 +65,7 @@ function Images:clear(buf)
         local ok, list = pcall(api.get_images)
         if ok then
             for _, image in ipairs(list or {}) do
+                had = true
                 pcall(function()
                     image:clear()
                 end)
@@ -78,7 +86,9 @@ function Images:clear(buf)
     -- И добиваем напрямую: удаление в kitty-протоколе — одна последовательность, а вот
     -- рисование мы отдаём image.nvim. `d=A` заглавной убирает и размещения, и данные;
     -- image.nvim шлёт строчную `d=a`, и в Ghostty под tmux этого не хватало.
-    M.purge_terminal(self.send)
+    if had or force then
+        M.purge_terminal(self.send)
+    end
     self.current = nil
 end
 

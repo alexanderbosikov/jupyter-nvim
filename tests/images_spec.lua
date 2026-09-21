@@ -117,6 +117,30 @@ describe("картинки", function()
         end
     end)
 
+    -- Чистка зовётся на каждую перерисовку окна вывода, то есть на каждый переход между
+    -- ячейками. Пока она писала в терминал безусловно, в ноутбуке без единой картинки
+    -- на каждое нажатие уходило 23 байта мимо рендера nvim — в тот же tty, в который
+    -- пишет поток TUI.
+    it("без единой картинки чистка в терминал не пишет", function()
+        local api = fake_api()
+        local im = images.new({ api = api, send = api.send })
+
+        im:clear(2)
+
+        assert.equals(0, #api.sent)
+    end)
+
+    it("аварийная чистка шлёт удаление и вхолостую", function()
+        -- :JupyterClearImages — последнее средство, когда на экране висит чужой мусор,
+        -- о котором мы знать не можем
+        local api = fake_api()
+        local im = images.new({ api = api, send = api.send })
+
+        im:clear(2, true)
+
+        assert.equals(1, #api.sent)
+    end)
+
     it("последовательность заворачивается в tmux-passthrough", function()
         local saved = vim.env.TMUX
         vim.env.TMUX = "/tmp/tmux-502/default,1,0"

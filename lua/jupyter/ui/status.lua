@@ -7,7 +7,11 @@
 -- Позиции не хранятся: на каждую перерисовку namespace очищается и extmark'и ставятся заново
 -- по актуальным границам ячеек. Поэтому переживать правки нечему — состояние живёт в тексте
 -- (cellid) и в exec, а не в позициях.
+--
+-- Виртуальная строка ставится якорем на СЛЕДУЮЩУЮ строку (`common.virt_line_below`).
+-- Это обход бага прокрутки nvim рядом со скрытой строкой; причина расписана в common.lua.
 
+local common = require("jupyter.ui.common")
 local hl = require("jupyter.highlight")
 
 local M = {}
@@ -81,8 +85,13 @@ function Status:clear(buf)
 end
 
 ---Нарисовать статусы.
+---
+---Строка в записи — последняя строка ЯЧЕЙКИ, вместе с закрывающим фенсом; `body_row` —
+---последняя строка её тела. Виртуальную строку ставит `common.virt_line_below`: якорь
+---уезжает на следующую строку, и это не косметика, а обход бага прокрутки nvim —
+---подробности там же. `body_row` нужен только в конце файла, где цепляться не за что.
 ---@param buf integer
----@param entries table[] список { row, text, group } — row это последняя строка тела ячейки
+---@param entries table[] список { row, body_row?, text, group }
 function Status:render(buf, entries)
     if not vim.api.nvim_buf_is_valid(buf) then
         return 0
@@ -94,11 +103,18 @@ function Status:render(buf, entries)
 
     local drawn = 0
     for _, entry in ipairs(entries) do
-        local row = math.max(0, math.min(entry.row - 1, vim.api.nvim_buf_line_count(buf) - 1))
         local chunk = { { entry.text, entry.group } }
-        local ok = pcall(vim.api.nvim_buf_set_extmark, buf, M.NS, row, 0, self.position == "eol"
-                and { virt_text = chunk, virt_text_pos = "eol", hl_mode = "combine" }
-            or { virt_lines = { chunk }, virt_lines_above = false })
+        local ok
+        if self.position == "eol" then
+            local row = math.max(0, math.min(entry.row - 1, vim.api.nvim_buf_line_count(buf) - 1))
+            ok = pcall(vim.api.nvim_buf_set_extmark, buf, M.NS, row, 0, {
+                virt_text = chunk,
+                virt_text_pos = "eol",
+                hl_mode = "combine",
+            })
+        else
+            ok = common.virt_line_below(buf, M.NS, entry.row, { chunk }, entry.body_row) ~= nil
+        end
         if ok then
             drawn = drawn + 1
         end

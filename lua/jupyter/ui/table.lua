@@ -23,6 +23,7 @@ M.DEFAULT_KEYS = {
     { mode = "n", key = "R", action = "refresh" },
     { mode = "n", key = "y", action = "yank_page" },
     { mode = "n", key = "Y", action = "yank_all" },
+    { mode = "n", key = "<CR>", action = "yank_cell" },
     { mode = "n", key = "q", action = "close" },
 }
 
@@ -32,6 +33,9 @@ local RULE = "─"
 -- Порог для «скопировать целиком»: регистр — не файл, и миллион строк в нём не нужен
 -- никому. Выше порога спрашиваем, а не собираем молча.
 M.YANK_LIMIT = 50000
+
+-- Шапка и линейка нарисованы в первые две строки буфера: данные начинаются с третьей.
+local HEAD = 2
 
 local clip = common.clip
 
@@ -92,7 +96,9 @@ end
 ---Свернуть страницу в строки буфера с выровненными колонками.
 ---
 ---Вторым значением возвращается раскладка: где на экране начинается и кончается каждая
----колонка. По ней сортировка понимает, над какой колонкой стоит курсор.
+---колонка и какая она по счёту. По ней сортировка понимает, над какой колонкой стоит курсор,
+---а копирование клетки достаёт значение из строки данных — рисованная строка для этого не
+---годится, она обрезана по max_col.
 ---
 ---opts.first_row включает слева колонку номеров. Это номер строки в датасете, а не в
 ---буфере: он продолжается со страницы на страницу и считается после сортировки, поэтому
@@ -159,7 +165,7 @@ function M.format(header, rows, opts)
     -- раскладка в экранных колонках: 1 занимает ведущий пробел, дальше колонка номеров
     local layout, x = {}, 2 + (gutter > 0 and gutter + #GAP or 0)
     for i, name in ipairs(header) do
-        table.insert(layout, { name = name, from = x, to = x + widths[i] - 1 })
+        table.insert(layout, { name = name, index = i, from = x, to = x + widths[i] - 1 })
         x = x + widths[i] + #GAP
     end
     return out, layout
@@ -275,27 +281,66 @@ function View:page(offset)
     end)
 end
 
----Колонка под экранной позицией. Нужна сортировке: клавиша действует на ту колонку,
----над которой стоит курсор.
+---Запись раскладки под экранной позицией.
 ---@param col integer экранная колонка, 1-based
----@return string|nil
-function View:column_at(col)
+---@return table|nil
+function View:_layout_at(col)
     if #self.layout == 0 then
         return nil
     end
     for _, entry in ipairs(self.layout) do
         if col >= entry.from and col <= entry.to then
-            return entry.name
+            return entry
         end
     end
     -- курсор в промежутке между колонками или за последней: берём ближайшую слева
     local nearest
     for _, entry in ipairs(self.layout) do
         if entry.from <= col then
-            nearest = entry.name
+            nearest = entry
         end
     end
-    return nearest or self.layout[1].name
+    return nearest or self.layout[1]
+end
+
+---Колонка под экранной позицией. Нужна сортировке: клавиша действует на ту колонку,
+---над которой стоит курсор.
+---@param col integer экранная колонка, 1-based
+---@return string|nil
+function View:column_at(col)
+    local entry = self:_layout_at(col)
+    return entry and entry.name or nil
+end
+
+---Клетка под курсором: колонка из раскладки, строка — из позиции в буфере.
+---
+---Значение берётся из self.rows, а не из нарисованной строки: в буфере оно обрезано по
+---max_col, потому что колонки обязаны сойтись по ширине окна (§3). Индекс строки считается
+---по позиции в буфере — self.rows лежит ровно в том порядке, в каком нарисован, и после
+---сортировки тоже: сортирует сайдкар, до нарезки страницы.
+---@param line? integer 1-based строка буфера, по умолчанию — под курсором
+---@param col? integer экранная колонка, по умолчанию — под курсором
+---@return table|nil { row, number, column, value }
+function View:cell_at(line, col)
+    if not line or not col then
+        if not self:is_open() then
+            return nil
+        end
+        local cursor = vim.api.nvim_win_get_cursor(self.win)
+        line = line or cursor[1]
+        col = col or vim.fn.virtcol(".")
+    end
+    local row = self.rows[line - HEAD]
+    local entry = row and self:_layout_at(col)
+    if not entry then
+        return nil
+    end
+    return {
+        row = line - HEAD,
+        number = self.offset + line - HEAD, -- номер в датасете, тот же, что в колонке номеров
+        column = entry.name,
+        value = tostring(row[entry.index] or ""),
+    }
 end
 
 ---Добавить колонку в стек сортировки главным ключом.
@@ -391,6 +436,20 @@ function View:get_actions()
             end
             local ok = to_registers(M.tsv(self.header, self.rows))
             vim.notify(("jupyter.nvim: страница скопирована, строк — %d%s"):format(#self.rows, where(ok)))
+        end,
+        yank_cell = function()
+            -- Клетка целиком, без многоточия: длинный текст в таблице виден обрезанным, а
+            -- унести из него обычно надо именно всё — sql, json, урл. Управляющие символы
+            -- остаются экранированными (\n), как их отдал сайдкар: отличить их от настоящего
+            -- обратного слеша в данных нельзя, и в TSV-копировании они выглядят так же.
+            local cell = self:cell_at()
+            if not cell then
+                vim.notify("jupyter.nvim: курсор не на клетке таблицы", vim.log.levels.WARN)
+                return
+            end
+            local ok = to_registers(cell.value)
+            vim.notify(("jupyter.nvim: %s, строка %d — скопировано, символов %d%s"):format(
+                cell.column, cell.number, vim.fn.strchars(cell.value), where(ok)))
         end,
         yank_all = function()
             if not self.path or self.total == 0 then

@@ -38,6 +38,26 @@ function M.local_time(iso)
     return os.date("%d.%m %H:%M", epoch)
 end
 
+---Каталог, где у этого ноутбука лежит всё своё: индекс прогонов, файлы выводов,
+---черновик несохранённого буфера.
+---
+---Отдельной функцией, потому что правило нужно не только истории: draft.lua кладёт свои
+---файлы туда же, и второе описание этого пути разошлось бы с первым на первом же
+---ноутбуке с точкой в имени.
+---@param notebook string|nil путь к файлу ноутбука
+---@param out_dir string|nil
+---@return string|nil
+function M.base_for(notebook, out_dir)
+    if type(notebook) ~= "string" or notebook == "" then
+        return nil
+    end
+    return vim.fs.joinpath(
+        vim.fn.fnamemodify(notebook, ":h"),
+        out_dir or ".jupyter-out",
+        vim.fn.fnamemodify(notebook, ":t:r")
+    )
+end
+
 ---@class jupyter.Store
 local Store = {}
 Store.__index = Store
@@ -48,13 +68,7 @@ function M.new(opts)
     return setmetatable({
         notebook = notebook,
         out_dir = opts.out_dir or ".jupyter-out",
-        base = notebook and (
-            vim.fs.joinpath(
-                vim.fn.fnamemodify(notebook, ":h"),
-                opts.out_dir or ".jupyter-out",
-                vim.fn.fnamemodify(notebook, ":t:r")
-            )
-        ) or nil,
+        base = M.base_for(notebook, opts.out_dir),
         history = {},
         loaded = false,
     }, Store)

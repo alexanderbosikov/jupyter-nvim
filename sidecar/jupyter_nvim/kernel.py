@@ -28,7 +28,7 @@ from pathlib import Path
 from queue import Empty
 from typing import Any, Callable
 
-from . import frames
+from . import frames, progress
 from .mime import render as render_mime
 from .outdir import RUNTIME_FILE
 from .protocol import ErrCode, Ev, ExecStatus, KernelState
@@ -76,6 +76,7 @@ class KernelSession:
 
         self._km: Any = None
         self._attached_pid: int | None = None  # не None — ядро чужое, подключённое
+        self._text_progress = True  # см. §6.6: бар виджетом нам не показать
         self._released = False  # ядро отпущено жить дальше: след трогать нельзя
         self._launch_args: dict[str, Any] = {}
         self._client: Any = None
@@ -127,6 +128,7 @@ class KernelSession:
         cwd: str | None = None,
         env: dict | None = None,
         log_file: str | None = None,
+        text_progress: bool = True,
     ) -> dict[str, Any]:
         from jupyter_client.manager import KernelManager
 
@@ -137,11 +139,13 @@ class KernelSession:
         self._km = KernelManager(kernel_name=kernel_name)
         self._attached_pid = None
         self._released = False
+        self._text_progress = text_progress
         self._launch_args = {
             "kernel_name": kernel_name,
             "cwd": cwd,
             "env": env,
             "log_file": log_file,
+            "text_progress": text_progress,
         }
         launch = {"env": self._launch_env(env), "stderr": self._open_kernel_log(log_file)}
         if cwd:
@@ -167,6 +171,7 @@ class KernelSession:
         cwd: str | None = None,
         env: dict | None = None,
         log_file: str | None = None,
+        text_progress: bool = True,
     ) -> dict[str, Any]:
         """Подключиться к уже живущему ядру по его connection-файлу.
 
@@ -194,11 +199,13 @@ class KernelSession:
         km.load_connection_file(connection_file)
         self._km = km
         self._attached_pid = int(pid) if pid else None
+        self._text_progress = text_progress
         self._launch_args = {
             "kernel_name": kernel_name,
             "cwd": cwd,
             "env": env,
             "log_file": log_file,
+            "text_progress": text_progress,
         }
         self._open_client()
         self._write_runtime(kernel_name)
@@ -409,6 +416,10 @@ class KernelSession:
 
         if begin_settle:
             self._send_hidden(frames.HELPER_SOURCE)
+            if self._text_progress:
+                # до первой ячейки пользователя: `from tqdm.auto import tqdm` в его коде
+                # заберёт уже подменённый бар, а не виджетный (§6.6)
+                self._send_hidden(progress.TEXT_TQDM_SOURCE)
             self._spawn("jn-stdin-settle", self._settle_stdin, self._pump_stop)
             return
 

@@ -64,11 +64,14 @@ function M.result_expr(code)
     return "_"
 end
 
----@param opts table kernel, on_update
+---@param opts table kernel, on_update, blocked
 function M.new(opts)
     return setmetatable({
         kernel = opts.kernel,
         on_update = opts.on_update,
+        -- «эту ячейку сейчас нельзя запускать» — предикат снаружи. Здесь спрашивают, но
+        -- не решают: причина (её правит агент) живёт слоем выше и до ядра не относится
+        blocked = opts.blocked,
         runs = {}, -- cell_id -> jupyter.Run (текущий прогон ячейки)
         _next_run = 0,
         _stream_tail = {}, -- cell_id -> { [stream] = индекс последней строки }
@@ -110,6 +113,12 @@ function Exec:run(buf, cell, opts)
     local code = cells.text(buf, cell)
     if not code:match("%S") then
         return nil -- пустая ячейка: ядру отправлять нечего
+    end
+
+    -- Спрашиваем до `cellid.ensure`: отказ не должен оставлять в документе id, дописанный
+    -- ради запуска, которого не было.
+    if self.blocked and self.blocked(M.cell_id(buf, cell), cell) then
+        return nil
     end
 
     -- Единственный момент, когда плагин правит документ: стабильный id дописывается

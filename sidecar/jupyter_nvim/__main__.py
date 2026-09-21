@@ -58,6 +58,7 @@ class App:
                 env=args.get("env"),
                 # лог ядра рядом с выводами, если ноутбук известен
                 log_file=str(self.outdir.base / "kernel.log") if self.outdir else None,
+                text_progress=args.get("text_progress", True) is not False,
             )
 
         @rpc.op(Op.KERNEL_ATTACH)
@@ -79,6 +80,7 @@ class App:
                 env=args.get("env"),
                 # лог понадобится, только если это ядро придётся перезапускать своим
                 log_file=str(self.outdir.base / "kernel.log") if self.outdir else None,
+                text_progress=args.get("text_progress", True) is not False,
             )
 
         @rpc.op(Op.KERNEL_RELEASE)

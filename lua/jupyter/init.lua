@@ -8,6 +8,7 @@ local cellid = require("jupyter.cellid")
 local cells = require("jupyter.cells")
 local edit = require("jupyter.edit")
 local common = require("jupyter.ui.common")
+local draft = require("jupyter.draft")
 local exec = require("jupyter.exec")
 local highlight = require("jupyter.highlight")
 local images = require("jupyter.images")
@@ -16,6 +17,9 @@ local output = require("jupyter.ui.output")
 local status_ui = require("jupyter.ui.status")
 local store = require("jupyter.store")
 local picker = require("jupyter.ui.picker")
+local agent = require("jupyter.agent")
+local ask = require("jupyter.ask")
+local pane = require("jupyter.pane")
 local snapshot = require("jupyter.snapshot")
 local toc = require("jupyter.toc")
 local table_view = require("jupyter.ui.table")
@@ -35,6 +39,10 @@ M.defaults = {
     keep_kernel_on_exit = false,
     -- false — не определять группы подсветки, если хочешь задать их сам
     highlight = true,
+    -- Прогресс-бар текстом вместо виджета: tqdm в ядре с ipywidgets рисует бар через
+    -- comm-протокол, которого у нас нет, и ячейка с долгим циклом навсегда остаётся на
+    -- «0%» (§6.6). false — не трогать ядро, бар тогда не обновляется вовсе.
+    text_progress = true,
     -- картинки рисует image.nvim; false — только путь строкой в выводе
     -- Прыжок по ячейкам центрирует экран. Без этого следующая ячейка встаёт у нижнего
     -- края, и её тело остаётся за кадром — а прыгают именно чтобы его увидеть.
@@ -42,6 +50,21 @@ M.defaults = {
     -- Новая ячейка пустая: сразу встаём в insert, чтобы не нажимать `i` после каждой вставки.
     insert_on_new_cell = true,
     images = true,
+    -- Черновик несохранённого буфера: защита от краша и от «забыл сохранить». Пишется
+    -- текст буфера как есть, рядом с историей прогонов, мимо файла ноутбука — настоящая
+    -- запись тут дорогая (jupytext гоняет конвертер) и тянет за собой чужие BufWritePre.
+    -- Подробности и то, чего нельзя делать с путями, — в draft.lua.
+    --
+    -- write_on_run сохраняет ноутбук по-настоящему перед прогоном ячейки: код, который
+    -- выполнился, тогда лежит на диске, и code_sha в истории относится к нему, а не к
+    -- фантому в буфере. По умолчанию выключено, потому что `:w` зовёт чужие автокоманды —
+    -- форматтер переформатирует markdown прямо во время работы.
+    autosave = {
+        draft = true,
+        debounce_ms = 2000,
+        write_on_run = false,
+        write_on_focus_lost = false,
+    },
     -- size меньше единицы — доля экрана: 0.5 это половина ширины при position = "right".
     -- preview_rows = 0 — не показывать таблицу в окне вывода, только строку-сводку
     -- open_on_attach — открыть окно вывода сразу при открытии ноутбука
@@ -55,6 +78,24 @@ M.defaults = {
     table = { page_size = 100, max_col = 40 },
     -- статус строкой под ячейкой: enabled = false выключает, position = "eol" ставит в конец строки
     status = { enabled = true, position = "below" },
+    -- Заявка внешнего агента на правку ячейки. Метка `✎ имя` стоит в буфере, пока он
+    -- думает, и в ней тикает возраст — по нему видно, что работа идёт. Вестей нет дольше
+    -- ttl_ms — заявка снимается сама: агент мог упасть, упереться в лимит или уйти
+    -- спрашивать, а метка всё это время держала бы ячейку занятой (§7.5).
+    -- sign — знак в signcolumn на строках заявки; false или "" — не ставить.
+    -- verb — что агент делает с куском; в подписи рамки это слово между его именем и
+    -- возрастом заявки: « ⠋ Claude правит · 12с ». Кому привычнее 99 — "Implementing".
+    -- cmd — по какой команде узнаём панель tmux с агентом: кто-то запускает claude
+    -- через обёртку, и тогда tmux показывает её имя, а не claude.
+    -- ask_height — высота окна, в котором набирается промпт.
+    agent = {
+        ttl_ms = 5 * 60 * 1000,
+        sign = "✎",
+        verb = "правит",
+        verb_insert = "пишет новую ячейку",
+        cmd = "claude",
+        ask_height = 8,
+    },
     -- Клавиши: false — не ставить вовсе, дальше пользователь делает это сам.
     keys = {
         run_cell = "<leader>jc",
@@ -78,6 +119,8 @@ M.defaults = {
         cell_to_markdown = "<leader>jm",
         cell_to_code = "<leader>jy",
         cell_lang = "<leader>jl", -- l как «language»: переключает python ↔ sql
+        -- q как «вопрос»: тот же ключ в visual спрашивает про выделенный кусок
+        ask = "<leader>jq",
         -- начало и конец своей ячейки: пара к ]c/[c, которые ходят по соседним
         cell_start = "[C",
         cell_end = "]C",
@@ -110,6 +153,14 @@ function M.setup(opts)
     end
     augroup = vim.api.nvim_create_augroup("jupyter.nvim", { clear = true })
 
+    local agent_cfg = M.config.agent or {}
+    agent.TTL_MS = agent_cfg.ttl_ms or agent.TTL_MS
+    agent.SIGN = agent_cfg.sign ~= false and agent_cfg.sign or nil
+    agent.VERB = agent_cfg.verb or agent.VERB
+    agent.VERB_INSERT = agent_cfg.verb_insert or agent.VERB_INSERT
+    pane.CMD = agent_cfg.cmd or pane.CMD
+    ask.HEIGHT = agent_cfg.ask_height or ask.HEIGHT
+
     require("jupyter.commands").setup(M)
     if M.config.highlight ~= false then
         highlight.attach(augroup)
@@ -118,6 +169,9 @@ function M.setup(opts)
     vim.api.nvim_create_autocmd("VimLeavePre", {
         group = augroup,
         callback = function()
+            -- Черновики первыми: detach_all гасит сессии и может занять время, а выход с
+            -- несохранённым буфером — ровно тот случай, ради которого черновик и есть.
+            draft.flush_all("выход из редактора")
             M.detach_all()
         end,
     })
@@ -173,6 +227,7 @@ function M.setup(opts)
                 M.set_keys(ev.buf)
             end
             M.warn_orphan(ev.buf)
+            M.watch_draft(ev.buf)
             if M.config.output.open_on_attach then
                 M.open_for(ev.buf)
             end
@@ -231,6 +286,15 @@ function M.set_keys(buf)
                 })
             end
         end
+    end
+
+    -- Спросить про выделенное — тем же ключом, что и про ячейку: место в промпте
+    -- разное, действие одно, и держать под него вторую клавишу в памяти незачем.
+    local ask_key = (M.config.keys or {}).ask
+    if ask_key then
+        common.map("x", ask_key, function()
+            M.ask_selection()
+        end, { buffer = buf, silent = true, desc = "jupyter: спросить про выделенное" })
     end
 
     for kind, key in pairs(M.config.textobjects or {}) do
@@ -320,6 +384,7 @@ function M.session(buf)
         sidecar = sc,
         kernel_name = M.config.kernel_name,
         env = M.config.env,
+        text_progress = M.config.text_progress,
     })
     local ex, drawer
     drawer = output.new(vim.tbl_extend("force", M.config.output, {
@@ -367,8 +432,27 @@ function M.session(buf)
         end,
         images = images.new({ enabled = M.config.images ~= false }),
     }))
+    -- Ячейку, которую прямо сейчас переписывает агент, не запускаем: её код через
+    -- секунду будет другим, а прогон уже уедет в историю как настоящий. Сообщаем не
+    -- чаще раза в секунду — «запустить всё» иначе даёт залп одинаковых уведомлений.
+    local said_blocked = 0
     ex = exec.new({
         kernel = k,
+        blocked = function(cell_id)
+            local claim = agent.claim_of(buf, cell_id)
+            if not claim then
+                return false
+            end
+            local now = vim.uv.now()
+            if now - said_blocked > 1000 then
+                said_blocked = now
+                vim.notify(
+                    ("jupyter.nvim: ячейку правит %s — запуск отклонён"):format(claim.label),
+                    vim.log.levels.WARN
+                )
+            end
+            return true
+        end,
         on_update = function(run, is_new)
             -- Новый прогон показываем всегда, даже если окно было закрыто: нажал запуск —
             -- хочешь видеть результат. Обновление чужого прогона окно не забирает, но
@@ -614,6 +698,15 @@ end
 ---Реакция на фокус окна: без фокуса картинок на экране быть не должно.
 ---@param gained boolean
 function M.on_focus(gained)
+    if not gained then
+        -- Ждать дебаунса поздно: ушли из редактора, и следующего события может не быть.
+        draft.flush_all("потерян фокус")
+        if M.config.autosave.write_on_focus_lost then
+            for _, buf in ipairs(draft.bufs()) do
+                M.write_buffer(buf)
+            end
+        end
+    end
     for _, session in pairs(sessions) do
         -- в журнал: по нему видно, доходит ли до nvim focus-событие от tmux
         table.insert(session.log, {
@@ -641,7 +734,7 @@ function M.clear_images(buf)
     if not s then
         return false
     end
-    s.output.images:clear(s.output.buf)
+    s.output.images:clear(s.output.buf, true) -- аварийный выход: шлём удаление в любом случае
     return true
 end
 
@@ -664,14 +757,27 @@ function M.repaint(buf)
             -- последняя строка ЯЧЕЙКИ, а не последняя непустая: `cells.body` срезает
             -- хвостовые пустые строки, и это правильно для кода, который уходит ядру,
             -- но статус из-за этого оставался висеть над только что добавленной строкой
-            -- до первого непробельного символа в ней — перевод строки его не двигал
-            table.insert(entries, { row = cell.end_row, text = text, group = group })
+            -- до первого непробельного символа в ней — перевод строки его не двигал.
+            -- И не `end_row`, а `span_end`: конец ячейки вместе с закрывающим фенсом.
+            -- Между телом и фенсом статус стоять не может — фенс бывает скрыт целиком
+            -- (render-markdown), а виртуальная строка перед скрытой ломает прокрутку
+            -- (см. common.virt_line_below). В percent-представлении это одна и та же строка.
+            table.insert(entries, {
+                row = cell.span_end,
+                body_row = cell.end_row, -- запасной якорь: фенс бывает последней строкой файла
+                text = text,
+                group = group,
+            })
         end
     end
     -- все ячейки пересчитаны: накопленный диапазон правок больше не нужен
     s.stale_cache.dirty = nil
 
     local drawn = s.status:render(buf, entries)
+    -- статусы только что пересозданы; подписи агента переставляем следом, иначе они
+    -- окажутся выше статуса — виртуальные строки на одной строке идут в порядке своих
+    -- extmark'ов, и приоритет тут ничего не решает (§7.5)
+    agent.reanchor(buf)
     if s.output:is_open() then
         s.output:refresh_status()
     end
@@ -836,6 +942,7 @@ end
 
 function M.run_cell()
     local s = M.ensure_started()
+    M.write_before_run(s.buf) -- до чтения курсора: `:w` может позвать форматтер
     local row = vim.api.nvim_win_get_cursor(0)[1]
     if not s.exec:run_at(s.buf, row) then
         vim.notify("jupyter.nvim: под курсором нет ячейки с кодом", vim.log.levels.WARN)
@@ -844,11 +951,13 @@ end
 
 function M.run_all()
     local s = M.ensure_started()
+    M.write_before_run(s.buf)
     s.exec:run_all(s.buf)
 end
 
 function M.run_below()
     local s = M.ensure_started()
+    M.write_before_run(s.buf)
     s.exec:run_all(s.buf, vim.api.nvim_win_get_cursor(0)[1])
 end
 
@@ -1282,6 +1391,181 @@ function M.warn_orphan(buf)
     return orphan
 end
 
+-- --- черновик несохранённого буфера ---
+
+---@return table
+local function draft_opts()
+    return {
+        out_dir = M.config.out_dir,
+        debounce_ms = M.config.autosave.debounce_ms,
+        enabled = M.config.autosave.draft ~= false,
+        augroup = augroup,
+    }
+end
+
+---Взять ноутбук под черновик и сказать, если от прошлой жизни что-то осталось.
+---
+---Зовётся при открытии, до всякого ядра: черновик защищает текст, а не сессию, и нужен
+---он как раз тогда, когда python ещё ни разу не поднимали.
+---@param buf integer
+---@return jupyter.DraftFound[]
+function M.watch_draft(buf)
+    -- Буфер должен стоять за настоящим файлом. Иначе под черновик попадает синтетика:
+    -- otter.nvim держит копию кода ячеек в буфере `<ноутбук>.otter.py` с ft=python, на
+    -- диске его нет и сохранять его некуда, а имя `:t:r` даёт ему собственный каталог в
+    -- .jupyter-out. Проверено на живом конфиге: черновики писались туда вместо ноутбука.
+    local name = vim.api.nvim_buf_get_name(buf)
+    if name == "" or vim.fn.filereadable(name) == 0 or vim.bo[buf].buftype == "nofile" then
+        return {}
+    end
+    -- Ячейки: тот же filetype носит любой python-файл, а черновик — про ноутбуки.
+    if #cells.list(buf) == 0 then
+        return {}
+    end
+    if not draft.attach(buf, draft_opts()) then
+        return {}
+    end
+    if M.config.autosave.draft == false then
+        return {} -- присмотр остаётся ради write_on_*, но черновика не будет
+    end
+    local found = draft.check(buf)
+    for _, item in ipairs(found) do
+        vim.notify(
+            ("jupyter.nvim: остался несохранённый %s — :JupyterRecover"):format(draft.describe(item)),
+            vim.log.levels.WARN
+        )
+    end
+    return found
+end
+
+---Сохранить ноутбук по-настоящему.
+---
+---Именно `:w`, а не `noautocmd write`: markdown в `.ipynb` превращает jupytext, и делает
+---он это автокомандой `BufWriteCmd`. Без автокоманд в файл ноутбука уехал бы сырой
+---markdown — то есть молча испорченный `.ipynb`.
+---@param buf integer
+---@return boolean
+function M.write_buffer(buf)
+    if not vim.api.nvim_buf_is_valid(buf) or not vim.bo[buf].modified then
+        return false
+    end
+    if vim.api.nvim_buf_get_name(buf) == "" or vim.bo[buf].readonly then
+        return false
+    end
+    local ok, err = pcall(vim.api.nvim_buf_call, buf, function()
+        vim.cmd("silent write")
+    end)
+    if not ok then
+        -- Не сохранили — не повод не выполнять ячейку: прогон важнее, чем запись.
+        vim.notify("jupyter.nvim: не удалось сохранить ноутбук — " .. tostring(err), vim.log.levels.WARN)
+    end
+    return ok
+end
+
+---@param buf integer
+---@return boolean
+function M.write_before_run(buf)
+    draft.note(draft.of(buf), "run", "прогон ячейки")
+    if not M.config.autosave.write_on_run then
+        return false
+    end
+    return M.write_buffer(buf)
+end
+
+---Показать, чем черновик отличается от того, что сейчас в буфере.
+---@param buf integer
+---@param found jupyter.DraftFound
+---@return boolean
+local function diff_draft(buf, found)
+    local win = vim.fn.win_findbuf(buf)[1]
+    if not win then
+        return false
+    end
+    vim.api.nvim_set_current_win(win)
+
+    local scratch = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(scratch, 0, -1, false, found.lines)
+    vim.bo[scratch].filetype = vim.bo[buf].filetype
+    vim.bo[scratch].modifiable = false
+    pcall(vim.api.nvim_buf_set_name, scratch, "jupyter://черновик/" .. found.id)
+
+    vim.cmd("diffthis")
+    vim.cmd("vsplit")
+    vim.api.nvim_win_set_buf(0, scratch)
+    vim.cmd("diffthis")
+    return true
+end
+
+local DRAFT_ACTIONS = { "показать разницу", "восстановить в буфер", "выбросить" }
+
+---@param buf integer
+---@param found jupyter.DraftFound
+local function draft_actions(buf, found)
+    vim.ui.select(DRAFT_ACTIONS, { prompt = draft.describe(found) }, function(choice)
+        if choice == DRAFT_ACTIONS[1] then
+            if diff_draft(buf, found) then
+                vim.notify("jupyter.nvim: закончить сравнение — :diffoff!, вернуться к выбору — :JupyterRecover")
+            end
+        elseif choice == DRAFT_ACTIONS[2] then
+            if draft.apply(buf, found.lines) then
+                draft.drop(buf, found.id)
+                vim.notify(
+                    "jupyter.nvim: черновик в буфере, файл не тронут — :w, если он тот самый, `u`, если нет"
+                )
+            end
+        elseif choice == DRAFT_ACTIONS[3] then
+            draft.drop(buf, found.id)
+            vim.notify("jupyter.nvim: черновик выброшен")
+        end
+    end)
+end
+
+---Разобраться с черновиками этого ноутбука.
+---
+---Восстановление кладёт текст в буфер и на этом останавливается: писать в файл за
+---пользователя нельзя — он ещё не видел, что именно вернулось. Отсюда и `u` как выход.
+---@param buf? integer
+---@param discard? boolean выбросить всё найденное, ничего не спрашивая
+---@return jupyter.DraftFound[]
+function M.recover(buf, discard)
+    buf = buf or vim.api.nvim_get_current_buf()
+    if not draft.attach(buf, draft_opts()) then
+        vim.notify("jupyter.nvim: у буфера нет файла — черновику негде лежать", vim.log.levels.WARN)
+        return {}
+    end
+
+    local list = draft.found(buf)
+    if #list == 0 then
+        list = draft.check(buf) -- команду могли позвать раньше, чем что-то нашлось
+    end
+    if #list == 0 then
+        vim.notify("jupyter.nvim: черновиков от прошлых сессий нет")
+        return {}
+    end
+
+    if discard then
+        for _, found in ipairs(list) do
+            draft.drop(buf, found.id)
+        end
+        vim.notify(("jupyter.nvim: черновиков выброшено: %d"):format(#list))
+        return list
+    end
+
+    if #list == 1 then
+        draft_actions(buf, list[1])
+    else
+        vim.ui.select(list, {
+            prompt = "черновики этого ноутбука:",
+            format_item = draft.describe,
+        }, function(found)
+            if found then
+                draft_actions(buf, found)
+            end
+        end)
+    end
+    return list
+end
+
 function M.toggle_output()
     M.session().output:toggle()
 end
@@ -1364,6 +1648,137 @@ function M.write_snapshot(path, buf)
     path = (path and path ~= "") and vim.fn.fnamemodify(path, ":p") or (vim.fn.tempname() .. ".json")
     vim.fn.writefile({ M.snapshot_json(buf) }, path)
     return path
+end
+
+---Что сказать человеку про отправленный промпт.
+---@param res table|nil
+---@param err string|nil
+---@param candidates table[]|nil
+local function report_ask(res, err, candidates)
+    if res then
+        local what = res.cell_id and ("ячейка " .. res.cell_id) or "весь ноутбук"
+        vim.notify(("jupyter.nvim: промпт ушёл агенту — %s, панель %s"):format(what, res.pane))
+        return
+    end
+    local msg = "jupyter.nvim: " .. (err or "промпт не ушёл")
+    if candidates and #candidates > 0 then
+        -- список кандидатов в уведомлении не разворачиваем: выбирать всё равно в пикере,
+        -- и он покажет их с каталогами, по которым только и можно отличить один от другого
+        msg = msg .. "\n  выбрать: :JupyterAgentAttach"
+    end
+    vim.notify(msg, vim.log.levels.WARN)
+end
+
+---Спросить агента про ячейку под курсором.
+---
+---Смысл не в том, чтобы отправить текст, — это и так делается руками. Смысл в том, что
+---вместе с текстом уезжает место: ноутбук, сокет nvim, id ячейки и путь к её последнему
+---выводу. Агент не тратит ходы на поиск того, что человек видит перед собой, а человек не
+---объясняет словами, какую именно ячейку правит.
+---
+---Заявку открывает сам плагин, до отправки: метка встаёт на ячейку в ту секунду, когда
+---нажата клавиша (§7.5, `ask.lua`).
+---@param opts? table prompt — готовый текст вместо окна; scope = "notebook" — вопрос про
+---весь документ; selection; row; buf
+function M.ask(opts)
+    opts = opts or {}
+    local s = M.session(opts.buf)
+    local args = {
+        store = s.store,
+        row = opts.row or vim.api.nvim_win_get_cursor(0)[1],
+        selection = opts.selection,
+        scope = opts.scope,
+        height = (M.config.agent or {}).ask_height,
+    }
+    if type(opts.prompt) == "string" and opts.prompt ~= "" then
+        report_ask(ask.send(s.buf, opts.prompt, args))
+        return
+    end
+    args.on_send = report_ask
+    ask.open(s.buf, args)
+end
+
+---Спросить про выделенный кусок.
+---
+---Из visual выходим до чтения марок: `'<` и `'>` ставятся при выходе из режима, а не по
+---ходу выделения, и без этого пришли бы координаты прошлого выделения.
+function M.ask_selection()
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+    local from = vim.api.nvim_buf_get_mark(0, "<")[1]
+    local to = vim.api.nvim_buf_get_mark(0, ">")[1]
+    if from > to then
+        from, to = to, from
+    end
+    M.ask({ row = from, selection = { from = from, to = to } })
+end
+
+---Привязать ноутбук к панели агента руками: когда лестница поиска не решает сама.
+---@param buf? integer
+function M.agent_attach(buf)
+    local s = M.session(buf)
+    ask.attach(s.buf, { store = s.store })
+end
+
+---Взять заявку, которую плагин открыл при отправке промпта.
+---
+---Первый шаг агента после чтения промпта: её номер он получил в шапке. Своя заявка вместо
+---этой означала бы вторую метку на той же ячейке (§7.5).
+---@param token integer
+---@param opts? table label — имя агента; title — что делается; after — не переписывать
+---ячейку, а вставить новую после неё
+---@return table
+function M.edit_adopt(token, opts)
+    return agent.adopt(token, opts)
+end
+
+---Открыть заявку на правку от внешнего читателя: ячейку он получит по id, а мы пометим её
+---в буфере и запомним, какой она была. Писать по номерам строк нельзя — пока агент думает,
+---документ живёт (§7.5 ARCHITECTURE.md).
+---@param opts table cell | after | at_end, label, buf
+---@return table
+function M.edit_begin(opts)
+    opts = opts or {}
+    return agent.begin(M.session(opts.buf).buf, opts)
+end
+
+---Применить правку по заявке.
+---@param token integer
+---@param lines string[]
+---@return table
+function M.edit_apply(token, lines)
+    local res = agent.apply(token, lines)
+    if res.ok and res.buf then
+        M.repaint(res.buf) -- статусы ячеек и пометка «код изменился» — сразу, а не по таймеру
+    end
+    return res
+end
+
+---Снять заявку, ничего не записав.
+---@param token integer
+---@return table
+function M.edit_cancel(token)
+    return agent.cancel(token)
+end
+
+---Продлить заявку: «думаю дальше». Без этого она снимется сама (§7.5).
+---@param token integer
+---@return table
+function M.edit_touch(token)
+    return agent.touch(token)
+end
+
+---Открытые заявки этого буфера.
+---@param buf? integer
+---@return table[]
+function M.edits(buf)
+    return agent.list(M.session(buf).buf)
+end
+
+---Снять все заявки буфера.
+---@param buf? integer
+---@return integer сколько снято
+function M.edit_cancel_all(buf)
+    return agent.cancel_all(M.session(buf).buf)
 end
 
 ---Листать историю прогонов ячейки под курсором.

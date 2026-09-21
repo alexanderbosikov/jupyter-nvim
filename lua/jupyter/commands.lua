@@ -55,12 +55,58 @@ function M.setup(api)
         api.orphans(a.bang)
     end, { bang = true, desc = "ядра без хозяина: показать, с ! — снять" })
     cmd("JupyterRepaint", function() api.repaint() end, { desc = "перерисовать статусы ячеек" })
+    cmd("JupyterRecover", function(a)
+        api.recover(nil, a.bang)
+    end, { bang = true, desc = "черновик несохранённого буфера: показать, с ! — выбросить" })
     cmd("JupyterRunPrev", function() api.prev_run() end, { desc = "предыдущий прогон этой ячейки" })
     cmd("JupyterRunNext", function() api.next_run() end, { desc = "следующий прогон этой ячейки" })
     cmd("JupyterHistory", function() api.reload_history() end, { desc = "перечитать историю прогонов" })
     cmd("JupyterSnapshot", function(a)
         vim.notify("jupyter.nvim: снимок в " .. api.write_snapshot(a.args))
     end, { nargs = "?", complete = "file", desc = "снимок ноутбука в JSON — для чтения снаружи" })
+    cmd("JupyterAsk", function(a)
+        api.ask({
+            -- текст прямо в команде — для «спросил одной строкой»; без него открывается
+            -- окно, где промпт можно набрать по-человечески
+            prompt = a.args ~= "" and a.args or nil,
+            -- ! — вопрос не про ячейку под курсором, а про документ целиком: заявку тогда
+            -- открывать не на что, и метка не ставится
+            scope = a.bang and "notebook" or nil,
+            selection = a.range > 0 and { from = a.line1, to = a.line2 } or nil,
+            row = a.range > 0 and a.line1 or nil,
+        })
+    end, {
+        nargs = "*",
+        bang = true,
+        range = true,
+        desc = "спросить агента про ячейку под курсором; с ! — про весь ноутбук",
+    })
+    cmd("JupyterAgentAttach", function()
+        api.agent_attach()
+    end, { desc = "выбрать панель tmux, в которой живёт агент этого ноутбука" })
+    cmd("JupyterEdits", function(a)
+        if a.bang then
+            vim.notify(("jupyter.nvim: снято заявок на правку: %d"):format(api.edit_cancel_all()))
+            return
+        end
+        local list = api.edits()
+        if #list == 0 then
+            vim.notify("jupyter.nvim: заявок на правку нет")
+            return
+        end
+        local lines = vim.tbl_map(function(e)
+            -- возраст и остаток срока: по ним видно, думает агент или уже не вернётся
+            return ("  #%d %s %s строка %s · держит %ds, снимется через %ds"):format(
+                e.token,
+                e.title and (e.label .. " · " .. e.title) or e.label,
+                e.cell_id or e.kind,
+                e.row or "?",
+                math.floor((e.age_ms or 0) / 1000),
+                math.floor((e.left_ms or 0) / 1000)
+            )
+        end, list)
+        vim.notify("jupyter.nvim: заявки на правку:\n" .. table.concat(lines, "\n"))
+    end, { bang = true, desc = "заявки агента на правку: показать, с ! — снять" })
     cmd("JupyterStatus", function()
         local s = api.status()
         vim.notify(("jupyter.nvim: ядро %s · в очереди %d · ячеек %d · в истории %d прогонов по %d ячейкам")

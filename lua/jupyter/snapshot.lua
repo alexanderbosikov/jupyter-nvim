@@ -75,12 +75,24 @@ function M.build(buf, opts)
         -- через if, а не через `and ... or nil`: у свежего вывода ответ — false, и в
         -- тернарнике он превратился бы в nil, то есть «свежий» стало бы неотличимо от
         -- «истории нет»
-        local stale, running = nil, nil
+        local stale, running, live_run = nil, nil, nil
         if record then
             stale = is_stale(buf, cell, record)
         end
         if live then
-            running = live.status ~= "ok" and live.status ~= "error"
+            -- `running` отвечает только на «занята ли ячейка», а чем именно занята —
+            -- отдельным полем. Пока ответ был один на оба вопроса, «run all» выглядел
+            -- снаружи так, будто ядро считает все шестнадцать ячеек разом: в очереди
+            -- стоит пятнадцать, а признак у них тот же, что у работающей.
+            running = exec.is_busy(live)
+            live_run = {
+                status = live.status,
+                run_id = live.run_id,
+                lines = #live.lines,
+                -- последняя строка живого вывода: по ней видно, движется ли прогон.
+                -- В индексе на диске его ещё нет — запись туда идёт по завершении
+                tail = type(live.lines[#live.lines]) == "string" and live.lines[#live.lines] or nil,
+            }
         end
         table.insert(list, {
             index = cell.index,
@@ -94,6 +106,9 @@ function M.build(buf, opts)
             -- прогон идёт прямо сейчас: вывод на диске ещё от прошлого раза, и читатель,
             -- не знающий об этом, объявил бы его свежим
             running = running,
+            -- текущий прогон: его статус («в очереди» или «выполняется») и то,
+            -- сколько вывода уже накопилось
+            live = live_run,
             last = last_run(store, record),
             stale = stale,
         })

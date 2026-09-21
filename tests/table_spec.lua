@@ -99,7 +99,7 @@ end)
 describe("пустое значение в клетке", function()
     it("пустая первая колонка не схлопывает строку", function()
         local header = { "feature_source", "users" }
-        local rows = { { "Bond Screener registration bottom bar", "316" }, { "", "253" } }
+        local rows = { { "очень длинное имя колонки для проверки обрезки", "316" }, { "", "253" } }
 
         local lines, layout = table_view.format(header, rows)
 
@@ -376,5 +376,77 @@ describe("копирование", function()
 
         assert.equals("", vim.fn.getreg('"'))
         assert.equals(0, #sent)
+    end)
+end)
+
+-- Клетка под курсором. Проверяется регистр и нарисованная строка рядом: смысл действия
+-- именно в разнице между ними — в таблице значение обрезано, в регистре обязано быть целым.
+describe("клетка под курсором", function()
+    local view
+
+    after_each(function()
+        if view then
+            view:close()
+        end
+    end)
+
+    it("копирует значение целиком, хотя в таблице оно обрезано", function()
+        local long = string.rep("x", 300)
+        view = table_view.new({
+            sidecar = {
+                request = function(_, _, _, cb)
+                    if cb then
+                        cb(nil, {
+                            header = { "id", "text" },
+                            rows = { { "1", long } },
+                            offset = 0,
+                            total_rows = 1,
+                        })
+                    end
+                end,
+            },
+            page_size = 50,
+            max_col = 20,
+        })
+        vim.fn.setreg('"', "")
+
+        view:open("/tmp/df.parquet")
+        vim.api.nvim_win_set_cursor(view.win, { 3, view.layout[2].from - 1 })
+        view:get_actions().yank_cell()
+
+        local shown = vim.api.nvim_buf_get_lines(view.buf, 0, -1, false)[3]
+        assert.is_truthy(shown:find("…"), "в таблице клетка обрезана: " .. shown)
+        assert.equals(long, vim.fn.getreg('"'), "а в регистре она должна быть целиком")
+    end)
+
+    it("номер строки продолжается со страницы, а не с единицы", function()
+        view = table_view.new({ sidecar = {}, page_size = 50 })
+        view.rows = { { "a" }, { "b" } }
+        local _, layout = table_view.format({ "col" }, view.rows, { first_row = 101 })
+        view.layout, view.offset = layout, 100
+
+        assert.equals(101, view:cell_at(3, layout[1].from).number)
+        assert.equals("b", view:cell_at(4, layout[1].from).value)
+    end)
+
+    it("колонку берёт ту, над которой курсор", function()
+        view = table_view.new({ sidecar = {}, page_size = 50 })
+        view.rows = { { "web", "10" } }
+        local _, layout = table_view.format({ "площадка", "сессии" }, view.rows)
+        view.layout = layout
+
+        assert.equals("сессии", view:cell_at(3, layout[2].from).column)
+        assert.equals("10", view:cell_at(3, layout[2].from).value)
+    end)
+
+    it("на шапке, линейке и за последней строкой клетки нет", function()
+        view = table_view.new({ sidecar = {}, page_size = 50 })
+        view.rows = { { "a" } }
+        local _, layout = table_view.format({ "col" }, view.rows)
+        view.layout = layout
+
+        assert.is_nil(view:cell_at(1, layout[1].from))
+        assert.is_nil(view:cell_at(2, layout[1].from))
+        assert.is_nil(view:cell_at(4, layout[1].from))
     end)
 end)

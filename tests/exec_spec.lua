@@ -293,3 +293,26 @@ describe("очередь и выполнение", function()
         assert.equals(12, run.duration_ms)
     end)
 end)
+
+describe("запрет запуска", function()
+    it("ячейку, которую держит агент, не запускает и id ей не дописывает", function()
+        local buf = buffer({ "# %%", "x = 1", "# %%", "y = 2" })
+        local asked = {}
+        local ex = exec.new({
+            kernel = stub_kernel(),
+            blocked = function(cell_id)
+                table.insert(asked, cell_id)
+                return cell_id == "0001" -- первую держит агент
+            end,
+        })
+
+        local runs = ex:run_all(buf)
+
+        assert.equals(1, #runs, "вторая ячейка выполняется как обычно")
+        assert.same({ "0001", "0002" }, asked, "спрашивают про каждую")
+        assert.is_nil(
+            vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]:match("jncell"),
+            "отказ не должен оставлять id в документе"
+        )
+    end)
+end)

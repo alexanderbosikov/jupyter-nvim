@@ -206,6 +206,20 @@ function M.history(config, buf)
     if notebook == "" then
         return report
     end
+    -- Черновики раньше истории: у ноутбука, который ни разу не прогоняли, индекса нет,
+    -- а несохранённая работа в нём быть вполне может — и сказать о ней важнее.
+    local draft = require("jupyter.draft")
+    local left = draft.new({ notebook = notebook, out_dir = config.out_dir }):candidates()
+    if #left > 0 then
+        local bytes = 0
+        for _, found in ipairs(left) do
+            bytes = bytes + math.max(vim.fn.getfsize(found.path), 0)
+        end
+        add("warn", ("%d черновиков от прошлых сессий (%s): %s — :JupyterRecover"):format(
+            #left, human(bytes), draft.describe(left[1])
+        ))
+    end
+
     local store = require("jupyter.store").new({ notebook = notebook, out_dir = config.out_dir })
     local index = store:index_path()
     if not index or vim.fn.filereadable(index) == 0 then
@@ -273,10 +287,13 @@ function M.history(config, buf)
 
     -- файлы, на которые индекс не ссылается: обычно остатки прерванной записи. Смотрим
     -- только в каталогах ячеек (<base>/<id>/*), чтобы не считать index.jsonl и kernel.log
+    -- drafts/ сюда не попадает: он живёт по своим правилам (§7.4.1), индекс о нём и не
+    -- должен знать, а без этой оговорки каждый черновик считался бы мусором.
     local stray, stray_bytes = 0, 0
     for _, path in ipairs(vim.fn.glob(store.base .. "/*/*", false, true)) do
         local size = vim.fn.getfsize(path)
-        if size > 0 and not referenced[vim.fs.normalize(path)] then
+        local in_drafts = vim.fn.fnamemodify(path, ":h:t") == draft.DIR
+        if size > 0 and not in_drafts and not referenced[vim.fs.normalize(path)] then
             stray, stray_bytes = stray + 1, stray_bytes + size
         end
     end
