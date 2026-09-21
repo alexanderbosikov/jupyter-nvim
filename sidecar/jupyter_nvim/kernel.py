@@ -92,7 +92,12 @@ class KernelSession:
         self._iopub_live = False
         self._stdin_live = False
         self._probe_msg_ids: set[str] = set()
+        # текущая проба stdin и три её вехи: началась (status busy), прислала input_request,
+        # завершилась (execute_reply). См. _probe_stdin: без вех проба могла остаться висеть
+        self._probe_current: str | None = None
+        self._probe_busy = threading.Event()
         self._probe_seen = threading.Event()
+        self._probe_replied = threading.Event()
         self._stdin_started = False
         self._ready_lock = threading.Lock()
         self._restarting = False
@@ -325,6 +330,7 @@ class KernelSession:
         self._stdin_live = False
         self._info_msg_ids = set()
         self._probe_msg_ids = set()
+        self._probe_current = None
         self._stdin_started = False
         self._set_state(KernelState.STARTING)
         self._send_kernel_info()
@@ -376,28 +382,80 @@ class KernelSession:
         Поэтому — самопроверка: скрытая ячейка вызывает `input()`, мы отвечаем на её запрос.
         Пришёл запрос — маршрут есть. Не пришёл — ядро висит в ожидании, снимаем `interrupt`
         (его глотает `except BaseException`) и пробуем снова.
+
+        Каждая проба доводится до её `execute_reply` (см. `_probe_stdin`): раньше цикл слал
+        следующую пробу, не дождавшись конца предыдущей, и ядро можно было оставить висящим
+        в `input()` навсегда — с виду `ready`, а на `execute` тишина.
         """
-        for _ in range(10):
+        for _ in range(5):
             if stop.is_set() or self._km is None:
                 return
-            if self._probe_stdin(stop):
+            outcome = self._probe_stdin(stop)
+            if outcome != "seen":
+                self._rpc.log("debug", f"проба stdin: {outcome}")
+            if outcome == "seen":
                 self._stdin_live = True
                 self._maybe_ready()
                 return
-            try:
-                if not self._alive():
-                    return
-                self._interrupt_kernel()
-            except Exception:
-                return
+            if outcome == "stuck":
+                break  # ядро не отвечает даже на interrupt: дальнейшие пробы только добавят очереди
         self._rpc.log("warn", "маршрут stdin не подтверждён: input() в ячейке может не сработать")
         self._stdin_live = True
         self._maybe_ready()
 
-    def _probe_stdin(self, stop: threading.Event) -> bool:
+    def _wait_event(self, event: threading.Event, timeout: float, stop: threading.Event) -> bool:
+        """Ждать веху, не пропуская сигнал остановки: иначе гашение ядра ждало бы наш таймаут."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if event.wait(0.05):
+                return True
+            if stop.is_set():
+                return False
+        return False
+
+    def _probe_stdin(self, stop: threading.Event) -> str:
+        """Одна проба маршрута stdin. Возвращает `seen`, `lost` или `stuck`.
+
+        Инвариант: проба заканчивается только вместе со своим `execute_reply`, то есть после
+        неё ядро снова свободно. Два следствия, оба выстраданные:
+
+        - `interrupt` уходит только когда проба уже выполняется (`status: busy` с её parent).
+          Раньше он мог уйти, пока ядро ещё занято предыдущей ячейкой — а вне выполнения
+          ipykernel держит SIGINT в SIG_IGN, и такой interrupt просто пропадал. Тогда каждый
+          следующий interrupt освобождал предыдущую пробу, а последняя оставалась висеть в
+          `input()`; все `execute` вставали за ней в очередь, ядро молчало при состоянии ready.
+          Воспроизводилось примерно на одном старте из пятнадцати;
+        - ответ на `input_request` уходит сразу из `_on_stdin`, и после него ячейка завершается
+          сама — reply всё равно дожидаемся, чтобы READY не наступал посреди чужой ячейки.
+        """
+        self._probe_busy.clear()
         self._probe_seen.clear()
-        self._send_hidden(PROBE_CODE, allow_stdin=True)
-        return self._probe_seen.wait(0.4) and not stop.is_set()
+        self._probe_replied.clear()
+        self._probe_current = self._send_hidden(PROBE_CODE, allow_stdin=True)
+
+        # до начала выполнения ядро может быть занято помощником из §7.1 — его прерывать нельзя
+        if not self._wait_event(self._probe_busy, 10.0, stop):
+            return "stuck"
+        if self._wait_event(self._probe_seen, 0.4, stop):
+            self._wait_event(self._probe_replied, 5.0, stop)
+            return "seen"
+
+        # input_request не дошёл: ядро висит в input(). Снимаем interrupt, пока не придёт reply
+        for _ in range(5):
+            if stop.is_set() or self._km is None:
+                return "stuck"
+            if self._probe_seen.is_set():  # запрос всё же дошёл, просто позже окна
+                self._wait_event(self._probe_replied, 5.0, stop)
+                return "seen"
+            try:
+                if not self._alive():
+                    return "stuck"
+                self._interrupt_kernel()
+            except Exception:
+                return "stuck"
+            if self._wait_event(self._probe_replied, 0.5, stop):
+                return "seen" if self._probe_seen.is_set() else "lost"
+        return "stuck"
 
     def _maybe_ready(self) -> None:
         """Этапы готовности строго последовательны, и порядок здесь не косметический.
@@ -688,6 +746,12 @@ class KernelSession:
         mtype = msg["msg_type"]
         parent = (msg.get("parent_header") or {}).get("msg_id")
         content = msg.get("content") or {}
+
+        # проба stdin началась выполняться: только с этого момента её можно прерывать
+        if parent is not None and parent == self._probe_current and mtype == "status":
+            if content.get("execution_state") == "busy":
+                self._probe_busy.set()
+
         res = self._router.resolve(parent)
 
         if res.exec is None:
@@ -802,6 +866,9 @@ class KernelSession:
             return
 
         if mtype == "execute_reply":
+            if parent is not None and parent == self._probe_current:
+                self._probe_replied.set()  # проба закончилась, ядро свободно
+                return
             res = self._router.resolve(parent)
             if res.exec is None:
                 return
