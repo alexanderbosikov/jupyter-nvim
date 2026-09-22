@@ -24,6 +24,17 @@ local function edit(buf, lines)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 end
 
+---Сделать файл ноутбука на секунду новее черновика.
+---
+---`getftime` считает секундами, поэтому запись «в ту же секунду» от черновика не отличить,
+---и сдвиг нужен явный. Через `fs_utime`, а не `touch -A`: такого ключа нет у GNU touch, он
+---есть только на BSD/macOS — на Linux вызов просто возвращал ошибку, mtime оставался
+---прежним, и тест молча переставал проверять то, ради чего написан.
+local function bump_mtime(path)
+    local when = vim.fn.getftime(path) + 1
+    assert(vim.uv.fs_utime(path, when, when), "не удалось сдвинуть mtime: " .. path)
+end
+
 local function drafts_dir(path)
     return vim.fs.joinpath(
         vim.fn.fnamemodify(path, ":h"),
@@ -108,9 +119,8 @@ describe("черновик", function()
         local path, buf = notebook()
         local d = draft.new({ notebook = path })
         d:save(buf)
-        -- getftime считает в секундах: без сдвига запись «в ту же секунду» не отличить
         vim.fn.writefile({ "правка из Jupyter Lab" }, path)
-        vim.fn.system({ "touch", "-A", "0001", path })
+        bump_mtime(path)
 
         assert.is_true(d:read().outside)
     end)
@@ -463,8 +473,7 @@ describe("черновик снимается по факту, а не по фл
 
     it("снимает черновик, когда файл ноутбука стал не старше него", function()
         local path, buf, d = prepared()
-        -- getftime считает секундами: без сдвига «записан позже» не отличить
-        vim.fn.system({ "touch", "-A", "0001", path })
+        bump_mtime(path)
         vim.bo[buf].modified = false
 
         assert.is_false(draft.save(buf))
