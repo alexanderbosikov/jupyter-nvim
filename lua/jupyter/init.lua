@@ -561,6 +561,14 @@ function M.session(buf)
                 "jupyter.nvim: ядро умерло — " .. ((data or {}).reason or "причина неизвестна"),
                 vim.log.levels.ERROR
             )
+        elseif state == "stuck" then
+            -- Про молчание надо сказать вместе с тем, что делать: до этого предела симптом
+            -- выглядел как «ничего не происходит», и догадаться до рестарта было неоткуда.
+            vim.notify(
+                "jupyter.nvim: " .. ((data or {}).reason or "ядро молчит")
+                    .. "\n  очередь запусков сброшена; :JupyterRestart поднимет заново, :JupyterLog покажет, на чём встало",
+                vim.log.levels.ERROR
+            )
         end
     end
 

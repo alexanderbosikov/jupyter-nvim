@@ -297,6 +297,48 @@ ROUTER learns the identity. It works in four cases out of five, and in the fifth
 for the user's answer: `input()` returns an empty string. A hang turns into silently wrong
 data.
 
+**Silence has a deadline.** All of the above answers "when is the kernel usable"; none of it
+answers "and what if it never becomes usable". The watchdog only ever noticed the process
+*dying* — `os.kill(pid, 0)`. A kernel that is alive and simply does not answer left the state
+at `starting` forever, and on the Lua side runs piled into the queue with no bound at all
+(`kernel.lua`: not usable → `table.insert(self._queue, …)`). What the user saw was a cell
+stuck on `⏳ в очереди` and not one word about why.
+
+So `starting` is bounded and the kernel is declared `stuck` when it runs out. The bound is
+**per stage, not one flat number**, because the stages carry different information. A reply
+on shell depends on nothing — it comes from the kernel's own loop, before any user code — so
+it gets a short budget (`SHELL_TIMEOUT`, 10 s); iopub's subscription and especially the stdin
+probe with its retry and `interrupt` are honestly slower and get the longer one
+(`READY_TIMEOUT`, 30 s). Silence on shell specifically is the shape of #1529, and this is
+what catches it in ten seconds instead of a minute.
+
+The numbers come from measurement, not from caution. Over 120 starts (both kernelspecs,
+including four kernels in parallel): a reply on shell — median 0.26–0.32 s, **max 0.43 s**,
+and running four at once did not move it; iopub — max 0.41 s; stdin — p95 0.76 s, max 0.84 s.
+Over a separate 400 starts, full readiness had a median of 0.37 s and a worst case of 4.38 s.
+Both kernelspecs turn out to be a bare `ipykernel_launcher`, so readiness never waits on the
+user's heavy imports — those live in the first cell. Ten seconds is therefore some twenty
+times the worst stage ever seen here, and a false alarm is cheap anyway: `stuck` is
+recoverable, the kernel promotes itself to `ready` if it does answer.
+
+The reason names the stage that stalled — "не ответило на shell", "подписка iopub молчит",
+"маршрут stdin молчит" — because those are three different faults in three different places,
+and that is the only genuinely useful thing to say in `:JupyterLog`.
+
+`stuck` is a separate state from `dead` on purpose. The process is alive and holding memory,
+so calling it dead is a lie; and the two call for different things. A dead kernel has to be
+raised again, whereas a silent one may still answer — and if it does, `_maybe_ready` promotes
+it from `stuck` straight to `ready` without anyone having to restart anything. The Lua side
+drops the queue on `stuck` with `kernel_stuck` and says what to do next, because up to that
+point the symptom read as "nothing is happening".
+
+The observed cause of such silence is [ipython/ipykernel#1529](https://github.com/ipython/ipykernel/pull/1529):
+the shell ROUTER stopped re-arming its read edge and the kernel went quiet. Reported at ~2%
+of starts on Linux; not reproduced here in 400 starts (median readiness 0.37 s — the window
+barely opens when the kernel comes up that fast). Merged upstream 13.08.2026 and in no
+release as of 7.3.0, so there is nothing to pin to. The deadline is ours regardless: it
+bounds *any* reason for silence, not that one.
+
 **The stages of readiness are sequential.** First the kernel proves that its main loop is
 alive, and only then do we have the right to send it hidden cells, let alone an
 `interrupt`: a SIGINT arriving at a kernel that is still importing modules aborts its own

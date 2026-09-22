@@ -75,6 +75,14 @@ function Kernel:_set_state(state, data)
             code = "kernel_dead",
             msg = self._reason or "ядро умерло, запуск отменён",
         })
+    elseif state == "stuck" then
+        -- Живое, но молчащее ядро: держать очередь дальше означает вечное «в очереди» без
+        -- единого слова. Очередь сбрасываем, но состояние не терминальное — ядро ещё может
+        -- ответить и само стать ready, и тогда новые запуски пойдут как обычно.
+        self:_drop_queue({
+            code = "kernel_stuck",
+            msg = self._reason or "ядро молчит, запуск отменён",
+        })
     end
     if self.on_state then
         self.on_state(state, data)

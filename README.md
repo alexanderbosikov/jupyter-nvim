@@ -701,6 +701,16 @@ history holds only a `code_sha`, not the code itself. While the buffer is open, 
 you. The outputs of the vanished cell stay in `.jupyter-out` and are read by id (see "Where
 outputs live").
 
+**The kernel can start and then say nothing.** Alive, holding memory, answering nothing —
+seen on ipykernel 7.x ([#1529](https://github.com/ipython/ipykernel/pull/1529), reported at
+about 2% of starts on Linux; the fix is merged upstream but is in no release as of 7.3.0, so
+there is nothing to pin to). The plugin used to wait for it forever: cells sat on
+`⏳ в очереди` and nothing ever explained why. Now `starting` is bounded — ten seconds for a
+reply on the shell channel, thirty for the rest of the handshake — after which the kernel is
+declared `stuck`, the run queue is dropped with an error naming the stage that stalled, and
+you are told to use `:JupyterRestart` (`:JupyterLog` shows where it got to). If the kernel
+does answer later, it becomes ready by itself and no restart is needed.
+
 **Images outlive their output.** The plugin shows them through image.nvim, which keeps what
 it has shown in its own state and redraws it on every scroll. An image sometimes stays on
 screen after you move to another cell or switch a tmux window; `Ctrl-L` helps. The cause is

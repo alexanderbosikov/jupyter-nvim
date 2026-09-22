@@ -137,6 +137,38 @@ describe("ядро", function()
         assert.equals(0, k:queued())
     end)
 
+    it("молчащее ядро сбрасывает очередь: «в очереди» навсегда — хуже, чем отказ", function()
+        local sc = fake_sidecar()
+        local silent = kernel.new({ sidecar = sc })
+        silent:start()
+        silent:_set_state("starting")
+
+        local err
+        silent:execute({ cell_id = "a3f9", run_id = 1, code = "1" }, function(e) err = e end)
+        assert.equals(1, silent:queued())
+
+        silent:_set_state("stuck", { reason = "ядро не ответило за 60 с: процесс жив, но молчит" })
+
+        assert.equals("kernel_stuck", err.code)
+        assert.is_truthy(err.msg:match("молчит"))
+        assert.equals(0, silent:queued())
+    end)
+
+    it("отозвавшееся ядро снова принимает запуски: рестарта для этого не требуется", function()
+        local sc = fake_sidecar()
+        local silent = kernel.new({ sidecar = sc })
+        silent:start()
+        silent:_set_state("stuck", { reason = "молчит" })
+        local before = #sc.requests
+
+        silent:_set_state("ready")
+        silent:execute({ cell_id = "b7e1", run_id = 2, code = "1" })
+
+        assert.equals(0, silent:queued(), "очередь не нужна: ядро снова годно")
+        assert.equals("execute", sc.requests[#sc.requests].op)
+        assert.is_true(#sc.requests > before)
+    end)
+
     it("рестарт очищает очередь и возвращает ядро в строй", function()
         k:start()
         wait(function() return k:state() == "ready" end, 60000, "ready")

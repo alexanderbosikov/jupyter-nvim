@@ -47,6 +47,30 @@ GLOBAL_TYPES = {"status", "iopub_welcome"}
 SILENT_TYPES = {"execute_input"}
 """Есть родитель, но показывать нечего: код ячейки Lua и так знает."""
 
+SHELL_TIMEOUT = 10.0
+"""Сколько ждём ответа на `kernel_info_request`, прежде чем сказать, что ядро молчит.
+
+Отдельный и короткий предел именно у shell, потому что этот этап ни от чего не зависит:
+отвечает главный цикл ядра, до всякого пользовательского кода. Измерено на 120 стартах
+(оба kernelspec'а, в том числе по четыре ядра параллельно) — медиана 0.26–0.32 с, максимум
+**0.43 с**, и параллельный запуск его не сдвинул. Десять секунд — двадцатикратный запас к
+худшему наблюдённому и примерно двукратный к худшему полному старту (4.4 с на 400 прогонах).
+
+Молчание ровно здесь — форма ipython/ipykernel#1529: ROUTER shell-канала перестаёт
+перечитывать сокет, и ядро не отвечает никогда (влито 13.08.2026, в релиз 7.3.0 не попало).
+"""
+
+READY_TIMEOUT = 30.0
+"""Сколько всего ядру позволено оставаться STARTING, когда на shell оно уже ответило.
+
+Запас больше, чем у shell, потому что оставшиеся этапы честно дольше: подписка iopub и
+особенно проба stdin с её повтором и `interrupt` (§6.2). Наблюдаемый максимум — 0.84 с.
+
+Предел вообще нужен потому, что молчание ничем не ограничено само по себе: `_watchdog`
+замечает только смерть процесса, а живое, но не отвечающее ядро остаётся STARTING навсегда —
+и очередь запусков в Lua копится вечно, показывая «в очереди» и ничего больше.
+"""
+
 
 def _pid_alive(pid: int) -> bool:
     """Жив ли процесс. Сигнал 0 ничего не делает, только проверяет право его послать."""
@@ -87,6 +111,9 @@ class KernelSession:
 
         self._state = KernelState.NONE
         self._state_t0 = time.monotonic()
+        self._shell_timeout = SHELL_TIMEOUT
+        self._ready_timeout = READY_TIMEOUT
+        self._stuck_reported = False
         self._info_msg_ids: set[str] = set()
         self._shell_ready = False
         self._iopub_live = False
@@ -328,6 +355,7 @@ class KernelSession:
         self._shell_ready = False
         self._iopub_live = False
         self._stdin_live = False
+        self._stuck_reported = False  # рестарт — это новый отсчёт, а не продолжение старого
         self._info_msg_ids = set()
         self._probe_msg_ids = set()
         self._probe_current = None
@@ -481,7 +509,9 @@ class KernelSession:
             self._spawn("jn-stdin-settle", self._settle_stdin, self._pump_stop)
             return
 
-        if self._stdin_live and self._state == KernelState.STARTING:
+        # и из STUCK тоже: молчание могло кончиться само, и заставлять человека
+        # перезапускать живое ответившее ядро незачем
+        if self._stdin_live and self._state in (KernelState.STARTING, KernelState.STUCK):
             self._set_state(KernelState.READY, **self._banner)
 
     def restart(self) -> dict[str, Any]:
@@ -718,10 +748,39 @@ class KernelSession:
             except Exception as e:  # один плохой месседж не должен убивать канал
                 self._rpc.log("error", f"{name}: {type(e).__name__}: {e}", msg_type=msg.get("msg_type"))
 
+    def _check_ready_deadline(self) -> bool:
+        """Сказать вслух, что ядро молчит дольше отведённого. Возвращает, сказали ли сейчас.
+
+        Отдельным методом, а не строкой в цикле: единственное, что тут интересно проверить, —
+        когда именно мы объявляем молчание, а поднимать ради этого настоящий поток значит
+        проверять таймеры вместо решения.
+        """
+        if self._state != KernelState.STARTING or self._stuck_reported:
+            return False
+
+        waited = time.monotonic() - self._state_t0
+        if not self._shell_ready:
+            if waited <= self._shell_timeout:
+                return False
+            reason = f"ядро не ответило на shell за {waited:.0f} с: процесс жив, но молчит"
+        else:
+            if waited <= self._ready_timeout:
+                return False
+            # shell ответил, значит главный цикл жив, а встало что-то одно из двух. Какое
+            # именно — единственное, что тут можно сказать полезного: у подписки iopub и у
+            # маршрута stdin разные причины и разные места, где смотреть
+            stalled = "подписка iopub" if not self._iopub_live else "маршрут stdin"
+            reason = f"ядро ответило на shell, но {stalled} молчит уже {waited:.0f} с"
+
+        self._stuck_reported = True
+        self._set_state(KernelState.STUCK, reason=reason)
+        return True
+
     def _watchdog(self, stop: threading.Event) -> None:
         while not stop.wait(0.25):
             if self._restarting or self._km is None:
                 continue
+            self._check_ready_deadline()
             try:
                 alive = self._alive()
             except Exception:
