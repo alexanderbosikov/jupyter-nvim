@@ -57,6 +57,10 @@ M.FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏
 ---привычное «Implementing» ставится одной строкой в конфиге.
 M.VERB = "правит"
 M.VERB_INSERT = "пишет новую ячейку"
+---Глагол удаления показывается и при заголовке: заголовок говорит, о чём речь, но то, что
+---ячейки через секунду не станет, из него не прочесть — а это ровно то, что человеку надо
+---успеть увидеть.
+M.VERB_DELETE = "удалит ячейку"
 
 
 ---Доля срока, после которой метка становится предупреждающей: заявка вот-вот снимется.
@@ -78,6 +82,7 @@ M.PRIORITY = 5000
 ---@field token integer
 ---@field buf integer
 ---@field kind "replace"|"insert"
+---@field intent "delete"|nil заявка держит ячейку, чтобы удалить её, а не переписать
 ---@field cell_id string|nil id ячейки: для replace — какой, для insert — после какой
 ---@field by_id boolean id настоящий (из текста), а не запасной от номера ячейки
 ---@field sha string|nil тело ячейки на момент заявки
@@ -129,6 +134,13 @@ end
 local function mark_row(req)
     local pos = vim.api.nvim_buf_get_extmark_by_id(req.buf, M.NS, req.mark, {})
     return pos[1] and pos[1] + 1 or nil
+end
+
+---Чем подсвечено тело заявленной ячейки: удаляемую видно издалека, ещё до подписи.
+---@param req jupyter.EditRequest
+---@return string
+local function body_group(req)
+    return req.intent == "delete" and "JupyterAgentDelete" or "JupyterAgentPending"
 end
 
 ---Где сейчас ячейка заявки.
@@ -223,6 +235,10 @@ end
 ---@return string
 local function label_text(req, now)
     local age = fmt_age(now - req.opened_at)
+    if req.intent == "delete" then
+        local what = req.title and (" · " .. req.title) or ""
+        return (" %s %s %s%s · %s "):format(frame(now), req.label, M.VERB_DELETE, what, age)
+    end
     if req.title then
         -- заголовок отвечает на «что делается» точнее любого глагола, и глагол рядом с ним
         -- только отнимал бы ширину у самого заголовка
@@ -408,7 +424,7 @@ local function refresh(req, now)
             id = req.mark,
             end_row = body_last,
             end_col = details.end_col,
-            hl_group = "JupyterAgentPending",
+            hl_group = body_group(req),
             hl_eol = true,
             hl_mode = "combine",
         })
@@ -481,7 +497,7 @@ local function mark_cell(req, cell)
     req.mark = vim.api.nvim_buf_set_extmark(req.buf, M.NS, cell.start_row - 1, 0, {
         end_row = cell.end_row,
         end_col = 0,
-        hl_group = "JupyterAgentPending",
+        hl_group = body_group(req),
         hl_eol = true,
         hl_mode = "combine",
     })
@@ -535,13 +551,24 @@ end
 ---за миг до записи, формально честна, но человеку не сообщает ничего.
 ---@param opts table cell — заменить тело этой ячейки; after — вставить после неё;
 ---at_end — вставить в конец документа; label — чьё имя показывать в буфере;
----title — что делается, первой строкой метки; pending — заявку открыл плагин, вид правки
+---title — что делается, первой строкой метки; delete — ячейку держат, чтобы удалить
+---(вместе с cell); pending — заявку открыл плагин, вид правки
 ---определит `adopt`
 ---@return table результат: ok, token, cell_id, start_row, end_row, sha
 function M.begin(buf, opts)
     opts = opts or {}
     if not vim.api.nvim_buf_is_valid(buf) then
         return fail("no_buffer", "буфера нет")
+    end
+    -- Одна ячейка — одна заявка. Вторая метка на той же ячейке ничего не говорит человеку,
+    -- кроме «тут двое», а по существу это гонка: кто первым запишет, у второго sha уже не
+    -- сойдётся. Отказ сразу честнее, чем `changed` через минуту. Вставкам не мешаем —
+    -- ячейки, о которой они, ещё нет, и две новые после одной соседки не спорят.
+    local holder = opts.cell and M.claim_of(buf, opts.cell) or nil
+    if holder then
+        local res = fail("claimed", ("ячейку уже держит заявка %d «%s»"):format(holder.token, holder.label))
+        res.token = holder.token
+        return res
     end
 
     last_token = last_token + 1
@@ -562,6 +589,7 @@ function M.begin(buf, opts)
             return fail("no_cell", "нет ячейки " .. tostring(opts.cell))
         end
         req.kind, req.cell_id, req.by_id = opts.pending and "pending" or "replace", opts.cell, true
+        req.intent = (opts.delete and not opts.pending) and "delete" or nil
         -- у заявки плагина тела ещё никто не читал: sha возьмёт `adopt`, когда агент
         -- скажет, что берётся. Взятый сейчас, он описывал бы документ до того, как агент
         -- вообще увидел ячейку, и первая же правка отклонилась бы по нашей собственной вине
@@ -576,6 +604,7 @@ function M.begin(buf, opts)
             ok = true,
             token = req.token,
             kind = req.kind,
+            intent = req.intent,
             cell_id = req.cell_id,
             start_row = cell.start_row,
             end_row = cell.end_row,
@@ -622,7 +651,7 @@ end
 ---дописал строку, пока агент ещё не начал.
 ---@param token integer
 ---@param opts? table label — имя агента; title — что делается, если он назовёт точнее;
----after — не переписывать ячейку, а вставить новую после неё
+---after — не переписывать ячейку, а вставить новую после неё; delete — удалить её
 ---@return table
 function M.adopt(token, opts)
     opts = opts or {}
@@ -652,7 +681,7 @@ function M.adopt(token, opts)
     req.touched_at = vim.uv.now()
 
     if opts.after then
-        req.kind, req.sha = "insert", nil
+        req.kind, req.sha, req.intent = "insert", nil, nil
         remark(req, function()
             mark_insert(req, cell.span_end)
         end)
@@ -668,6 +697,7 @@ function M.adopt(token, opts)
     end
 
     req.kind = "replace"
+    req.intent = opts.delete and "delete" or nil
     req.sha = sha_of(req.buf, cell)
     req.fence = cell.span_end - cell.end_row
     remark(req, function()
@@ -678,6 +708,7 @@ function M.adopt(token, opts)
         ok = true,
         token = token,
         kind = "replace",
+        intent = req.intent,
         cell_id = req.cell_id,
         start_row = cell.start_row,
         end_row = cell.end_row,
@@ -736,6 +767,9 @@ function M.apply(token, lines)
         }
     end
 
+    -- дописанную под подпись строку убираем ДО шага undo агента: уберёт её `forget` уже
+    -- после записи — и первый `u` откатит только эту уборку, а ячейка останется
+    unpad(req)
     local row = mark_row(req)
     if not row then
         forget(req)
@@ -745,10 +779,95 @@ function M.apply(token, lines)
     break_undo(req.buf)
     local body = cells.insert(req.buf, row, "below")
     vim.api.nvim_buf_set_lines(req.buf, body - 1, body, false, text)
+    -- id сразу, в том же шаге undo: иначе агент не может назвать ячейку, которую сам только
+    -- что написал, — ни поправить её, ни удалить, пока её не запустят. Документ здесь и так
+    -- правится, лишней записи у человека не появляется
+    local new = cells.at(req.buf, body)
+    local cell_id = new and cellid.ensure(req.buf, new) or nil
     break_undo(req.buf)
     forget(req)
     flash(req.buf, body, body + #text - 1)
-    return { ok = true, kind = "insert", buf = req.buf, start_row = body, end_row = body + #text - 1 }
+    return {
+        ok = true,
+        kind = "insert",
+        buf = req.buf,
+        cell_id = cell_id,
+        start_row = body,
+        end_row = body + #text - 1,
+    }
+end
+
+---Какие строки уходят вместе с ячейкой.
+---
+---Ячейка целиком, с маркером и закрывающим фенсом, и одна пустая строка-разделитель — та,
+---что после неё, а у последней ячейки та, что перед ней. Без разделителя на месте ячейки
+---оставались бы две пустые строки подряд, и после нескольких удалений документ расползался.
+---В percent-представлении разделители уже входят в ячейку: её хвост тянется до следующего
+---маркера.
+---@param buf integer
+---@param cell jupyter.Cell
+---@return integer from, integer to 1-based, включительно
+local function delete_range(buf, cell)
+    local from, to = cell.span_start, cell.span_end
+    if cells.representation(buf) ~= "fence" then
+        return from, to
+    end
+    if blank_line_after(buf, to) then
+        return from, to + 1
+    end
+    if from > 1 and vim.api.nvim_buf_get_lines(buf, from - 2, from - 1, false)[1] == "" then
+        return from - 1, to
+    end
+    return from, to
+end
+
+---Удалить ячейку заявки. Проверки те же, что у замены: ячейку ищут по якорю, и если её
+---тронули после заявки, не удаляют — пользователь мог только что набрать в ней то, чего
+---агент не видел.
+---
+---История прогонов на диске остаётся: как и при склейке, она просто становится
+---недостижимой, а `u` возвращает ячейку вместе с id — и история снова при ней.
+---@param token integer
+---@return table результат: ok, cell_id, start_row, end_row (удалённые строки)
+function M.delete(token)
+    local req = requests[token]
+    if not req then
+        return M.gone(token)
+    end
+    if not vim.api.nvim_buf_is_valid(req.buf) then
+        requests[token] = nil
+        return fail("no_buffer", "буфер закрыт")
+    end
+    if req.kind == "pending" then
+        return fail("not_adopted", "заявка не взята: позови edit_adopt(token, {delete = true})")
+    end
+    if req.kind ~= "replace" then
+        return fail("not_a_cell", "заявка на вставку: удалять нечего")
+    end
+
+    local cell = locate(req)
+    if not cell then
+        forget(req)
+        return fail("cell_gone", "ячейка исчезла из документа")
+    end
+    if sha_of(req.buf, cell) ~= req.sha then
+        forget(req)
+        return fail("changed", "ячейку правили после заявки, не удалена")
+    end
+
+    local from, to = delete_range(req.buf, cell)
+    forget(req) -- до записи: подпись и знаки сидят на строках, которых сейчас не станет
+    break_undo(req.buf)
+    vim.api.nvim_buf_set_lines(req.buf, from - 1, to, false, {})
+    break_undo(req.buf)
+    return {
+        ok = true,
+        kind = "delete",
+        buf = req.buf,
+        cell_id = req.cell_id,
+        start_row = from,
+        end_row = to,
+    }
 end
 
 ---Снять заявку, ничего не записав.
@@ -865,6 +984,7 @@ function M.list(buf)
                 token = token,
                 buf = req.buf,
                 kind = req.kind,
+                intent = req.intent,
                 cell_id = req.cell_id,
                 label = req.label,
                 title = req.title,

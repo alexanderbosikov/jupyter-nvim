@@ -1799,6 +1799,18 @@ function M.edit_apply(token, lines)
     return res
 end
 
+---Удалить ячейку по заявке. Открывать её лучше с `delete = true`: тогда метка заранее
+---говорит «удалит», а не «правит» (§7.5).
+---@param token integer
+---@return table
+function M.edit_delete(token)
+    local res = agent.delete(token)
+    if res.ok and res.buf then
+        M.repaint(res.buf)
+    end
+    return res
+end
+
 ---Снять заявку, ничего не записав.
 ---@param token integer
 ---@return table

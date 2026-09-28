@@ -23,6 +23,7 @@ M.GROUPS = {
 M.LINKS = {
     JupyterAgentPending = "Visual", -- область, которую агент держит под правку
     JupyterAgentText = "DiagnosticInfo", -- подпись «✎ кто правит»
+    JupyterAgentDelete = "DiffDelete", -- та же область, когда агент собирается её удалить
     JupyterAgentStale = "DiagnosticWarn", -- та же подпись, когда о заявке давно нет вестей
     JupyterAgentFlash = "IncSearch", -- вспышка на только что вставленном
 }

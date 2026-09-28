@@ -120,7 +120,7 @@ describe("заявка на правку", function()
 
         assert.is_true(res.ok)
         local text = lines_of(buf)
-        assert.equals("```sql", text[11], "за sql-ячейкой появляется sql-ячейка")
+        assert.is_truthy(text[11]:match('^```sql jncell="%x+"$'), "за sql-ячейкой появляется sql-ячейка")
         assert.equals("select 2", text[12])
         assert.equals("```", text[13])
     end)
@@ -639,5 +639,167 @@ describe("заголовок в метке", function()
     it("без заголовка подпись прежняя: у заявки агента её никто не отнимал", function()
         agent.begin(buf, { cell = "a3f9", label = "Claude" })
         assert.is_truthy(frame_of(buf)[1].text:match("Claude правит"))
+    end)
+end)
+
+describe("удаление ячейки", function()
+    local buf
+
+    before_each(function()
+        agent._reset()
+        buf = make_buf()
+    end)
+
+    it("уносит ячейку с фенсами и одним разделителем: двух пустых строк подряд не остаётся", function()
+        local req = agent.begin(buf, { cell = "a3f9", delete = true })
+        local res = agent.delete(req.token)
+
+        assert.is_true(res.ok)
+        assert.same({ "# Отчёт", "", '```sql jncell="b7e1"', "select 1", "```" }, lines_of(buf))
+        assert.same({}, marks_of(buf), "заявка снята")
+        assert.same({}, signs_of(buf))
+        assert.same({}, frame_of(buf))
+    end)
+
+    it("у последней ячейки уносит разделитель перед ней", function()
+        local req = agent.begin(buf, { cell = "b7e1", delete = true })
+        assert.is_true(agent.delete(req.token).ok)
+        assert.same({ "# Отчёт", "", '```python jncell="a3f9"', "x = 1", "```" }, lines_of(buf))
+    end)
+
+    it("находит ячейку по якорю, когда выше дописали строки", function()
+        local req = agent.begin(buf, { cell = "b7e1", delete = true })
+        vim.api.nvim_buf_set_lines(buf, 0, 0, false, { "проза" })
+        assert.is_true(agent.delete(req.token).ok)
+        assert.is_nil(table.concat(lines_of(buf), "\n"):match("select 1"))
+        assert.equals("проза", lines_of(buf)[1])
+    end)
+
+    it("не удаляет, если ячейку правили после заявки", function()
+        local req = agent.begin(buf, { cell = "a3f9", delete = true })
+        vim.api.nvim_buf_set_lines(buf, 3, 4, false, { "x = 1  # правка руками" })
+
+        local res = agent.delete(req.token)
+
+        assert.is_false(res.ok)
+        assert.equals("changed", res.reason)
+        assert.equals("x = 1  # правка руками", lines_of(buf)[4])
+        assert.same({}, marks_of(buf), "отказ снимает заявку, как у правки")
+    end)
+
+    it("по заявке на вставку и по невзятой заявке плагина не удаляет", function()
+        local ins = agent.begin(buf, { after = "a3f9" })
+        assert.equals("not_a_cell", agent.delete(ins.token).reason)
+        agent.cancel(ins.token)
+
+        local pending = agent.begin(buf, { cell = "a3f9", pending = true, title = "удали" })
+        assert.equals("not_adopted", agent.delete(pending.token).reason)
+        assert.same(LINES, lines_of(buf))
+
+        agent.adopt(pending.token, { delete = true })
+        assert.is_true(agent.delete(pending.token).ok)
+    end)
+
+    it("метка заранее говорит «удалит», даже при заголовке, и тело подсвечено иначе", function()
+        agent.begin(buf, { cell = "a3f9", label = "Claude", delete = true, title = "лишняя ячейка" })
+        local text = frame_of(buf)[1].text
+        assert.is_truthy(text:match("Claude удалит ячейку"))
+        assert.is_truthy(text:match("лишняя ячейка"))
+        assert.equals("JupyterAgentDelete", marks_of(buf)[1][4].hl_group)
+    end)
+
+    it("откатывается одним u, не унося ввод пользователя", function()
+        vim.api.nvim_set_current_buf(buf)
+        vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "# Отчёт правленый" })
+        local req = agent.begin(buf, { cell = "a3f9", delete = true })
+        agent.delete(req.token)
+
+        vim.cmd("undo")
+
+        local text = lines_of(buf)
+        assert.equals('```python jncell="a3f9"', text[3], "ячейка вернулась вместе с id")
+        assert.equals("# Отчёт правленый", text[1])
+    end)
+
+    it("в percent-представлении уносит от маркера до следующего", function()
+        local pbuf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(pbuf, 0, -1, false, {
+            '# %% jncell="a3f9"',
+            "x = 1",
+            "",
+            '# %% jncell="b7e1"',
+            "y = 2",
+        })
+        vim.bo[pbuf].filetype = "python"
+        local req = agent.begin(pbuf, { cell = "a3f9", delete = true })
+        assert.is_true(req.ok, vim.inspect(req))
+        assert.is_true(agent.delete(req.token).ok)
+        assert.same({ '# %% jncell="b7e1"', "y = 2" }, lines_of(pbuf))
+    end)
+end)
+
+describe("id новой ячейки", function()
+    before_each(function()
+        agent._reset()
+    end)
+
+    it("вставка агента сразу пишет jncell и отдаёт его: свою ячейку агент может назвать", function()
+        local buf = make_buf()
+        local req = agent.begin(buf, { after = "a3f9" })
+        local res = agent.apply(req.token, { "y = 2" })
+
+        assert.is_truthy(res.cell_id)
+        local fence = lines_of(buf)[res.start_row - 1]
+        assert.equals(('```python jncell="%s"'):format(res.cell_id), fence)
+
+        local again = agent.begin(buf, { cell = res.cell_id, delete = true })
+        assert.is_true(again.ok, "по этому id ячейку можно взять сразу, без прогона")
+        assert.is_true(agent.delete(again.token).ok)
+        assert.same(LINES, lines_of(buf))
+    end)
+
+    it("id и сама ячейка откатываются одним u", function()
+        local buf = make_buf()
+        vim.api.nvim_set_current_buf(buf)
+        local req = agent.begin(buf, { after = "b7e1" })
+        agent.apply(req.token, { "select 2" })
+        vim.cmd("undo")
+        assert.same(LINES, lines_of(buf))
+    end)
+end)
+
+describe("одна ячейка — одна заявка", function()
+    local buf
+
+    before_each(function()
+        agent._reset()
+        buf = make_buf()
+    end)
+
+    it("вторую заявку на ту же ячейку не открывает и называет ту, что держит", function()
+        local first = agent.begin(buf, { cell = "a3f9", label = "Claude" })
+        local second = agent.begin(buf, { cell = "a3f9", delete = true })
+
+        assert.is_false(second.ok)
+        assert.equals("claimed", second.reason)
+        assert.equals(first.token, second.token)
+        assert.equals(1, #marks_of(buf), "метка одна")
+    end)
+
+    it("заявка плагина тоже держит: агент берёт её, а не открывает свою", function()
+        agent.begin(buf, { cell = "a3f9", pending = true, title = "проверь" })
+        assert.equals("claimed", agent.begin(buf, { cell = "a3f9" }).reason)
+    end)
+
+    it("после снятия ячейку можно взять снова; соседнюю — в любой момент", function()
+        local first = agent.begin(buf, { cell = "a3f9" })
+        assert.is_true(agent.begin(buf, { cell = "b7e1" }).ok)
+        agent.cancel(first.token)
+        assert.is_true(agent.begin(buf, { cell = "a3f9" }).ok)
+    end)
+
+    it("вставок после одной ячейки может быть несколько", function()
+        assert.is_true(agent.begin(buf, { after = "a3f9" }).ok)
+        assert.is_true(agent.begin(buf, { after = "a3f9" }).ok)
     end)
 end)

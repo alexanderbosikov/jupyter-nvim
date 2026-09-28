@@ -240,6 +240,7 @@ function M.header(addr, token)
         table.insert(out, ("заявка: %d — уже открыта, метка стоит в буфере, человек её видит."):format(token))
         table.insert(out, ("  взять её: edit_adopt(%d) — перепишешь тело ячейки;"):format(token))
         table.insert(out, ("           edit_adopt(%d, {after = true}) — допишешь новую после неё."):format(token))
+        table.insert(out, ("           edit_adopt(%d, {delete = true}) — удалишь её, если об этом просили: edit_delete(%d)."):format(token, token))
         table.insert(out, "  edit_begin не зови: на ячейке окажется вторая метка.")
         table.insert(out, ("  дальше как обычно: edit_apply(%d, строки), edit_touch(%d), edit_cancel(%d)."):format(token, token, token))
     else

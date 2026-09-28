@@ -108,12 +108,14 @@ arrives with a header like this:
 заявка: 7 — уже открыта, метка стоит в буфере, человек её видит.
   взять её: edit_adopt(7) — перепишешь тело ячейки;
            edit_adopt(7, {after = true}) — допишешь новую после неё.
+           edit_adopt(7, {delete = true}) — удалишь её, если об этом просили: edit_delete(7).
 ```
 
 **Take the claim, do not open your own.** The plugin opened it the moment the user pressed
 the key — that is the whole point of it: the mark has been sitting on that cell since
 before you read the prompt, so the user has known all along that the cell is spoken for.
-Calling `edit_begin` here puts a *second* mark on the same cell.
+Calling `edit_begin` on that cell is refused with `claimed` (one cell, one mark) — the
+answer carries the token of the claim that holds it, and that is the one to adopt.
 
 ```sh
 # the cell is to be rewritten
@@ -133,8 +135,8 @@ nvim --server "$SOCK" --remote-expr 'luaeval("vim.json.encode(require(\"jupyter\
   something other than what the first line of the prompt says.
 - The sha is taken **at adopt time**, not when the prompt was sent: whatever the user typed
   while the prompt was in flight is part of what you read, not a reason to reject your edit.
-- Everything afterwards is unchanged: `edit_apply(7, lines)`, `edit_touch(7)`,
-  `edit_cancel(7)`.
+- Everything afterwards is unchanged: `edit_apply(7, lines)` (or `edit_delete(7)` after
+  `{delete = true}`), `edit_touch(7)`, `edit_cancel(7)`.
 - `заявки нет` in the header means the question is not about one cell (the user asked about
   the whole notebook, or the cursor was in prose). Nothing is marked; if you end up editing,
   open a claim yourself with `edit_begin`.
@@ -172,8 +174,18 @@ after a long silence.
 
 - Insert a cell: `edit_begin({after = "a3f9"})`; without `after` it goes to the end. The
   language is inherited from the neighbouring cell. The body is written with the same
-  `edit_apply`. Claim it the moment you know where the new cell goes — a ghost line appears
+  `edit_apply`, and its result carries the new cell's `cell_id` — the `jncell` is written
+  at insertion, so you can claim, edit or delete your own cell right away, without a run. Claim it the moment you know where the new cell goes — a ghost line appears
   in the buffer, and the user knows something is coming.
+- Delete a cell: `edit_begin({cell = "a3f9", delete = true})`, then `edit_delete(token)`.
+  With `delete = true` the mark says `удалит ячейку` and the body turns red — the user sees
+  *which* cell is going before it goes; without it the mark says `правит`, and a cell that
+  vanishes under that label is exactly the silent edit this protocol exists to prevent. On a
+  plugin-opened claim: `edit_adopt(token, {delete = true})`. **Delete only a cell the user
+  asked you to remove** (or agreed to when you proposed it) — never as a side effect of
+  "cleaning up". The check is the same as for `edit_apply`: `changed` / `cell_gone` reject it.
+  The cell goes with its fences and one separating blank line; the user gets it back with a
+  single `u`, id and run history included.
 - Changed your mind: `edit_cancel(token)`. Open claims — `:JupyterEdits`; clear them all
   with `!`.
 
@@ -216,7 +228,10 @@ info string: if `df_name`, `limit=0` or `cache` are needed, ask the user to run
 
 **Rejections must not be worked around.** `{"ok":false,"reason":"changed"}` means the user
 edited that cell themselves while you were thinking: re-read the snapshot, redo the edit,
-open a new claim. `cell_gone` — the cell is no longer there. Never push a rejected edit
+open a new claim. `cell_gone` — the cell is no longer there. `claimed` on `edit_begin` — that
+cell already has a claim (its `token` is in the answer): one cell, one mark. If it is the
+plugin's claim from the prompt header, `edit_adopt` it; if it is your own, use it or
+`edit_cancel` it first. Never push a rejected edit
 through `nvim_buf_set_lines` using the old line numbers: that is exactly the case the
 rejection exists for.
 

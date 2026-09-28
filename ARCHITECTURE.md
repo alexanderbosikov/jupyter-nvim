@@ -715,6 +715,30 @@ Two smaller decisions, both of which cost debugging:
 - **Its own namespace, not shared with the statuses.** `ui.status` clears its own namespace
   entirely on every redraw, and the claim's mark would disappear at the first keystroke.
 
+**One cell, one claim.** `begin` on a cell that already has one — the agent's own or the
+plugin's from `:JupyterAsk` — is refused with `claimed` and the holder's token. Two marks on
+one cell tell the user nothing but "two of them", and in substance they are a race: whoever
+writes first leaves the other with a sha that no longer matches. Refusing at once is more
+honest than `changed` a minute later. Inserts are not limited: the cell they are about does
+not exist yet, and two new cells after one neighbour do not compete.
+
+**Deleting is a claim too.** `begin{cell, delete = true}` (or `adopt{delete = true}`) marks
+the cell, and `agent.delete` removes it by the same anchor and the same sha check as a
+rewrite. The flag changes only what the user sees: the body turns `JupyterAgentDelete`
+(`DiffDelete`) and the label says `удалит ячейку` even when a title is set — a title says
+what the task is about, but not that the cell is about to vanish, and that is the one thing
+the user must have time to see. The cell goes with its fences and one separating blank line
+(the one after it, or before it for the last cell), otherwise two blank lines would be left
+in its place and repeated deletions would spread the document out; in percent the blank lines
+already belong to the cell. One `u` brings it back with its `jncell`, and with it the run
+history, which never left the disk.
+
+**An agent's insert gets its id at once**, in the same undo step, and `apply` returns it as
+`cell_id` — so the agent can claim, edit or delete the cell it has just written without
+running it (§7.2). The line an EOF insert claim adds as a hook for its label is removed
+*before* the agent's undo step opens: removed after, it was a step of its own, and the first
+`u` undid only that removal and left the cell in place.
+
 The mark in the buffer is not decoration: a claim lives for as long as the agent is
 thinking, and without it the user does not know that someone has this cell in their sights.
 That is why it appears in `begin` and not at the moment of writing.
