@@ -295,24 +295,81 @@ describe("очередь и выполнение", function()
 end)
 
 describe("запрет запуска", function()
-    it("ячейку, которую держит агент, не запускает и id ей не дописывает", function()
-        local buf = buffer({ "# %%", "x = 1", "# %%", "y = 2" })
+    it("ячейку, которую держит агент, не запускает", function()
+        -- заявку агент открывает по id, поэтому у держимой ячейки он уже есть;
+        -- у соседки, которую ещё не запускали, id нет — и это честный ответ, а не "0002"
+        local buf = buffer({ '# %% jncell="a1b2"', "x = 1", "# %%", "y = 2" })
         local asked = {}
         local ex = exec.new({
             kernel = stub_kernel(),
             blocked = function(cell_id)
-                table.insert(asked, cell_id)
-                return cell_id == "0001" -- первую держит агент
+                table.insert(asked, cell_id or "<без id>")
+                return cell_id == "a1b2" -- первую держит агент
             end,
         })
 
         local runs = ex:run_all(buf)
 
         assert.equals(1, #runs, "вторая ячейка выполняется как обычно")
-        assert.same({ "0001", "0002" }, asked, "спрашивают про каждую")
+        assert.same({ "a1b2", "<без id>" }, asked, "спрашивают про каждую")
+    end)
+
+    it("отказ не оставляет id в документе", function()
+        local buf = buffer({ "# %%", "x = 1" })
+        local ex = exec.new({ kernel = stub_kernel(), blocked = function() return true end })
+
+        assert.equals(0, #ex:run_all(buf))
         assert.is_nil(
             vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]:match("jncell"),
-            "отказ не должен оставлять id в документе"
+            "спрашивают до cellid.ensure, поэтому документ не тронут"
         )
+    end)
+end)
+
+describe("идентичность ячейки", function()
+    local ex, buf
+
+    before_each(function()
+        ex = exec.new({ kernel = stub_kernel() }):attach()
+        buf = buffer({ "# %%", 'print("раз")', "# %%", 'print("два")' })
+    end)
+
+    it("до первого запуска id нет: сопоставлять ячейку не по чему", function()
+        assert.is_nil(exec.cell_id(buf, cells.at(buf, 2)))
+    end)
+
+    it("ячейка, вставленная в запущенный ноутбук, не забирает чужой прогон", function()
+        local run = ex:run_at(buf, 2)
+        assert.equals("queued", run.status)
+
+        -- новая ячейка появляется ВЫШЕ запущенной: номера всех ячеек ниже сдвигаются
+        vim.api.nvim_buf_set_lines(buf, 0, 0, false, { "# %%", 'print("новая")' })
+
+        assert.is_nil(exec.cell_id(buf, cells.at(buf, 2)), "у новой ячейки id ещё нет")
+        assert.is_nil(ex:run_for(exec.cell_id(buf, cells.at(buf, 2))), "и чужого прогона тоже")
+        assert.equals(
+            run,
+            ex:run_for(exec.cell_id(buf, cells.at(buf, 4))),
+            "а запущенная ячейка со своим прогоном не рассталась, хотя её номер изменился"
+        )
+    end)
+
+    it("ячейке, которой id записать некуда, он считается от содержимого", function()
+        -- код до первого маркера: строки для `jncell` нет
+        local pre = buffer({ "import polars as pl", "# %%", 'print("раз")' })
+
+        local id = exec.cell_id(pre, cells.at(pre, 1))
+
+        assert.is_truthy(id and id:match("^%x%x%x%x%x%x%x%x$"), "восемь hex: с jncell не совпадёт")
+        assert.equals(id, exec.cell_id(pre, cells.at(pre, 1)), "тот же текст — тот же id")
+    end)
+
+    it("id ячейки без маркера не зависит от того, что появилось ниже", function()
+        local pre = buffer({ "import polars as pl", "# %%", 'print("раз")' })
+        local before = exec.cell_id(pre, cells.at(pre, 1))
+
+        vim.api.nvim_buf_set_lines(pre, 1, 1, false, { "# %%", 'print("новая")' })
+
+        assert.equals(before, exec.cell_id(pre, cells.at(pre, 1)))
     end)
 end)

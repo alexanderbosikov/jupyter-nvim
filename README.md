@@ -318,9 +318,12 @@ info 1 ячеек под порядковым id (3 КБ): такой id в до
 (History: 29 cells, 50 runs, 231 KB. One cell with history is missing from the document;
 one cell sits under a sequential id, which is never written into the document.)
 
-Sequential ids get a line of their own for a reason: a cell without a marker has nowhere to
-write an id (§7.2 of ARCHITECTURE.md), so the id never was and never could be in the
-document — such history is orphaned from birth and says nothing about a lost cell. The
+Sequential ids get a line of their own for a reason: they are leftovers of an older scheme,
+in which a cell with nowhere to write an id (§7.2 of ARCHITECTURE.md) was identified by its
+number. A number belongs to a different cell the moment a neighbour is inserted, so the
+plugin no longer issues one — such a cell is identified by the sha of its content now. The
+old records were orphaned from birth and say nothing about a lost cell: they are rubbish and
+can be deleted. The
 report also names files the index does not reference: usually leftovers of an interrupted
 write.
 
@@ -425,6 +428,11 @@ nvim --server "$SOCK" --remote-expr 'luaeval("require(\"jupyter\").snapshot_json
              "schema": [["button_id", "String"], ["first_seen", "Date"],
                         ["events_number", "Int64"]]}}]}
 ```
+
+A cell that has never been run has **no `id` field at all**, and therefore no `runs`, no
+`last` and no `stale`. That is deliberate: the id appears in the text at the first run, and
+until then there is nothing to match the cell against — naming it by its number would hand
+the reader its neighbour's output as soon as a cell was inserted above it.
 
 `stale` answers the reader's main question — does this output belong to the current code;
 it comes from the same sha comparison that draws `⚠ код изменился` in the output window.

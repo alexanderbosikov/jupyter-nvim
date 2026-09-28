@@ -69,7 +69,11 @@ function M.build(buf, opts)
 
     local list = {}
     for _, cell in ipairs(cells.list(buf)) do
-        local id = exec.cell_id(buf, cell) -- только чтение: в документ ничего не пишем
+        -- только чтение: в документ ничего не пишем. nil здесь — нормальный ответ
+        -- «ячейку ещё не запускали»: в JSON поля id тогда просто нет, а вместе с ним
+        -- нет и прогонов. Назвать её номером нельзя — номер уже принадлежит соседке,
+        -- стоит вставить ячейку выше (§7.2)
+        local id = exec.cell_id(buf, cell)
         local record = store and store:last_record(id) or nil
         local live = opts.exec and opts.exec:run_for(id) or nil
         -- через if, а не через `and ... or nil`: у свежего вывода ответ — false, и в

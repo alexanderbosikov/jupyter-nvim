@@ -499,9 +499,25 @@ The md → ipynb → md round trip was checked on all 65 cells: 65 out of 65 sur
 one leaked into a cell's body. Pinned by a test.
 
 The id is derived deterministically from the cell's content: an unsaved buffer gets the
-same id on a re-run and does not lose its history. A cell with no marker (code before the
-first `# %%`) has nowhere to write an id — there the cell's number remains, and the history
-of such a cell does not survive a neighbour being inserted. That is a deliberate boundary.
+same id on a re-run and does not lose its history.
+
+**A cell's number is never an id.** It used to be the fallback where an id could not be
+written, and that was wrong in the one case that happens daily: insert a cell into a
+notebook whose cells are already running, and every number below it shifts by one. The new
+cell took its neighbour's number, and with it the neighbour's run — it showed `queued` while
+the kernel had never heard of it, and then showed that run's output as its own. Numbers
+shift; content and a written id do not. So there are exactly two answers now:
+
+- the cell has a `jncell` in the text — that is its id;
+- the cell has nowhere to write one (code before the first `# %%`, or a file with no
+  markers at all) — it is identified by the sha of its content, eight hex against `jncell`'s
+  four, so the two can never collide. Editing such a cell does lose its history, which is
+  the honest price and the deliberate boundary here.
+
+A cell that has simply never been run has **no id** (`exec.cell_id` returns `nil`), and that
+is the point: an id appears in the text at the first run, and until then there is nothing to
+match a run against. No id means no status, no output and no history — which is exactly the
+truth about a cell nobody has run.
 
 ### 7.2.2. A markdown cell is not a cell here
 
@@ -578,7 +594,9 @@ Hence `snapshot.build`: one structure where the cells are already matched with t
 of each. The boundary is hard — **the snapshot computes nothing anew and writes nothing**.
 Freshness comes from the same sha comparison as the mark in the drawer; the id is taken
 read-only (`exec.cell_id`, not `cellid.ensure`), otherwise viewing a notebook would edit the
-document. There are still two sources of truth: the buffer and `index.jsonl`.
+document. Read-only also means a cell that has never been run has no `id` in the snapshot at
+all — and no `runs`, `last` or `stale` with it. There are still two sources of truth: the
+buffer and `index.jsonl`.
 
 A run in progress is reported by two fields, not one. `running` says the cell is busy;
 `live.status` says what it is busy with — waiting in the kernel's queue or being computed.

@@ -1201,7 +1201,8 @@ describe("окно вывода при открытии", function()
     it("с историей открывает и сразу показывает прогон", function()
         jupyter.setup({ output = { open_on_attach = true } })
         local path = vim.fn.tempname() .. ".py"
-        vim.fn.writefile({ "# %%", 'print("вчерашнее")' }, path)
+        -- id уже в тексте: вчера ячейку запускали, иначе истории под ним взяться неоткуда
+        vim.fn.writefile({ '# %% jncell="a3f9"', 'print("вчерашнее")' }, path)
         vim.cmd.edit(path)
         vim.bo.filetype = "python"
         local buf = vim.api.nvim_get_current_buf()
@@ -1317,7 +1318,8 @@ describe("повторное открытие ноутбука", function()
         -- :e, смена filetype. Окно не должно возвращаться после того, как его закрыли
         jupyter.setup({ output = { open_on_attach = true } })
         local path = vim.fn.tempname() .. ".py"
-        vim.fn.writefile({ "# %%", 'print("вчерашнее")' }, path)
+        -- id уже в тексте: вчера ячейку запускали, иначе истории под ним взяться неоткуда
+        vim.fn.writefile({ '# %% jncell="a3f9"', 'print("вчерашнее")' }, path)
         vim.cmd.edit(path)
         vim.bo.filetype = "python"
         local buf = vim.api.nvim_get_current_buf()

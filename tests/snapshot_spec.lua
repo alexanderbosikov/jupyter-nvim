@@ -13,7 +13,7 @@ local LINES = {
     "x = 1", -- 4
     "```", -- 5
     "", -- 6
-    "```python", -- 7  без id: в снимке будет запасной, от номера ячейки
+    "```python", -- 7  ещё не запускали: id ей взять неоткуда
     "y = 2", -- 8
     "```", -- 9
 }
@@ -70,7 +70,7 @@ describe("снимок ноутбука", function()
 
         assert.equals(2, #snap.cells)
         assert.equals("a3f9", snap.cells[1].id)
-        assert.equals("0002", snap.cells[2].id, "id некуда записать — запасной, от номера ячейки")
+        assert.is_nil(snap.cells[2].id, "ячейку ещё не запускали: id появляется в тексте при первом запуске")
         assert.same({ 4, 4, 3, 5 }, {
             snap.cells[1].start_row,
             snap.cells[1].end_row,
@@ -112,15 +112,23 @@ describe("снимок ноутбука", function()
     end)
 
     it("в очереди и выполняется — разные состояния, а не один признак «занята»", function()
+        -- обе ячейки уже запускались, поэтому у обеих есть id: прогон сопоставляется
+        -- только по нему, и в этом тесте важны состояния, а не поиск ячейки
+        local both = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(both, 0, -1, false, {
+            '```python jncell="a3f9"', "x = 1", "```", "",
+            '```python jncell="b7e1"', "y = 2", "```",
+        })
+        vim.bo[both].filetype = "markdown"
         local runs = {
             a3f9 = { status = "running", run_id = 12, lines = { "Периоды: 0%" } },
-            ["0002"] = { status = "queued", run_id = 13, lines = {} },
+            b7e1 = { status = "queued", run_id = 13, lines = {} },
         }
         local fake_exec = {
             run_for = function(_, cell_id) return runs[cell_id] end,
         }
 
-        local snap = snapshot.build(buf, { exec = fake_exec })
+        local snap = snapshot.build(both, { exec = fake_exec })
 
         assert.is_true(snap.cells[1].running, "занята: ядро считает её прямо сейчас")
         assert.is_true(snap.cells[2].running, "занята: стоит в очереди ядра")
@@ -128,6 +136,22 @@ describe("снимок ноутбука", function()
         assert.equals("queued", snap.cells[2].live.status, "«run all» — это очередь, а не работа")
         assert.equals("Периоды: 0%", snap.cells[1].live.tail, "по хвосту видно, движется ли прогон")
         assert.equals(0, snap.cells[2].live.lines)
+    end)
+
+    it("вставленная ячейка не забирает прогон соседки", function()
+        -- ровно тот случай, ради которого порядковый id и убрали: ячейка появляется
+        -- выше уже запущенной, номера ниже сдвигаются, и раньше новая показывала
+        -- чужой статус «в очереди», а следом и чужой вывод
+        local runs = { a3f9 = { status = "queued", run_id = 12, lines = {} } }
+        local fake_exec = { run_for = function(_, cell_id) return runs[cell_id] end }
+
+        vim.api.nvim_buf_set_lines(buf, 2, 2, false, { '```python', "z = 0", "```", "" })
+        local snap = snapshot.build(buf, { exec = fake_exec })
+
+        assert.is_nil(snap.cells[1].id, "новая ячейка: id ещё нет")
+        assert.is_nil(snap.cells[1].live, "и прогона соседки ей не достаётся")
+        assert.equals("a3f9", snap.cells[2].id, "запущенная ячейка со своим id не рассталась")
+        assert.equals("queued", snap.cells[2].live.status)
     end)
 
     it("завершённый прогон ячейку не занимает", function()
