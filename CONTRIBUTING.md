@@ -180,3 +180,58 @@ Ordered by benefit against risk.
    explicit path other than ours, asks that one about polars too. A relative argv is left
    alone on purpose: it resolves through PATH, where the sidecar puts our own `bin` first
    (§6.3). Both cases are pinned in `tests/health_spec.lua`.
+
+6. **Duplicate ids.** Copy a whole cell with its fence (`yy`/`p` over the span) and two
+   cells carry one `jncell`: their runs land in one history, the snapshot hands both the
+   same `last`, and a claim by id takes whichever `cellid.find` meets first. `generate`
+   guards against collisions only when *it* makes an id; a pasted duplicate it never sees.
+   The fix is to notice, not to forbid: when a run or `repaint` finds an id twice, the
+   later cell gets a fresh one (`cellid.generate` with the used set) and the first keeps
+   its history — the original is the one that was there before. Open question: which one
+   is "first" when both were pasted, and whether to rewrite silently or say so once. About
+   30 lines plus a test; `cellid.used` already walks the buffer.
+
+7. **A claim on a cell with no id.** Cells made by the plugin's commands and by an agent's
+   insert get their `jncell` at once (§7.2), but one typed or pasted by hand has none until
+   its first run, so an agent can neither edit nor delete it. `edit_begin({index = N})`
+   would write the id and mark the cell in one go — what `ask.lua` already does when a
+   prompt is sent. The snag: `index` comes from a snapshot and drifts if the user inserts a
+   cell in between, so the call must carry the body's sha from that snapshot and refuse on
+   a mismatch. About an hour.
+
+8. **An atomic batch of edits.** Several claims can be open at once, but each is applied
+   by its own call and is its own undo step: five edits cost five `u`, and a `changed` on
+   one leaves the others already applied — a half-rewritten notebook. `edit_batch` would
+   check every claim first (anchor + sha) and touch nothing if one fails, then apply bottom
+   to top so line numbers do not shift, inside one undo step. Open: an insert anchored to a
+   cell the same batch deletes (an insert holds only an extmark, not an id — untested), and
+   one mark for the batch or one per cell. Two to three hours with tests.
+
+9. **`:w` while an end-of-file insert claim is open** writes an extra empty cell into the
+   `.ipynb`: it is the blank line `pad_eof` adds as a hook for the label. Seen on the live
+   config. Either take the line away on `BufWritePre` and put it back on `BufWritePost`, or
+   find a hook for the label that is not a real line.
+
+10. **Markdown as a first-class cell.** §7.2.2 has the measurements: jupytext's
+    `<!-- #region jncell=… -->` gives prose an id and survives the round trip. What stands in
+    the way is `cells.list`, so the job is splitting it by kind — a code-only list for
+    whatever runs, a full one for the snapshot, the agent and the outline. It closes editing
+    prose from outside, inserting a whole section, and the "markdown inside a code fence"
+    trap in one go.
+
+11. **Preview before an agent's edit lands.** Today `edit_apply` writes straight away; the
+    claim's mark is the only warning. A mode where the edit is shown as a diff over the cell
+    and lands on a key would suit edits the user wants to vet. Two to three hours.
+
+12. **The prompt transport is tmux-only.** `pane.lua` finds the agent's pane and pastes
+    through tmux (`load-buffer` / `paste-buffer -p`). A different multiplexer (herdr has
+    `pane list` and `pane send-text` in its socket API) leaves `:JupyterAsk` dead. First
+    check what exactly breaks, then decide between an abstract transport and a second
+    implementation.
+
+13. **Run status in the multiplexer's sidebar.** herdr shows each agent pane's state as a
+    dot, and a notebook can join that row: running → `working`, idle → `idle`, error →
+    `blocked`, and herdr derives `done` by itself when working turns idle out of focus.
+    Progress as `3/7` through `report-metadata`. One hook point — `on_update` in `exec.lua`;
+    the edges where the status sticks in `working` (interrupt, restart, aborted, closing
+    nvim) are where the evening goes.
