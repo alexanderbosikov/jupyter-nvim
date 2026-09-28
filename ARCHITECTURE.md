@@ -479,7 +479,10 @@ alone a magic; Lua parses it and sends the variable's name in `result_expr`. The
 
 The price: one function with a dunder-like name appears in the kernel's namespace. The
 alternative would require changes in a package on the kernel's side, that is, it would tie
-the plugin to that package.
+the plugin to that package. The second price is the type check inside the helper: it
+recognises polars and nothing else, so a frame of any other library gets no table at all and
+no explanation — the reasoning and what it would take is in the work queue (CONTRIBUTING.md,
+item 5).
 
 ### 7.2. Where a cell's id lives
 

@@ -49,6 +49,66 @@ describe("здоровье", function()
         assert.equals("warn", entry.level)
     end)
 
+    -- Питон, отвечающий на оба зонда health: на запрос версий — своими модулями,
+    -- на запрос kernelspec'ов — тем, что отдаёт зонд: список, argv0 и тот ли это питон.
+    -- Разные ответы на один и тот же `-c` различаем по тексту кода: зонд kernelspec'ов
+    -- упоминает KernelSpecManager.
+    local function fake_python(argv0, polars)
+        local path = vim.fn.tempname()
+        local relative = not argv0:find("^/")
+        vim.fn.writefile({
+            "#!/bin/sh",
+            'case "$2" in',
+            ("  *kernelspec*) printf '{\"names\":[\"python3\"],\"dir\":\"/k/python3\",\"argv0\":\"%s\",\"relative\":%s,\"same\":%s}\\n' ;;"):format(
+                argv0, tostring(relative), tostring(relative)
+            ),
+            ("  *) echo '{\"python\":\"3.14.0\",\"jupyter_client\":\"8.9.1\",\"polars\":%s,\"ipykernel\":\"6.30.1\"}' ;;"):format(
+                polars and '\"1.42.1\"' or "null"
+            ),
+            "esac",
+        }, path)
+        vim.fn.setfperm(path, "rwxr-xr-x")
+        return path
+    end
+
+    it("polars проверяется в питоне ядра, а не только в своём", function()
+        -- Роли разные: сайдкар parquet читает, а пишет его ядро хелпером у себя в памяти
+        -- (§7.1). Интерпретатор ядру задаёт argv kernelspec'а, и venv там бывает чужой.
+        -- Пока смотрели только на свой питон, отчёт был зелёным, а таблицы молча не
+        -- появлялись: записать их было нечем.
+        local kernel = fake_python("/не/важно", false) -- в питоне ядра polars нет
+        local report = health.collect({ python = fake_python(kernel, true), kernel_name = "python3" })
+
+        assert.is_truthy(find(report, "polars 1%.42%.1"), "свой polars на месте: " .. vim.inspect(report))
+        local entry = find(report, "polars в нём нет")
+        assert.is_truthy(entry, "ожидали предупреждение про питон ядра: " .. vim.inspect(report))
+        assert.equals("warn", entry.level)
+        assert.is_truthy(entry.msg:find(kernel, 1, true), "интерпретатор назван: " .. entry.msg)
+    end)
+
+    it("другой питон ядра с polars — не тревога: его спросили, а не угадали", function()
+        -- Одно то, что kernelspec смотрит в другой интерпретатор, ещё ничего не значит:
+        -- venv ядра бывает свой и полный. Предупреждать надо, только когда в нём и правда
+        -- нечем записать таблицу.
+        local kernel = fake_python("/не/важно", true)
+        local report = health.collect({ python = fake_python(kernel, true), kernel_name = "python3" })
+
+        local entry = find(report, "другой интерпретатор")
+        assert.is_truthy(entry, vim.inspect(report))
+        assert.equals("ok", entry.level)
+        assert.is_truthy(entry.msg:find("polars в нём есть", 1, true), entry.msg)
+    end)
+
+    it("относительный argv в kernelspec не считается чужим питоном", function()
+        -- У venv'ного kernelspec'а в argv стоит просто "python": он разрешается через PATH,
+        -- а туда сайдкар первым кладёт свой bin (§6.3). Это и есть наш интерпретатор,
+        -- уже проверенный выше, — второй раз спрашивать нечего и пугать незачем.
+        local report = health.collect({ python = fake_python("python", true), kernel_name = "python3" })
+
+        assert.is_nil(find(report, "другой интерпретатор"), "лишний вопрос про питон ядра: " .. vim.inspect(report))
+        assert.is_nil(find(report, "polars в нём нет"), vim.inspect(report))
+    end)
+
     it("несуществующий python — ошибка и ранний выход", function()
         local report = health.collect({ python = "/нет/такого/python" })
 

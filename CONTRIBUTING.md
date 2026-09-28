@@ -159,3 +159,24 @@ Ordered by benefit against risk.
    is to take the kitty protocol into our own hands — our own placement ids, and deletion by
    id when the cell changes. That is not a fix but a replacement of a layer, and the
    decision about it belongs to the project's owner, not to whoever came to fix a bug.
+
+5. **The polars dependency, and what half of it actually costs.** polars sits in two
+   places, and only one is a dependency of ours. In the sidecar (`frames.page`, `polars>=1`
+   in `pyproject.toml`) it is an implementation detail behind parquet: the format is
+   neutral, anything reads it, and pyarrow or duckdb would swap in without touching the
+   protocol or the layout of `.jupyter-out`. Nothing to fix there. In the **kernel** it is a
+   gate on the user's own data — `HELPER_SOURCE` ends at `isinstance(obj, pl.DataFrame)`, so
+   a pandas frame returns `None`, no parquet is written, and the whole table (paging, the
+   sorting stack, `<CR>` on a value) simply does not exist for that user. The drawer falls
+   back to the frame's own repr and nothing says why: `parse_dump` treats `None` as the
+   normal case (§7.1), which it usually is. Duck-typing the helper — `write_parquet` /
+   `to_parquet`, `collect` for a lazy frame, `height`/`width`/`schema` by branch — is about
+   ten lines. The catch: pandas' `to_parquet` needs pyarrow or fastparquet of its own, so
+   "works without polars" is not free, it moves the requirement rather than removing it.
+   Worth doing only if the plugin goes out to people who are not us.
+
+   The other half of this — `:checkhealth` probing the wrong interpreter — is **done**:
+   `health.collect` now reads the kernelspec's argv and, when the kernel's python is an
+   explicit path other than ours, asks that one about polars too. A relative argv is left
+   alone on purpose: it resolves through PATH, where the sidecar puts our own `bin` first
+   (§6.3). Both cases are pinned in `tests/health_spec.lua`.

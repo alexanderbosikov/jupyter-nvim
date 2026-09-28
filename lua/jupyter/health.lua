@@ -68,6 +68,25 @@ local function decode(text)
     return value
 end
 
+local MODULES = table.concat({
+    "import json,sys",
+    "out={'python':sys.version.split()[0]}",
+    "for m in ('jupyter_client','polars','ipykernel'):",
+    "    try:",
+    "        out[m]=__import__(m).__version__",
+    "    except Exception as e:",
+    "        out[m]=None",
+    "print(json.dumps(out))",
+}, "\n")
+
+---Версии нужных модулей в заданном интерпретаторе.
+---@param python string
+---@return table versions, table|nil result
+local function probe(python)
+    local result = run({ python, "-c", MODULES })
+    return (result and result.code == 0 and decode(result.stdout)) or {}, result
+end
+
 function M.collect(config)
     config = config or require("jupyter").config
     local report = {}
@@ -86,19 +105,9 @@ function M.collect(config)
     end
     add("ok", ("python: %s (%s)"):format(python, source))
 
-    -- 2. библиотеки в нём
-    local probe = table.concat({
-        "import json,sys",
-        "out={'python':sys.version.split()[0]}",
-        "for m in ('jupyter_client','polars','ipykernel'):",
-        "    try:",
-        "        out[m]=__import__(m).__version__",
-        "    except Exception as e:",
-        "        out[m]=None",
-        "print(json.dumps(out))",
-    }, "\n")
-    local result = run({ python, "-c", probe })
-    local versions = (result and result.code == 0 and decode(result.stdout)) or {}
+    -- 2. библиотеки в нём. Это питон САЙДКАРА: он читает parquet и нарезает страницы.
+    -- Записывает parquet не он, а ядро (§7.1), и ядро бывает из другого питона — см. раздел 4.
+    local versions, result = probe(python)
     if not versions.python then
         add("error", "не удалось опросить python: " .. ((result and result.stderr) or "нет ответа"))
         return report
@@ -108,7 +117,7 @@ function M.collect(config)
         if versions[module] then
             add("ok", ("%s %s"):format(module, versions[module]))
         elseif module == "polars" then
-            add("warn", "polars не установлен: таблицы в parquet сохраняться не будут")
+            add("warn", "polars не установлен у сайдкара: таблицу нечем открыть — parquet читает он")
         else
             add("error", ("%s не установлен — сайдкар без него не поднимется"):format(module))
         end
@@ -178,9 +187,22 @@ function M.collect(config)
     else
         add("ok", ("kernelspec %s найден: %s"):format(wanted, info.dir))
         if info.same == false then
-            add("warn", ("kernelspec %s запускает другой интерпретатор: %s. Ядро и сайдкар должны быть "
-                .. "из одного окружения, иначе в ядре не будет polars и результат-датафрейм не соберётся")
-                :format(wanted, info.argv0))
+            -- polars нужен в ДВУХ питонах, и роли у них разные: сайдкар parquet читает (§2),
+            -- а пишет его ядро — хелпером у себя в памяти (§7.1). Другой интерпретатор сам по
+            -- себе не беда, беда — если в нём нет polars; поэтому спрашиваем его, а не гадаем
+            local theirs = probe(info.argv0)
+            if theirs.polars then
+                add("ok", ("kernelspec %s запускает другой интерпретатор (%s), polars в нём есть: %s")
+                    :format(wanted, info.argv0, theirs.polars))
+            elseif theirs.python then
+                add("warn", ("kernelspec %s запускает другой интерпретатор: %s, и polars в нём нет. "
+                    .. "Таблицы не будут сохраняться в parquet — пишет их ядро, а не сайдкар")
+                    :format(wanted, info.argv0))
+            else
+                add("warn", ("kernelspec %s запускает другой интерпретатор: %s, и опросить его не удалось. "
+                    .. "Ядро и сайдкар должны быть из одного окружения, иначе в ядре может не быть polars")
+                    :format(wanted, info.argv0))
+            end
         elseif info.relative then
             add("ok", ("argv kernelspec относительный (%s): ядро возьмётся из окружения сайдкара"):format(info.argv0))
         else
@@ -310,9 +332,9 @@ function M.history(config, buf)
     end
 
     if ordinal.count > 0 then
-        add("info", ("%d ячеек под порядковым id (%s): такой id в документ не пишется, "):format(
+        add("info", ("%d ячеек под порядковым id (%s): наследство прежней схемы, "):format(
             ordinal.count, human(ordinal.bytes)
-        ) .. "поэтому его история осиротевшая с рождения — это не потеря ячейки, а мусор")
+        ) .. "такой id в документ не пишется — это не потеря ячейки, а мусор, его можно сносить")
     end
 
     -- файлы, на которые индекс не ссылается: обычно остатки прерванной записи. Смотрим
