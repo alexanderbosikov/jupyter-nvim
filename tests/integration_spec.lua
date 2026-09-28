@@ -1604,8 +1604,10 @@ describe("прыжок по ячейкам", function()
 
         -- строки: маркер, тело старой, пустая-разделитель, маркер новой, её тело
         assert.same({ 5, 0 }, vim.api.nvim_win_get_cursor(0))
-        assert.same({ "# %%", "x = 1", "", "# %%", "" },
-            vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+        -- маркер новой — с id: его пишет сама вставка (§7.2)
+        local text = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        text[4] = text[4]:gsub(' jncell="%x+"$', ' jncell=…')
+        assert.same({ "# %%", "x = 1", "", "# %% jncell=…", "" }, text)
     end)
 
     it("center_on_jump = false оставляет прокрутку как есть", function()

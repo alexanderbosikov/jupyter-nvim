@@ -323,3 +323,65 @@ describe("смена языка", function()
         assert.is_truthy(why_alien:find("не поддержан"), why_alien)
     end)
 end)
+
+describe("id у новой ячейки", function()
+    local jupyter = require("jupyter")
+
+    local function notebook(text)
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, text)
+        vim.bo[buf].filetype = "markdown"
+        vim.api.nvim_set_current_buf(buf)
+        -- исходный текст — отдельный шаг undo: в жизни вставка идёт своим нажатием, а в
+        -- тесте всё случается в одном Lua-вызове и склеилось бы в один блок
+        vim.cmd("let &undolevels = &undolevels")
+        return buf
+    end
+
+    local function lines_of(buf)
+        return vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    end
+
+    before_each(function()
+        jupyter.setup({ insert_on_new_cell = false })
+    end)
+
+    it("вставка пишет jncell сразу, и один u уносит ячейку вместе с ним", function()
+        local buf = notebook({ '```python jncell="a3f9"', "x = 1", "```" })
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        jupyter.insert_below()
+
+        local text = lines_of(buf)
+        assert.is_truthy(text[5]:match('^```python jncell="%x+"$'), text[5])
+        assert.is_nil(text[5]:match("a3f9"), "id свой, а не соседки")
+        vim.cmd("undo")
+        assert.same({ '```python jncell="a3f9"', "x = 1", "```" }, lines_of(buf))
+    end)
+
+    it("вставка выше — тоже", function()
+        local buf = notebook({ '```python jncell="a3f9"', "x = 1", "```" })
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+        jupyter.insert_above()
+        assert.is_truthy(lines_of(buf)[1]:match('^```python jncell="%x+"$'))
+    end)
+
+    it("вторая половина разреза получает свой id, первая оставляет прежний", function()
+        local buf = notebook({ '```python jncell="a3f9"', "x = 1", "y = 2", "```" })
+        vim.api.nvim_win_set_cursor(0, { 3, 0 })
+
+        jupyter.split_cell()
+
+        local text = lines_of(buf)
+        assert.equals('```python jncell="a3f9"', text[1])
+        assert.is_truthy(text[5]:match('^```python jncell="%x+"$'), text[5])
+        assert.is_nil(text[5]:match("a3f9"))
+    end)
+
+    it("проза, ставшая кодом, получает id", function()
+        local buf = notebook({ "# Отчёт", "", "x = 1" })
+        vim.api.nvim_win_set_cursor(0, { 3, 0 })
+        jupyter.cell_to_code()
+        assert.is_truthy(lines_of(buf)[3]:match('^```python jncell="%x+"$'), lines_of(buf)[3])
+    end)
+end)

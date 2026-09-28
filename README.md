@@ -429,10 +429,12 @@ nvim --server "$SOCK" --remote-expr 'luaeval("require(\"jupyter\").snapshot_json
                         ["events_number", "Int64"]]}}]}
 ```
 
-A cell that has never been run has **no `id` field at all**, and therefore no `runs`, no
-`last` and no `stale`. That is deliberate: the id appears in the text at the first run, and
-until then there is nothing to match the cell against — naming it by its number would hand
-the reader its neighbour's output as soon as a cell was inserted above it.
+A cell that has never been run has no `runs`, no `last` and no `stale`. It has an `id` if the
+plugin made it (the insert commands, a split, prose turned into code, an agent's insert —
+the id is written together with the marker); one typed or pasted by hand has **no `id` field
+at all** until its first run. That is deliberate: until the id is in the text there is
+nothing to match the cell against — naming it by its number would hand the reader its
+neighbour's output as soon as a cell was inserted above it.
 
 `stale` answers the reader's main question — does this output belong to the current code;
 it comes from the same sha comparison that draws `⚠ код изменился` in the output window.

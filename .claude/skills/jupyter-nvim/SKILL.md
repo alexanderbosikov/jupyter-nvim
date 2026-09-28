@@ -55,7 +55,10 @@ nvim --server "$SOCK" --remote-expr 'luaeval("require(\"jupyter\").snapshot_json
 nvim --server "$SOCK" --remote-expr 'luaeval("table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), \"\\n\")")'
 ```
 
-Per cell the snapshot gives: `id` (the `jncell` from the fence), `lang`,
+Per cell the snapshot gives: `id` (the `jncell` from the fence — a cell made by the plugin's
+insert/split/to-code commands or by your `edit_apply` has one from the start; one the user
+typed or pasted by hand gets it only at its first run, and until then there is no way to
+claim it: ask the user to run it, or give the change in your reply), `lang`,
 `start_row`/`end_row` (the body), `span_start`/`span_end` (with the marker), `runs`,
 `stale`, `running`, `live`, `last`. Inside `last`: `run_id`, `status`, `ename`, `kind`
 (`table`/`text`/`image`/`none`), `rows`, `cols`, `schema`, `duration_ms`,
@@ -248,8 +251,10 @@ Then poll the snapshot until the cell loses `running` and `last.run_id` grows (i
 Code, wait with Monitor and an until-condition, not with `sleep`). Take the result from
 disk, as above.
 
-The first run of a new cell **modifies the document**: the plugin writes `jncell="…"` into
-the marker. That is expected, but it means "just running it" is a buffer change too.
+The first run of a cell that has no `jncell` yet — one the user typed or pasted by hand —
+**modifies the document**: the plugin writes `jncell="…"` into the marker. That is expected,
+but it means "just running it" is a buffer change too. Cells made by the plugin's commands or
+by your `edit_apply` already carry their id, and running them writes nothing.
 
 The commands in full (for a human, not for you): `:JupyterRun`, `:JupyterRunAll`,
 `:JupyterRunBelow`, `:JupyterInterrupt`, `:JupyterRestart`, `:JupyterTable`,

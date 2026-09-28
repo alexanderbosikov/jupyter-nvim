@@ -517,10 +517,23 @@ shift; content and a written id do not. So there are exactly two answers now:
   four, so the two can never collide. Editing such a cell does lose its history, which is
   the honest price and the deliberate boundary here.
 
-A cell that has simply never been run has **no id** (`exec.cell_id` returns `nil`), and that
-is the point: an id appears in the text at the first run, and until then there is nothing to
-match a run against. No id means no status, no output and no history — which is exactly the
-truth about a cell nobody has run.
+**When the id is written.** Whenever the plugin itself writes the cell's marker: the insert
+commands, the second half of a split, prose turned into code, and an agent's insert
+(`agent.apply`). The document is being edited at that moment anyway, so `jncell` on the same
+line adds no edit of its own and goes in the same undo step. Without it a cell the user has
+just made could not be named from outside until it was run — an agent could neither claim
+nor delete it. A cell the user typed or pasted by hand gets its id at the first run
+(`cellid.ensure` in `exec.run`), and until then it has **none** (`exec.cell_id` returns
+`nil`). Either way "never run" is told by an empty history, not by a missing id: a cell with
+an id and no runs has no status, no output and no `last` — the truth about a cell nobody has
+run. What the plugin never does is stamp ids on its own initiative, on open or on save: that
+would be an edit nobody asked for.
+
+A run never rewrites an id that is already there — `ensure` returns it untouched — and the
+kernel has no say in it: `cell_id` is ours, sent along with the code, and the sidecar files
+the output under it. Two ways an id is still lost, both by hand: deleting or retyping the
+`jncell` (the next run writes a new one, the old history stays on disk unreachable), and
+copying a whole cell with its fence — two cells then share one id and one history.
 
 ### 7.2.2. A markdown cell is not a cell here
 

@@ -1040,12 +1040,30 @@ local function land_in_new_cell(row)
     end
 end
 
+---Записать id новой ячейке — тем же шагом undo, что и её появление.
+---
+---Документ в этот момент и так правится: фенс или маркер пишем мы, и `jncell` в той же
+---строке лишней правки не добавляет. Без него ячейку, которую пользователь только что
+---завёл и пишет, не назвать снаружи — агент не может ни взять её, ни поправить, пока её не
+---запустят (§7.2). Прогонов у неё от этого не появляется: «не запускали» — это пустая
+---история, а не отсутствие id.
+---@param buf integer
+---@param row integer|nil строка тела новой ячейки
+---@return integer|nil row та же строка — чтобы звать по цепочке
+local function stamp(buf, row)
+    local cell = row and cells.at(buf, row) or nil
+    if cell then
+        cellid.ensure(buf, cell)
+    end
+    return row
+end
+
 function M.insert_above()
-    land_in_new_cell(cells.insert(0, vim.api.nvim_win_get_cursor(0)[1], "above"))
+    land_in_new_cell(stamp(0, cells.insert(0, vim.api.nvim_win_get_cursor(0)[1], "above")))
 end
 
 function M.insert_below()
-    land_in_new_cell(cells.insert(0, vim.api.nvim_win_get_cursor(0)[1], "below"))
+    land_in_new_cell(stamp(0, cells.insert(0, vim.api.nvim_win_get_cursor(0)[1], "below")))
 end
 
 ---Открыть таблицу-результат ячейки под курсором. Если её нет — того прогона, что показан
@@ -1160,7 +1178,7 @@ end
 ---@return boolean
 function M.split_cell()
     local _, buf, row = here()
-    local at = edit.split(buf, row)
+    local at = stamp(buf, edit.split(buf, row))
     if not at then
         vim.notify("jupyter.nvim: резать нечего — курсор не в теле ячейки", vim.log.levels.WARN)
         return false
@@ -1255,7 +1273,7 @@ end
 ---@return boolean
 function M.cell_to_code()
     local _, buf, row = here()
-    local at = edit.to_code(buf, row)
+    local at = stamp(buf, edit.to_code(buf, row))
     if not at then
         vim.notify(
             "jupyter.nvim: тут нечего превращать — это уже код или пустая строка",
