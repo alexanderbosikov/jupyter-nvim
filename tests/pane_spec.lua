@@ -6,6 +6,8 @@
 -- покусанным.
 
 local pane = require("jupyter.pane")
+local tmux = require("jupyter.pane.tmux")
+local herdr = require("jupyter.pane.herdr")
 
 local NB = "/Users/ab/work/proj/PROJ-123 Отчёт по воронке. Черновик"
 
@@ -21,14 +23,18 @@ local LAYOUT = table.concat({
     "%21\twarehouse\t@3\t2.1\tclaude\t/Users/ab/work/warehouse",
 }, "\n")
 
-local real_run, real_tmux, real_tmux_pane
+local real_run, real_herdr_run, saved_env
 local calls, pasted
+
+---Переменные окружения, по которым выбирается бэкенд. Сохраняются и чистятся целиком:
+---тесты сами могут идти внутри herdr или tmux, и настоящий мультиплексор подхватился бы.
+local ENV = { "TMUX", "TMUX_PANE", "HERDR_ENV", "HERDR_PANE_ID" }
 
 ---@param layout string выдача list-panes
 ---@param on_run? fun(args: string[]): table|nil ответ на остальные команды
 local function fake_tmux(layout, on_run)
     calls, pasted = {}, nil
-    pane.run = function(args)
+    tmux.run = function(args)
         table.insert(calls, args)
         if args[1] == "list-panes" then
             return { code = 0, stdout = layout }
@@ -60,13 +66,24 @@ end
 ---Функциями, а не одним before_each на файл: plenary зовёт before_each только внутри
 ---describe, а на верхнем уровне падает на пустом списке хуков.
 local function enter()
-    real_run, real_tmux, real_tmux_pane = pane.run, vim.env.TMUX, vim.env.TMUX_PANE
+    real_run, real_herdr_run, saved_env = tmux.run, herdr.run, {}
+    for _, k in ipairs(ENV) do
+        saved_env[k] = vim.env[k]
+        vim.env[k] = nil
+    end
+    -- настоящий herdr не должен откликнуться ни в одном тесте
+    herdr.run = function()
+        error("herdr в тесте tmux")
+    end
     vim.env.TMUX = "/private/tmp/tmux-502/default,2485,4"
     vim.env.TMUX_PANE = "%18"
 end
 
 local function leave()
-    pane.run, vim.env.TMUX, vim.env.TMUX_PANE = real_run, real_tmux, real_tmux_pane
+    tmux.run, herdr.run = real_run, real_herdr_run
+    for _, k in ipairs(ENV) do
+        vim.env[k] = saved_env[k]
+    end
 end
 
 describe("разбор панелей", function()
@@ -93,7 +110,7 @@ describe("разбор панелей", function()
 
     it("молчит, а не падает, когда tmux-сервера нет", function()
         fake_tmux(LAYOUT)
-        pane.run = function()
+        tmux.run = function()
             return { code = 1, stdout = "", stderr = "no server running" }
         end
         assert.are.same({}, pane.panes())
@@ -153,7 +170,7 @@ describe("лестница поиска", function()
         assert.are.equal("по каталогу ноутбука", how)
     end)
 
-    it("вне tmux говорит об этом прямо, а не «не нашёл»", function()
+    it("вне мультиплексора говорит об этом прямо, а не «не нашёл»", function()
         vim.env.TMUX = nil
         fake_tmux(LAYOUT)
         local id, how = pane.find({ dir = NB })
@@ -222,5 +239,167 @@ describe("отправка промпта", function()
         local ok = pane.send("%19", "")
         assert.is_false(ok)
         assert.are.same({}, verbs())
+    end)
+end)
+
+-- --- herdr ---
+
+---Раскладка herdr, списанная с живой `herdr pane list`: workspace на проект, во вкладке
+---nvim и claude рядом, в соседнем workspace — другой claude. `agent` есть только у панелей,
+---где herdr распознал агента.
+local HERDR_PANES = {
+    { pane_id = "w1:p1", workspace_id = "w1", tab_id = "w1:t1", cwd = "/home/u",
+      agent = "claude", agent_status = "idle", terminal_title_stripped = "шрифты" },
+    { pane_id = "w4:p1", workspace_id = "w4", tab_id = "w4:t1", cwd = NB,
+      foreground_cwd = NB },
+    { pane_id = "w4:p2", workspace_id = "w4", tab_id = "w4:t1", cwd = NB,
+      agent = "claude", agent_status = "idle", terminal_title_stripped = "визуал ноутбука" },
+    { pane_id = "w4:p3", workspace_id = "w4", tab_id = "w4:t2", cwd = NB },
+}
+
+local herdr_calls
+
+---@param panes table[] содержимое result.panes
+---@param on_run? fun(args: string[]): table|nil ответ на остальные команды
+local function fake_herdr(panes, on_run)
+    herdr_calls = {}
+    herdr.run = function(args)
+        table.insert(herdr_calls, args)
+        if args[1] == "pane" and args[2] == "list" then
+            return {
+                code = 0,
+                stdout = vim.json.encode({ id = "cli:pane:list", result = { panes = panes, type = "pane_list" } }),
+            }
+        end
+        if on_run then
+            local res = on_run(args)
+            if res then
+                return res
+            end
+        end
+        return { code = 0, stdout = "{}" }
+    end
+end
+
+---Сидим в herdr: nvim в панели w4:p1, tmux-переменных нет.
+local function enter_herdr()
+    enter()
+    vim.env.TMUX, vim.env.TMUX_PANE = nil, nil
+    vim.env.HERDR_ENV = "1"
+    vim.env.HERDR_PANE_ID = "w4:p1"
+    tmux.run = function()
+        error("tmux в тесте herdr")
+    end
+end
+
+describe("herdr", function()
+    before_each(enter_herdr)
+    after_each(leave)
+
+    it("выбирается, когда nvim в herdr и не в tmux", function()
+        assert.are.equal("herdr", pane.backend().name)
+    end)
+
+    it("tmux внутри herdr побеждает: он ближе к nvim", function()
+        vim.env.TMUX = "/tmp/tmux-1000/default,1,0"
+        assert.are.equal("tmux", pane.backend().name)
+    end)
+
+    it("разбирает панель: вкладка — окно, workspace — сессия, агент — по распознаванию herdr", function()
+        fake_herdr(HERDR_PANES)
+        local found
+        for _, p in ipairs(pane.panes()) do
+            if p.id == "w4:p2" then
+                found = p
+            end
+        end
+        assert.are.same({
+            id = "w4:p2",
+            session = "w4",
+            window = "w4:t1",
+            where = "w4:p2 визуал ноутбука",
+            cmd = "claude",
+            path = NB,
+            status = "idle",
+        }, found)
+    end)
+
+    it("берёт соседнюю во вкладке, а не агента из другого workspace", function()
+        fake_herdr(HERDR_PANES)
+        local id, how = pane.find({ dir = NB })
+        assert.are.equal("w4:p2", id)
+        assert.are.equal("рядом в окне", how)
+    end)
+
+    it("claude через обёртку узнаётся и при cmd из конфига под tmux", function()
+        local saved = pane.CMD
+        pane.CMD = "my-claude-wrapper"
+        fake_herdr(HERDR_PANES)
+        local id = pane.find({ dir = NB })
+        pane.CMD = saved
+        assert.are.equal("w4:p2", id)
+    end)
+
+    it("отправляет одним agent prompt, текст — аргументом как есть", function()
+        fake_herdr(HERDR_PANES)
+        local text = [[перепиши: df["a"] > $x \ 'и ещё']] .. "\nвторая строка"
+        local ok = pane.send("w4:p2", text)
+        assert.is_true(ok)
+        assert.are.same({ "agent", "prompt", "w4:p2", text }, herdr_calls[2])
+        assert.are.equal(2, #herdr_calls) -- pane list (жива ли) + prompt, больше ничего
+    end)
+
+    it("в панель без агента не пишет", function()
+        fake_herdr(HERDR_PANES)
+        local ok, err = pane.send("w4:p3", "привет")
+        assert.is_false(ok)
+        assert.is_truthy(err:match("уже не агент"))
+        assert.are.equal(1, #herdr_calls)
+    end)
+
+    it("агент на диалоге разрешения — говорит об этом по-человечески", function()
+        fake_herdr(HERDR_PANES, function(args)
+            if args[1] == "agent" then
+                return {
+                    code = 1,
+                    stdout = "",
+                    stderr = '{"error":{"code":"agent_blocked","message":"agent is blocked"},"id":"cli:agent:prompt"}',
+                }
+            end
+        end)
+        local ok, err = pane.send("w4:p2", "привет")
+        assert.is_false(ok)
+        assert.is_truthy(err:match("ждёт ответа"))
+    end)
+
+    it("прочие ошибки herdr показывает его словами", function()
+        fake_herdr(HERDR_PANES, function(args)
+            if args[1] == "agent" then
+                return { code = 1, stdout = "", stderr = '{"error":{"code":"x","message":"server gone"}}' }
+            end
+        end)
+        local ok, err = pane.send("w4:p2", "привет")
+        assert.is_false(ok)
+        assert.is_truthy(err:match("server gone"))
+    end)
+
+    it("молчит, а не падает, когда herdr ответил не JSON'ом", function()
+        herdr.run = function()
+            return { code = 0, stdout = "not json" }
+        end
+        assert.are.same({}, pane.panes())
+    end)
+end)
+
+describe("своя панель", function()
+    before_each(enter_herdr)
+    after_each(leave)
+
+    it("не бывает кандидатом, даже если herdr числит в ней агента", function()
+        local panes = vim.deepcopy(HERDR_PANES)
+        panes[2].agent = "claude" -- nvim запущен из панели, где раньше был claude
+        fake_herdr(panes)
+        local id = pane.find({ dir = NB })
+        assert.are.equal("w4:p2", id)
     end)
 end)

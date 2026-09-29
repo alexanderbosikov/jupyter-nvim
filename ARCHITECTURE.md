@@ -197,8 +197,9 @@ Messages outside that table fall into three cases, and they must not be mixed:
 | `ui/status.lua` | the status line under a cell | stores no positions |
 | `images.lua` | the path and the anchor in image.nvim, removing images | has no renderer of its own |
 | `edit.lua` | restructuring cells: split, join, move, change the type | does not look for boundaries — it takes them from `cells` |
-| `pane.lua` | the tmux pane the agent lives in: the search ladder, liveness, putting a prompt into its PTY | knows nothing about notebooks or claims |
-| `ask.lua` | a prompt from the notebook: the address, the claim opened before sending, the float to type in, the log | does not talk to tmux itself |
+| `pane.lua` | the multiplexer pane the agent lives in: choosing the backend, the search ladder, liveness | knows nothing about notebooks or claims |
+| `pane/tmux.lua`, `pane/herdr.lua` | one multiplexer each: the list of panes and putting a prompt into one | know nothing about the ladder |
+| `ask.lua` | a prompt from the notebook: the address, the claim opened before sending, the float to type in, the log | does not talk to the multiplexer itself |
 | `orphans.lua` | kernels with no owner: reading the trace, identification by connection file, clearing | monitors nothing, works on demand |
 | `toc.lua` | the outline: headings and cells with their state | does not draw the list itself |
 | `ui/picker.lua` | showing a list: telescope if present, otherwise `vim.ui.select` | no dependency on telescope |
@@ -834,6 +835,16 @@ silently is worse than that: a prompt that went to the wrong pane looks like a p
 vanished. "Next to nvim" sits above "by directory" deliberately — the agent a person keeps
 beside their editor is the one they are working with, while matching directories is only a
 guess.
+
+**herdr is the second backend** (`pane/herdr.lua`), picked when nvim runs inside herdr and not
+inside tmux — tmux wins when both are set, being the one closer to nvim. The ladder is the
+same, with a tab for a window and a workspace for a session. What differs is that herdr knows
+agents rather than processes: `pane list` says `agent = "claude"` even behind a wrapper, and
+one `herdr agent prompt` replaces the three tmux steps — it does the bracketed paste and the
+separate Enter itself. It also refuses (`agent_blocked`) while the agent sits in a permission
+dialog, where the tmux path would paste into the dialog and let our Enter pick an option.
+nvim's own pane is never a candidate, in either backend: herdr can still list a pane as
+`claude` after nvim was started from it.
 
 **The claim is opened by the plugin, before sending, not by the agent after reading.** This
 is the point of the whole thing, and it is the one part §7.5 could not provide. An edit

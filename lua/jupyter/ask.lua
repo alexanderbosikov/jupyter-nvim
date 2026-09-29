@@ -17,8 +17,8 @@
 --   3. промпт не ушёл — заявка снимается сразу. Метка, за которой никого нет, врёт хуже,
 --      чем её отсутствие.
 --
--- Отправка — не наше дело, этим занят `pane.lua`: сессия агента живёт в своей панели tmux,
--- и туда пишется текст ровно так, как его набрал бы человек.
+-- Отправка — не наше дело, этим занят `pane.lua`: сессия агента живёт в своей панели tmux
+-- или herdr, и туда пишется текст ровно так, как его набрал бы человек.
 --
 -- Граница: в документ ноутбука здесь пишется ровно одно — `jncell` у ячейки, которая его
 -- ещё не имеет (`cellid.ensure`). Без id заявку не на что повесить и агенту нечего назвать,
@@ -32,7 +32,7 @@ local pane = require("jupyter.pane")
 
 local M = {}
 
----Состояние привязки: какая панель tmux обслуживает этот ноутбук. Рядом с индексом
+---Состояние привязки: какая панель tmux/herdr обслуживает этот ноутбук. Рядом с индексом
 ---прогонов и `runtime.json` — это такое же состояние ноутбука, живущее между запусками.
 M.STATE = "agent.json"
 
@@ -340,11 +340,9 @@ end
 ---@param on_done? fun(id: string|nil)
 function M.attach(buf, opts, on_done)
     opts = opts or {}
-    local all = vim.tbl_filter(function(p)
-        return p.cmd == pane.CMD
-    end, pane.panes())
+    local all = pane.agents()
     if #all == 0 then
-        vim.notify("jupyter.nvim: сессии агента нет ни в одной панели tmux", vim.log.levels.WARN)
+        vim.notify("jupyter.nvim: сессии агента нет ни в одной панели tmux/herdr", vim.log.levels.WARN)
         return
     end
     vim.ui.select(all, {

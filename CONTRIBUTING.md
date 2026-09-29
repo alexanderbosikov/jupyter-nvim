@@ -229,11 +229,14 @@ Ordered by benefit against risk.
     claim's mark is the only warning. A mode where the edit is shown as a diff over the cell
     and lands on a key would suit edits the user wants to vet. Two to three hours.
 
-12. **The prompt transport is tmux-only.** `pane.lua` finds the agent's pane and pastes
-    through tmux (`load-buffer` / `paste-buffer -p`). A different multiplexer (herdr has
-    `pane list` and `pane send-text` in its socket API) leaves `:JupyterAsk` dead. First
-    check what exactly breaks, then decide between an abstract transport and a second
-    implementation.
+12. **The prompt transport** — tmux and herdr are **done** (`pane/*.lua`, §7.6). What is
+    left is to drop the multiplexer altogether: Claude Code *channels* (research preview)
+    let an MCP server of ours push a message straight into a running session, so the
+    prompt would reach the session itself rather than its terminal. Deferred until channels
+    leave preview: today every session must be started with
+    `--dangerously-load-development-channels`, and it is not yet verified that a channel
+    message starts a turn on an idle session rather than waiting as context. The pane path
+    stays as the fallback either way.
 
 13. **Run status in the multiplexer's sidebar.** herdr shows each agent pane's state as a
     dot, and a notebook can join that row: running → `working`, idle → `idle`, error →

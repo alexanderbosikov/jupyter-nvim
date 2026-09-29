@@ -1,18 +1,12 @@
--- Панель tmux, в которой живёт агент: найти, проверить, отправить туда промпт.
+-- Панель мультиплексора, в которой живёт агент: найти, проверить, отправить туда промпт.
 --
 -- Зачем вообще отдельный модуль. Сессия Claude Code — не наш процесс: она открыта
 -- человеком, переживает перезапуск nvim и ничего о ноутбуке не знает. Всё, что нам нужно, —
--- это адрес её терминала и способ положить туда текст так, как его кладёт человек. tmux
--- даёт и то, и другое: `pane_id` (`%19`) держится всю жизнь панели и не меняется от
--- перестановки окон, а `paste-buffer` пишет прямо в PTY.
+-- это адрес её терминала и способ положить туда текст так, как его кладёт человек.
 --
--- Почему промпт идёт через файл и буфер tmux, а не через `send-keys -l "текст"`. У
--- `send-keys` текст — аргумент команды: его надо экранировать, а внутри промпта живут
--- кавычки, `$`, обратные слэши и переводы строк. Хуже того, перевод строки для `send-keys`
--- неотличим от нажатия Enter — многострочный промпт отправился бы по частям, и первая же
--- строка ушла бы агенту как целый вопрос. `load-buffer` читает файл как байты, а
--- `paste-buffer -p` заворачивает вставку в bracketed paste, где переводы строк остаются
--- переводами строк. Единственный Enter — наш собственный, отдельной командой.
+-- Как именно — дело бэкенда (`pane/tmux.lua`, `pane/herdr.lua`): у каждого свой список
+-- панелей и своя отправка. Здесь — то, что от мультиплексора не зависит: выбор бэкенда
+-- и лестница поиска.
 --
 -- Поиск панели — лестница от точного к общему (`M.find`). Смысл лестницы в том, что
 -- спрашивать пользователя «где твой агент» на каждый промпт нельзя, а угадывать молча
@@ -21,84 +15,40 @@
 local M = {}
 
 ---Команда, по которой узнаём панель агента. Настраивается: кто-то запускает claude через
----обёртку, и тогда `pane_current_command` покажет её имя, а не claude.
+---обёртку, и тогда `pane_current_command` в tmux покажет её имя, а не claude.
 M.CMD = "claude"
 
----Имя буфера tmux под промпт. Своё, а не безымянный: безымянный кладётся в общий стек
----буферов и затирает то, что пользователь скопировал руками.
-M.BUFFER = "jupyter-nvim"
-
----Сколько ждём tmux. Он локальный и отвечает мгновенно; секунда — это «tmux-сервер завис»,
----и лучше сказать об этом, чем держать редактор.
-M.TIMEOUT_MS = 1000
-
----Разделитель полей в выводе `list-panes`. `\t` в путях и именах сессий не встречается,
----а пробел встречается всегда: каталог задачи вида «PROJ-123 Отчёт по воронке» — обычное
----дело, и разбор по пробелу разложил бы одну панель на пять полей.
-local SEP = "\t"
-
----Выполнить команду tmux. Отдельной функцией и полем модуля, потому что тесты подменяют
----её целиком: поднимать настоящий tmux-сервер в headless-прогоне значило бы проверять
----tmux, а не нас.
----@param args string[] аргументы после самого `tmux`
----@return table|nil { code, stdout, stderr }, nil при ошибке запуска
----@return string|nil текст ошибки
-function M.run(args)
-    local cmd = { "tmux" }
-    vim.list_extend(cmd, args)
-    local ok, res = pcall(function()
-        return vim.system(cmd, { text = true }):wait(M.TIMEOUT_MS)
-    end)
-    if not ok then
-        return nil, tostring(res)
-    end
-    return res, nil
-end
+---Бэкенды в порядке предпочтения. tmux первым: если он запущен внутри herdr, то ближайший
+---к nvim мультиплексор — tmux, и соседние панели, в которых стоит искать агента, — его.
+M.BACKENDS = {
+    require("jupyter.pane.tmux"),
+    require("jupyter.pane.herdr"),
+}
 
 ---@class jupyter.Pane
----@field id string `%19`
----@field session string имя tmux-сессии
----@field window string `@6`
----@field where string человекочитаемое «work:6.2»
----@field cmd string что в панели исполняется сейчас
+---@field id string `%19` в tmux, `w4:p1` в herdr
+---@field session string сессия tmux / workspace herdr
+---@field window string окно tmux / вкладка herdr
+---@field where string человекочитаемое «work:6.2» или «w4:p1 название сессии»
+---@field cmd string что в панели: процесс (tmux) или распознанный агент (herdr)
 ---@field path string рабочий каталог панели
 
----Все панели всех сессий одним вызовом.
----
----Одним, а не по одной на шаг лестницы: tmux отвечает быстро, но каждый вызов — это
----процесс, а лестница проходит до четырёх ступеней. Дешевле спросить один раз и разбирать
----в Lua.
----@return jupyter.Pane[]
-function M.panes()
-    local fmt = table.concat({
-        "#{pane_id}",
-        "#{session_name}",
-        "#{window_id}",
-        "#{window_index}.#{pane_index}",
-        "#{pane_current_command}",
-        "#{pane_current_path}",
-    }, SEP)
-    local res = M.run({ "list-panes", "-a", "-F", fmt })
-    if not res or res.code ~= 0 then
-        return {}
-    end
-    local out = {}
-    for _, line in ipairs(vim.split(res.stdout or "", "\n", { plain = true })) do
-        if line ~= "" then
-            local f = vim.split(line, SEP, { plain = true })
-            if #f >= 6 then
-                table.insert(out, {
-                    id = f[1],
-                    session = f[2],
-                    window = f[3],
-                    where = f[2] .. ":" .. f[4],
-                    cmd = f[5],
-                    path = f[6],
-                })
-            end
+---Бэкенд, внутри которого запущен nvim, или nil.
+---@return table|nil
+function M.backend()
+    for _, b in ipairs(M.BACKENDS) do
+        if b.active() then
+            return b
         end
     end
-    return out
+    return nil
+end
+
+---Все панели текущего мультиплексора.
+---@return jupyter.Pane[]
+function M.panes()
+    local b = M.backend()
+    return b and b.panes() or {}
 end
 
 ---@param panes jupyter.Pane[]
@@ -119,8 +69,19 @@ end
 ---Панель агента ли это.
 ---@param pane jupyter.Pane|nil
 ---@return boolean
-local function is_agent(pane)
-    return pane ~= nil and pane.cmd == M.CMD
+function M.is_agent(pane)
+    local b = M.backend()
+    return pane ~= nil and b ~= nil and b.is_agent(pane, M.CMD)
+end
+
+---Все панели с агентом, кроме своей (почему — см. `M.find`).
+---@return jupyter.Pane[]
+function M.agents()
+    local b = M.backend()
+    local self_id = b and b.self_id()
+    return vim.tbl_filter(function(p)
+        return p.id ~= self_id and M.is_agent(p)
+    end, M.panes())
 end
 
 ---Жива ли панель и всё ещё ли в ней агент.
@@ -130,7 +91,7 @@ end
 ---@param id string
 ---@return boolean
 function M.alive(id)
-    return is_agent(by_id(M.panes(), id))
+    return M.is_agent(by_id(M.panes(), id))
 end
 
 ---Путь `dir` лежит внутри `root` (или совпадает с ним).
@@ -149,9 +110,9 @@ end
 
 ---Найти панель агента.
 ---
----Лестница, сверху вниз: запомненная в `agent.json` → соседняя в том же окне, что и nvim →
----единственная в той же tmux-сессии (при нескольких — та, чей каталог ближе к ноутбуку) →
----не нашли, отдаём кандидатов на выбор человеку.
+---Лестница, сверху вниз: запомненная в `agent.json` → соседняя в том же окне (вкладке),
+---что и nvim → единственная в той же сессии (workspace) (при нескольких — та, чей каталог
+---ближе к ноутбуку) → не нашли, отдаём кандидатов на выбор человеку.
 ---
 ---Ступень «соседняя» стоит выше «по каталогу» намеренно: рядом с nvim человек держит того
 ---агента, с которым сейчас работает, а совпадение каталогов — всего лишь догадка.
@@ -161,26 +122,33 @@ end
 ---@return jupyter.Pane[] кандидаты — непусто, когда выбирать должен человек
 function M.find(opts)
     opts = opts or {}
-    if not vim.env.TMUX then
-        return nil, "nvim запущен не в tmux: панель агента искать негде", {}
+    local b = M.backend()
+    if not b then
+        return nil, "nvim запущен не в tmux и не в herdr: панель агента искать негде", {}
     end
 
-    local panes = M.panes()
+    local panes = b.panes()
     if #panes == 0 then
-        return nil, "tmux не ответил списком панелей", {}
+        return nil, b.name .. " не ответил списком панелей", {}
     end
 
     local remembered = by_id(panes, opts.pane)
-    if is_agent(remembered) then
+    if M.is_agent(remembered) then
         return remembered.id, "запомнена", {}
     end
 
-    local agents = vim.tbl_filter(is_agent, panes)
+    -- своя панель агентом быть не может: в ней nvim. Проверка не для красоты — если nvim
+    -- запущен из панели, где herdr помнит claude (`:!nvim` из сессии агента), лестница
+    -- выбрала бы её «соседней» и вставила промпт в сам редактор
+    local self_id = b.self_id()
+    local agents = vim.tbl_filter(function(p)
+        return p.id ~= self_id and M.is_agent(p)
+    end, panes) -- не через M.agents(): список панелей уже на руках, второй вызов лишний
     if #agents == 0 then
-        return nil, "сессии агента нет ни в одной панели tmux", {}
+        return nil, ("сессии агента нет ни в одной панели %s"):format(b.name), {}
     end
 
-    local self_pane = by_id(panes, vim.env.TMUX_PANE)
+    local self_pane = by_id(panes, self_id)
     if self_pane then
         local siblings = vim.tbl_filter(function(p)
             return p.window == self_pane.window
@@ -193,7 +161,7 @@ function M.find(opts)
         end
     end
 
-    -- Та же tmux-сессия: у этой раскладки сессия — это проект, так что чужой проект
+    -- Та же сессия: у этой раскладки сессия — это проект, так что чужой проект
     -- отсекается целиком, не разбираясь в каталогах.
     local same = self_pane
             and vim.tbl_filter(function(p)
@@ -216,12 +184,10 @@ function M.find(opts)
     return nil, "панелей агента несколько — какая нужна", #near > 1 and near or pool
 end
 
----Отправить текст в панель так, как его набрал бы человек.
+---Отправить текст в панель агента.
 ---
----Три шага, и каждый нужен: файл → буфер tmux (байты как есть, без экранирования),
----вставка с `-p` (bracketed paste: переводы строк не превращаются в Enter'ы), затем
----единственный Enter отдельной командой. `-d` убирает буфер сразу после вставки, чтобы
----промпт не оставался в стеке буферов tmux.
+---Сначала проверяем, что в панели всё ещё агент: между поиском и отправкой человек мог
+---выйти из claude, и тогда промпт исполнился бы в шелле как команда.
 ---@param id string pane_id
 ---@param text string
 ---@return boolean ok
@@ -230,35 +196,14 @@ function M.send(id, text)
     if type(text) ~= "string" or text == "" then
         return false, "пустой промпт"
     end
-    if not is_agent(by_id(M.panes(), id)) then
+    local b = M.backend()
+    if not b then
+        return false, "nvim запущен не в tmux и не в herdr"
+    end
+    if not M.is_agent(by_id(b.panes(), id)) then
         return false, ("панели %s больше нет или в ней уже не агент"):format(tostring(id))
     end
-
-    local path = vim.fn.tempname()
-    local ok_write = pcall(vim.fn.writefile, vim.split(text, "\n", { plain = true }), path)
-    if not ok_write then
-        return false, "не удалось записать промпт во временный файл"
-    end
-
-    local steps = {
-        { "load-buffer", "-b", M.BUFFER, path },
-        { "paste-buffer", "-d", "-p", "-b", M.BUFFER, "-t", id },
-        { "send-keys", "-t", id, "Enter" },
-    }
-    for _, args in ipairs(steps) do
-        local res, err = M.run(args)
-        if not res then
-            pcall(vim.fn.delete, path)
-            return false, err or "tmux не запустился"
-        end
-        if res.code ~= 0 then
-            pcall(vim.fn.delete, path)
-            local msg = (res.stderr or ""):gsub("%s+$", "")
-            return false, ("tmux %s: %s"):format(args[1], msg ~= "" and msg or "код " .. res.code)
-        end
-    end
-    pcall(vim.fn.delete, path)
-    return true, nil
+    return b.send(id, text)
 end
 
 return M

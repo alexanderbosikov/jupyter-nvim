@@ -533,7 +533,7 @@ number.
 ## Asking the agent from the notebook
 
 The other direction: `:JupyterAsk` (`<leader>jq`) opens a small window, you type a prompt,
-and it goes to the Claude Code session living in a tmux pane next to nvim.
+and it goes to the Claude Code session living in a tmux or herdr pane next to nvim.
 
 ```
 :JupyterAsk                      a window to type in; about the cell under the cursor
@@ -558,7 +558,8 @@ that is in your prompt, not in the claim. If the prompt fails to go out, the cla
 dropped at once: a mark with nobody behind it is worse than no mark.
 
 The pane is found by itself: the one remembered for this notebook, otherwise the one next to
-nvim in the same window, otherwise the only one in this tmux session, otherwise by the
+nvim in the same window (herdr: tab), otherwise the only one in this session (herdr:
+workspace), otherwise by the
 notebook's directory. Only when that is still ambiguous does it ask — `:JupyterAgentAttach`
 shows every pane running `claude` with its directory, and the choice is remembered in
 `.jupyter-out/<notebook>/agent.json`. Prompts themselves are kept next to it in
