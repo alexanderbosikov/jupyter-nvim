@@ -364,8 +364,13 @@ class KernelSession:
         self._send_kernel_info()
         self._spawn("jn-ready", self._ready_prober, self._pump_stop)
 
-    def _send_hidden(self, code: str, allow_stdin: bool = False) -> str:
-        """Скрытая ячейка: в историю не попадает, наверх её сообщения не уходят."""
+    def _send_hidden(self, code: str, allow_stdin: bool = False, as_probe: bool = False) -> str:
+        """Скрытая ячейка: в историю не попадает, наверх её сообщения не уходят.
+
+        `as_probe` помечает её текущей пробой stdin ДО отправки: `status: busy` на неё
+        приходит в потоке iopub и может обогнать возврат из `send()` — тогда `_probe_busy`
+        не поставится и проба зря объявит себя `stuck`.
+        """
         content = {
             "code": code,
             "silent": True,
@@ -376,14 +381,21 @@ class KernelSession:
         }
         with self._lock:
             msg = self._client.session.msg("execute_request", content)
-            self._probe_msg_ids.add(msg["header"]["msg_id"])
+            msg_id = msg["header"]["msg_id"]
+            self._probe_msg_ids.add(msg_id)
+            if as_probe:
+                self._probe_current = msg_id
             self._client.shell_channel.send(msg)
-        return msg["header"]["msg_id"]
+        return msg_id
 
     def _send_kernel_info(self) -> None:
-        msg = self._client.session.msg("kernel_info_request", {})
-        self._info_msg_ids.add(msg["header"]["msg_id"])
-        self._client.shell_channel.send(msg)
+        """Под общим замком: сокет shell один и не потокобезопасен, а `_ready_prober`
+        шлёт сюда из своего потока одновременно со скрытыми ячейками старта.
+        """
+        with self._lock:
+            msg = self._client.session.msg("kernel_info_request", {})
+            self._info_msg_ids.add(msg["header"]["msg_id"])
+            self._client.shell_channel.send(msg)
 
     def _ready_prober(self, stop: threading.Event) -> None:
         """Пока iopub молчит, переспрашиваем kernel_info: его status-пара и докажет, что подписка жива.
@@ -459,7 +471,7 @@ class KernelSession:
         self._probe_busy.clear()
         self._probe_seen.clear()
         self._probe_replied.clear()
-        self._probe_current = self._send_hidden(PROBE_CODE, allow_stdin=True)
+        self._send_hidden(PROBE_CODE, allow_stdin=True, as_probe=True)  # метка ставится внутри, до отправки
 
         # до начала выполнения ядро может быть занято помощником из §7.1 — его прерывать нельзя
         if not self._wait_event(self._probe_busy, 10.0, stop):
