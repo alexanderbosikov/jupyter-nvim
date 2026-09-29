@@ -209,8 +209,14 @@ Ordered by benefit against risk.
 
 9. **`:w` while an end-of-file insert claim is open** writes an extra empty cell into the
    `.ipynb`: it is the blank line `pad_eof` adds as a hook for the label. Seen on the live
-   config. Either take the line away on `BufWritePre` and put it back on `BufWritePost`, or
-   find a hook for the label that is not a real line.
+   config; jupytext turns any trailing blank line into an empty markdown cell, `--update`
+   included. **Deferred as not critical**: it only happens on an explicit `:w` during an
+   end-of-file insert, and the plugin never writes the notebook by itself unless
+   `write_on_run`/`write_on_focus_lost` are on. `BufWritePre` is not a way out — measured:
+   jupytext.nvim writes through its own `BufWriteCmd`, no `*Pre` event fires, and a
+   `BufWriteCmd` of ours runs after its write. What is left: wrap jupytext.nvim's
+   `BufWriteCmd` (take its callback from `nvim_get_autocmds`), drop the pad label and draw
+   it inside the cell, or let item 3 — our own `BufWriteCmd` — strip the line for free.
 
 10. **Markdown as a first-class cell.** §7.2.2 has the measurements: jupytext's
     `<!-- #region jncell=… -->` gives prose an id and survives the round trip. What stands in
