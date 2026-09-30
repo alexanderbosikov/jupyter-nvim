@@ -108,7 +108,7 @@ class App:
                 cell_id=args["cell_id"],
                 run_id=args["run_id"],
                 code=args["code"],
-                result_expr=args.get("result_expr", "_"),
+                result_expr=args.get("result_expr") or frames.CELL_RESULT,
                 user_expressions=args.get("user_expressions"),
             )
 

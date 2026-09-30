@@ -376,6 +376,47 @@ def test_named_dataframe_via_result_expr(live):
     assert outdir.path_for("b7e1", 4, "parquet").exists()
 
 
+def test_cell_without_result_does_not_inherit_previous_table(live):
+    """`_` в IPython — последний Out, и ячейка, вернувшая None, его не сбрасывает."""
+    session, sink, outdir = live()
+    session.execute("068d", 1, "import polars as pl\npl.DataFrame({'a': [1, 2, 3]})")
+    sink.wait(done_for("068d"))
+    session.execute("2548", 2, "x = None\nx")
+
+    msgs = sink.wait(done_for("2548"))
+
+    assert not [m for m in pick(msgs, Ev.RESULT, "2548") if m["data"]["kind"] == "table"]
+    assert not outdir.path_for("2548", 2, "parquet").exists()
+    assert outdir.last("2548")["kind"] != "table"
+
+
+def test_same_frame_shown_by_two_cells_is_a_table_in_both(live):
+    session, sink, outdir = live()
+    session.execute("a3f9", 1, "import polars as pl\ndf = pl.DataFrame({'a': [1]})\ndf")
+    sink.wait(done_for("a3f9"))
+    session.execute("b7e1", 2, "df")
+    sink.wait(done_for("b7e1"))
+
+    assert outdir.last("b7e1")["kind"] == "table"
+
+
+def test_named_frame_left_over_from_an_earlier_cell_is_not_dumped_again(live):
+    """`%%sql` при ошибке или DDL не присваивает df_temp, а ячейка завершается ok."""
+    session, sink, outdir = live()
+    session.execute(
+        "a3f9", 1, "import polars as pl\ndf_temp = pl.DataFrame({'q': [1] * 5})", result_expr="df_temp"
+    )
+    sink.wait(done_for("a3f9"))
+    session.execute("b7e1", 2, "print('❌ ошибка запроса')", result_expr="df_temp")
+    sink.wait(done_for("b7e1"))
+    session.execute("c0d2", 3, "df_temp = pl.DataFrame({'q': [2]})", result_expr="df_temp")
+    sink.wait(done_for("c0d2"))
+
+    assert outdir.last("a3f9")["kind"] == "table"
+    assert not outdir.path_for("b7e1", 2, "parquet").exists()
+    assert outdir.last("c0d2")["kind"] == "table"
+
+
 def test_plain_result_produces_no_table(live):
     session, sink, outdir = live()
     session.execute("a3f9", 1, "2 + 2")

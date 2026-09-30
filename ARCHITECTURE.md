@@ -102,7 +102,7 @@ on `hello` instead of quietly at runtime.
 
 `execute` is rejected while the kernel is not ready: the guard is built into the
 construction rather than bolted on the side. `result_expr` is what to serialise into
-parquet, `_` by default; for magics Lua sends the name of the variable (§7.1).
+parquet; without it, the cell's own result; for magics Lua sends the name of the variable (§7.1).
 
 ### 4.3. Events
 
@@ -469,14 +469,24 @@ kernel does the serialising:
    with the definition of a helper function: it checks the type, writes the parquet and
    returns `{rows, cols, schema}`. No polars — it returns `None`;
 2. every `execute` carries `user_expressions` with a call to that helper; the kernel
-   evaluates it **after** the cell, so `_` already holds the result;
+   evaluates it **after** the cell, when the execution count has already moved on, so the
+   cell's own result is `Out[execution_count - 1]`;
 3. the answer arrives in `execute_reply.user_expressions`. Careful: `text/plain` there is
    **the repr of a Python value, not JSON**, so it is parsed with `ast.literal_eval`;
 4. if a dict came back, a `result` with `kind: table` and the path to the parquet goes up.
 
 **What to serialise is decided by Lua.** The sidecar does not know what a cell is, let
-alone a magic; Lua parses it and sends the variable's name in `result_expr`. The default
-`_` covers ordinary cells.
+alone a magic; Lua parses it and sends the variable's name in `result_expr`. Ordinary cells
+send nothing, and the sidecar takes `frames.CELL_RESULT` — this cell's entry in `Out`.
+
+**Not `_`.** `_` is the last `Out` of the session, and a cell that returns `None` does not
+reset it: a `run_script(...)` after a cell that showed a frame got that frame as its own table,
+and the snapshot and `.jupyter-out` said so to anyone reading from disk (seen 30.09.2026). A
+variable by name has the same hole: `%%sql` does not assign `df_temp` on an error, on DDL or on
+Ctrl-C, yet the cell finishes `ok`. So for a bare name the helper remembers, by weak reference,
+which object it last wrote under that name, and does not write the same object twice. Nothing is
+held alive by this, and a frame shown again by an ordinary cell is not affected — that goes
+through `Out`, not a name.
 
 The price: one function with a dunder-like name appears in the kernel's namespace. The
 alternative would require changes in a package on the kernel's side, that is, it would tie

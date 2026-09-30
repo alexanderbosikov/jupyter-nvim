@@ -5,8 +5,13 @@ mime-бандлы, то есть готовый текст и HTML. Поэтом
 уезжает `user_expressions` с вызовом вспомогательной функции, которую мы внедрили при старте.
 Ответ приходит в `execute_reply`, а `text/plain` там — repr питоновского значения, не JSON.
 
-Что именно сериализовать, решает Lua: она разбирает магию `%%sql` и знает имя переменной. Дефолт — `_`,
-последнее выражение ячейки.
+Что именно сериализовать, решает Lua: она разбирает магию `%%sql` и знает имя переменной. Дефолт —
+`Out` за счётчик этой ячейки (`CELL_RESULT`), а не `_`: `_` — последний Out вообще, и ячейка,
+вернувшая None, его не сбрасывает, то есть получила бы таблицу соседа.
+
+Переменная по имени (`df_temp`) может быть той же беды: `%%sql` при ошибке, DDL или Ctrl-C её не
+присваивает, а ячейка завершается ok. Поэтому для голого имени помощник помнит, какой объект он уже
+выгрузил под этим именем, и тот же объект второй раз не пишет.
 """
 
 from __future__ import annotations
@@ -18,22 +23,34 @@ from typing import Any
 HELPER = "__jupyter_nvim_dump"
 
 HELPER_SOURCE = f'''
-def {HELPER}(obj, path):
+def {HELPER}(obj, path, name=None):
     try:
         import polars as pl
     except ImportError:
         return None
+    if not isinstance(obj, (pl.DataFrame, pl.LazyFrame)):
+        return None
+    seen = {HELPER}.__dict__.setdefault("seen", {{}})
+    if name is not None and name in seen and seen[name]() is obj:
+        return None
+    src = obj
     if isinstance(obj, pl.LazyFrame):
         obj = obj.collect()
-    if not isinstance(obj, pl.DataFrame):
-        return None
     obj.write_parquet(path)
+    if name is not None:
+        import weakref
+        seen[name] = weakref.ref(src)
     return {{"rows": obj.height, "cols": obj.width,
              "schema": [[c, str(t)] for c, t in obj.schema.items()]}}
 '''
 
 
+CELL_RESULT = "get_ipython().history_manager.output_hist.get(get_ipython().execution_count - 1)"
+
+
 def dump_call(expr: str, path: str | Path) -> str:
+    if expr.isidentifier():
+        return f"{HELPER}({expr}, {str(path)!r}, {expr!r})"
     return f"{HELPER}({expr}, {str(path)!r})"
 
 

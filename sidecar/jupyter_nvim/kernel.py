@@ -702,7 +702,7 @@ class KernelSession:
         cell_id: str,
         run_id: int,
         code: str,
-        result_expr: str = "_",
+        result_expr: str = frames.CELL_RESULT,
         user_expressions: dict | None = None,
     ) -> dict[str, Any]:
         self._require_km()

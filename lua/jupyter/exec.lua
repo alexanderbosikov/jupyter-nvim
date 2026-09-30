@@ -52,16 +52,18 @@ end
 local Exec = {}
 Exec.__index = Exec
 
----Выражение, которое сайдкар передаст ядру для сериализации результата.
+---Выражение, которое сайдкар передаст ядру для сериализации результата. nil — результат самой
+---ячейки, его выражение знает сайдкар (`frames.CELL_RESULT`); `_` тут не годится: ячейка,
+---вернувшая None, его не сбрасывает и получила бы таблицу предыдущей.
 ---@param code string
----@return string
+---@return string|nil
 function M.result_expr(code)
     local first = code:match("^[^\n]*") or ""
     local args = first:match("^%%%%sql%s*(.*)$")
     if args then
         return args:match("df_name=(%S+)") or "df_temp"
     end
-    return "_"
+    return nil
 end
 
 ---@param opts table kernel, on_update, blocked

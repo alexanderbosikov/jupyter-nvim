@@ -11,10 +11,18 @@ def reply(text: str, status: str = "ok") -> dict:
 
 
 def test_dump_call_quotes_the_path():
-    call = dump_call("_", "/tmp/из отчёта/12.parquet")
+    call = dump_call("df_temp", "/tmp/из отчёта/12.parquet")
 
-    assert call.startswith("__jupyter_nvim_dump(_, ")
+    assert call.startswith("__jupyter_nvim_dump(df_temp, ")
     assert "'/tmp/из отчёта/12.parquet'" in call
+
+
+def test_dump_call_names_only_a_bare_variable():
+    """Имя уходит помощнику, чтобы он не выгрузил тот же объект второй раз; выражению — нет."""
+    from jupyter_nvim.frames import CELL_RESULT
+
+    assert dump_call("df_temp", "/p").endswith(", 'df_temp')")
+    assert dump_call(CELL_RESULT, "/p").endswith("'/p')")
 
 
 def test_parse_dump_reads_python_repr_not_json():

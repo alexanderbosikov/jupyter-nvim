@@ -30,8 +30,8 @@ local function buffer(lines, filetype)
 end
 
 describe("result_expr", function()
-    it("обычная ячейка сериализует последнее выражение", function()
-        assert.equals("_", exec.result_expr("import polars as pl\npl.DataFrame({})"))
+    it("обычная ячейка — её собственный результат, выражение за сайдкаром", function()
+        assert.is_nil(exec.result_expr("import polars as pl\npl.DataFrame({})"))
     end)
 
     it("голый %%sql кладёт результат в df_temp", function()
@@ -44,7 +44,7 @@ describe("result_expr", function()
     end)
 
     it("магика считается только в первой строке", function()
-        assert.equals("_", exec.result_expr("x = 1\n%%sql df_name=orders"))
+        assert.is_nil(exec.result_expr("x = 1\n%%sql df_name=orders"))
     end)
 end)
 
@@ -68,7 +68,6 @@ describe("запуск", function()
             cell_id = id,
             run_id = 1,
             code = 'print("раз")',
-            result_expr = "_",
         }, k.sent[1])
         -- отправлен, но ещё не выполняется: ядро возьмёт его в работу, когда дойдёт
         assert.equals("queued", run.status)
