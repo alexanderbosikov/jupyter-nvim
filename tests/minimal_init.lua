@@ -55,3 +55,11 @@ vim.opt.shadafile = "NONE"
 -- Без переменной работает автопоиск плагина (lua/jupyter/python.lua): активное
 -- окружение $VIRTUAL_ENV, .venv вверх от каталога, python3 из PATH.
 vim.g.jupyter_python = vim.env.JUPYTER_NVIM_PYTHON
+
+-- Тесты запускаются из той же панели herdr, где работаешь сам, и наследуют её адрес: без
+-- этого любой прогон ячейки в тесте рапортовал бы статус в твою панель (lua/jupyter/sidebar.lua),
+-- а pane_spec, подставляющий свой HERDR_ENV, — в несуществующую. Бинарь подменён на false:
+-- тест, который про herdr, подменяет вызов сам, а до настоящего herdr не дотянется никто.
+vim.env.HERDR_ENV = nil
+vim.env.HERDR_PANE_ID = nil
+vim.env.HERDR_BIN_PATH = "/usr/bin/false"

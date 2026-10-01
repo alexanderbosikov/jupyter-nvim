@@ -238,9 +238,8 @@ Ordered by benefit against risk.
     message starts a turn on an idle session rather than waiting as context. The pane path
     stays as the fallback either way.
 
-13. **Run status in the multiplexer's sidebar.** herdr shows each agent pane's state as a
-    dot, and a notebook can join that row: running → `working`, idle → `idle`, error →
-    `blocked`, and herdr derives `done` by itself when working turns idle out of focus.
-    Progress as `3/7` through `report-metadata`. One hook point — `on_update` in `exec.lua`;
-    the edges where the status sticks in `working` (interrupt, restart, aborted, closing
-    nvim) are where the evening goes.
+13. **Run status in the multiplexer's sidebar** — **done** for herdr (`sidebar.lua`, §7.7):
+    `working` with `N/M`, idle/done, `blocked` on an error, a dead kernel, a dead sidecar or
+    `input()`; every ending is pinned on a live kernel. What is left is answering `input()`
+    from nvim at all: the sidecar has `stdin.reply`, Lua ignores `input_request`, so such a
+    cell can only be interrupted — the sidebar at least says it waits.

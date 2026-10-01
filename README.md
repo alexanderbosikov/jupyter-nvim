@@ -622,6 +622,7 @@ opts = {
     },
     table = { page_size = 100, max_col = 40 },
     status = { enabled = true, position = "below" },
+    sidebar = true,                  -- under herdr: the run's status and N/M in its sidebar
     autosave = {
         draft = true,                -- draft of the unsaved buffer
         debounce_ms = 2000,          -- how much idling before it is written

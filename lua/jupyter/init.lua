@@ -21,6 +21,7 @@ local agent = require("jupyter.agent")
 local ask = require("jupyter.ask")
 local pane = require("jupyter.pane")
 local python = require("jupyter.python")
+local sidebar = require("jupyter.sidebar")
 local snapshot = require("jupyter.snapshot")
 local toc = require("jupyter.toc")
 local table_view = require("jupyter.ui.table")
@@ -85,6 +86,9 @@ M.defaults = {
     table = { page_size = 100, max_col = 40 },
     -- статус строкой под ячейкой: enabled = false выключает, position = "eol" ставит в конец строки
     status = { enabled = true, position = "below" },
+    -- Статус прогона в сайдбаре herdr, в одном ряду с агентами: идёт — «3/7», досчиталось —
+    -- done, ошибка или смерть ядра — «требует внимания». Вне herdr ничего не делает.
+    sidebar = true,
     -- Заявка внешнего агента на правку ячейки. Метка `✎ имя` стоит в буфере, пока он
     -- думает, и в ней тикает возраст — по нему видно, что работа идёт. Вестей нет дольше
     -- ttl_ms — заявка снимается сама: агент мог упасть, упереться в лимит или уйти
@@ -167,6 +171,7 @@ function M.setup(opts)
     agent.VERB_INSERT = agent_cfg.verb_insert or agent.VERB_INSERT
     pane.CMD = agent_cfg.cmd or pane.CMD
     ask.HEIGHT = agent_cfg.ask_height or ask.HEIGHT
+    sidebar.enabled = M.config.sidebar ~= false
 
     require("jupyter.commands").setup(M)
     if M.config.highlight ~= false then
@@ -180,6 +185,7 @@ function M.setup(opts)
             -- несохранённым буфером — ровно тот случай, ради которого черновик и есть.
             draft.flush_all("выход из редактора")
             M.detach_all()
+            sidebar.release()
         end,
     })
 
@@ -197,6 +203,7 @@ function M.setup(opts)
         group = augroup,
         callback = function()
             M.on_focus(true)
+            sidebar.seen()
         end,
     })
 
@@ -492,6 +499,7 @@ function M.session(buf)
                 drawer:refresh_status()
             end
             M.repaint(buf)
+            sidebar.update(buf, run, is_new)
         end,
     }):attach()
 
@@ -520,6 +528,21 @@ function M.session(buf)
         log = {},
     }
     sessions[buf] = found
+    sidebar.attach(buf, {
+        name = name ~= "" and vim.fn.fnamemodify(name, ":t") or "jupyter",
+        runs = function() return ex.runs end,
+        kernel_state = function() return k:state() end,
+    })
+    -- exec.done на каждый прогон шлёт сайдкар; упал он сам — закрывать их больше некому.
+    -- Свой же stop() при закрытии буфера сюда тоже приходит, но сессии к тому времени нет.
+    sc.on_exit = function(res)
+        if sessions[buf] ~= found then
+            return
+        end
+        local why = "сайдкар завершился" .. (res and res.code and (" с кодом " .. res.code) or "")
+        table.insert(found.log, { at = os.date("%H:%M:%S"), level = "error", msg = why })
+        ex:abort_busy({ code = "sidecar_exited", msg = why })
+    end
     M.watch_edits(buf) -- диапазоны правок для кэша свежести
     -- первая запись в журнале сессии: какой python выбран и откуда. Когда ядро окажется
     -- «не тем», первый вопрос — про источник интерпретатора
@@ -556,6 +579,7 @@ function M.session(buf)
     end)
     k.on_state = function(state, data)
         table.insert(found.log, { at = os.date("%H:%M:%S"), level = "state", msg = state })
+        sidebar.schedule()
         if state == "dead" then
             vim.notify(
                 "jupyter.nvim: ядро умерло — " .. ((data or {}).reason or "причина неизвестна"),
@@ -958,6 +982,7 @@ function M.detach(buf, timeout_ms)
         return
     end
     sessions[buf] = nil
+    sidebar.detach(buf)
     s.status:clear(buf)
     s.output:close()
     s.table:close()

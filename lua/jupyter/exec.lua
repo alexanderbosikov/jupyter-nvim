@@ -47,6 +47,7 @@ end
 ---@field error table|nil
 ---@field table table|nil результат-датафрейм: path, rows, cols, schema
 ---@field duration_ms integer|nil
+---@field input_prompt string|nil ячейка ждёт `input()`; ответить из nvim пока нечем, но видно это надо
 
 ---@class jupyter.Exec
 local Exec = {}
@@ -221,7 +222,10 @@ function Exec:on_event(msg)
 
     local data = msg.data or {}
     if msg.ev == "stream" then
+        run.input_prompt = nil -- ячейка снова пишет, значит ввода уже не ждёт
         self:_apply_ops(run, data.name or "stdout", data.ops or {})
+    elseif msg.ev == "input_request" then
+        run.input_prompt = data.prompt or ""
     elseif msg.ev == "result" or msg.ev == "display" then
         self:_apply_result(run, data)
     elseif msg.ev == "exec.error" then
@@ -232,6 +236,7 @@ function Exec:on_event(msg)
         run.status = "running"
         run.started_at = data.started_at or run.started_at
     elseif msg.ev == "exec.done" then
+        run.input_prompt = nil
         run.status = data.status or "ok"
         run.duration_ms = data.duration_ms
         run.execution_count = data.execution_count
@@ -283,6 +288,22 @@ function Exec:_apply_result(run, data)
         run.text_range = { from = #run.lines + 1, to = #run.lines + #added }
         run.has_text_result = true
         vim.list_extend(run.lines, added)
+    end
+end
+
+---Закрыть все незавершённые прогоны ошибкой. Для случая, когда закрывать их больше некому:
+---`exec.done` на каждый прогон шлёт сайдкар, и если упал он сам, прогоны так и висели бы
+---«выполняется» — и в статусе под ячейкой, и в сайдбаре herdr.
+---@param err table { code, msg }
+function Exec:abort_busy(err)
+    for _, run in pairs(self.runs) do
+        if M.is_busy(run) then
+            run.status = "error"
+            run.error = err
+            run.input_prompt = nil
+            table.insert(run.lines, ("[%s] %s"):format(err.code or "ошибка", err.msg or ""))
+            self:_updated(run)
+        end
     end
 end
 

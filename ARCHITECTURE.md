@@ -200,6 +200,7 @@ Messages outside that table fall into three cases, and they must not be mixed:
 | `pane.lua` | the multiplexer pane the agent lives in: choosing the backend, the search ladder, liveness | knows nothing about notebooks or claims |
 | `pane/tmux.lua`, `pane/herdr.lua` | one multiplexer each: the list of panes and putting a prompt into one | know nothing about the ladder |
 | `ask.lua` | a prompt from the notebook: the address, the claim opened before sending, the float to type in, the log | does not talk to the multiplexer itself |
+| `sidebar.lua` | the run's status in herdr's sidebar: the wave, how it ended, one status for all notebooks, debounce | does not decide what a run is — it reads `exec` |
 | `orphans.lua` | kernels with no owner: reading the trace, identification by connection file, clearing | monitors nothing, works on demand |
 | `toc.lua` | the outline: headings and cells with their state | does not draw the list itself |
 | `ui/picker.lua` | showing a list: telescope if present, otherwise `vim.ui.select` | no dependency on telescope |
@@ -879,6 +880,47 @@ One thing does get written into the document: `cellid.ensure` gives the cell und
 cursor a `jncell` if it has none. Without an id there is nothing to name to the agent and
 nothing for a claim to anchor to — a fallback ordinal id belongs to a different cell as soon
 as a neighbour is inserted. The plugin does this at the first run anyway (§7.2).
+
+### 7.7. The run in herdr's sidebar
+
+herdr draws every agent pane's state as a dot in its sidebar, and the nvim pane joins that
+row: from the next workspace you see that the cells finished or fell over. The pane reports
+itself through `herdr pane report-agent` / `report-metadata` (`lua/jupyter/sidebar.lua`).
+
+Three states are reported, the fourth comes free: `working` while a run goes, `idle` when it
+does not, `blocked` for "needs attention". `done` is herdr's own — working turning idle while
+the workspace is out of focus is shown as done until you look. So "finished" is plain idle.
+
+**The wave.** Progress is `N/M` over the runs from the moment the notebook became busy to the
+moment it went free; cells queued in the middle grow M, the next wave starts from zero. The
+boundary is drawn when the run is created, not in the debounced report: a fast cell would
+begin and end inside the 250 ms and the wave's edge would be lost.
+
+**How a wave ended decides idle or blocked**, and each way is pinned on a live kernel in
+`tests/sidebar_spec.lua`:
+
+| ending | status |
+|---|---|
+| everything ran | idle (herdr shows done) |
+| an error in the code, the rest aborted by `stop_on_error` | blocked, `ошибка в <id>: <ename>` |
+| interrupt, restart, `:JupyterStop` | idle — the person just did it |
+| the kernel died, or stuck at start | blocked, until its state changes |
+| the sidecar died | blocked: `exec.abort_busy` closes the runs nobody else will close |
+| `input()` in a cell | blocked while it waits — nvim cannot answer it yet |
+
+A wave's error stops asking for attention on `FocusGained` or with the next run. A user
+stop is told apart by the error's code: `KeyboardInterrupt` from the kernel, or `interrupted`,
+`kernel_restart`, `kernel_shutdown` from a queue dropped in `kernel.lua`.
+
+**`seq` is wall-clock.** herdr drops a report whose `seq` is not above the last one, and it
+remembers that number after `release-agent` too — measured: a counter from zero would never
+get through again after restarting nvim in the same pane. So `seq` is milliseconds × 1000
+plus a counter, formatted with `%.0f`: LuaJIT's `tostring` prints 16 digits as `1.7e+15`.
+
+One herdr pane per nvim, possibly several notebooks: the most alarming state wins, progress
+sums over busy notebooks, the name is `eda.ipynb +1`. On `VimLeavePre` the status is released
+synchronously (500 ms at most) — a pane left in working would hang there. The tests clear
+`HERDR_ENV` in `minimal_init.lua`: they run from a herdr pane and would report into it.
 
 ## 8. What is not supported
 
