@@ -130,8 +130,8 @@ In the output window: `t` — table page by page, `y` — copy the output, `c` �
 
 In the table window: `H`/`L` — pages, `[[`/`]]` — the edges, `R` — re-read, `q` — close the
 tab, `s`/`S` — sort by the column under the cursor, ascending or descending, `c` — drop the
-sorting, `y` — copy the page shown, `Y` — the whole result, `<CR>` — copy the cell under the
-cursor.
+sorting, `y` — copy the page shown, `Y` — the whole result, `<CR>` — the cell under the cursor in
+full, in a floating window, `<S-CR>` — copy that cell.
 
 What is copied is TSV — a header and rows, tab-separated, no borders and no alignment:
 
@@ -149,12 +149,18 @@ says so out loud. `Y` reads the whole file in the current sort order, and above 
 rows it asks first: a register is not a file. `y` in the output window copies what is in the
 window, that is the preview (`output.preview_rows`), and for a table run it says so.
 
-`<CR>` copies a single cell — the **whole** value, not what is drawn. In the table a value is
+`<CR>` shows a single cell — the **whole** value, not what is drawn. In the table a value is
 clipped to `max_col` (`…` at the end): the columns have to line up within the width of the
 window, and long text has nowhere to go there. The clipping is drawing only — the value is
-taken from the data, exactly like `y`/`Y` take it. Control characters stay escaped (`\n`),
-the way the sidecar handed them over: they cannot be told apart from a real backslash in the
-data. The plugin says which column and which row of the dataset has been copied.
+taken from the data, exactly like `y`/`Y` take it. In the window a JSON object or array is
+laid out with indents (keys in their own order, highlighted as `json`), any other text gets
+real line breaks in place of `\n`; `y` there copies, `q` closes.
+
+`<S-CR>` copies the cell as it is. Control characters stay escaped (`\n`), the way the sidecar
+handed them over: they cannot be told apart from a real backslash in the data — which is
+also why the window turns them into line breaks for reading only. The plugin says which
+column and which row of the dataset has been copied. `<S-CR>` needs a terminal that tells it
+from `<CR>` (Ghostty, kitty, WezTerm; herdr passes it through); elsewhere remap `yank_cell`.
 
 Sorting accumulates: every next column becomes the primary key, and the ones chosen earlier
 stay as tie-breakers. Sort by platform, then by day, and you get an order by day with the

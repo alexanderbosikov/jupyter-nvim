@@ -450,3 +450,82 @@ describe("клетка под курсором", function()
         assert.is_nil(view:cell_at(4, layout[1].from))
     end)
 end)
+
+-- Полный текст клетки во всплывающем окне: <CR> показывает, <S-CR> копирует.
+describe("значение клетки целиком", function()
+    it("json раскладывается по строкам, порядок ключей и пустые контейнеры как в данных", function()
+        local lines, ft = table_view.display_value('{"z":1,"a":{"b":[1,2]},"e":{},"l":[]}')
+
+        assert.equals("json", ft)
+        assert.same({
+            "{",
+            '  "z": 1,',
+            '  "a": {',
+            '    "b": [',
+            "      1,",
+            "      2",
+            "    ]",
+            "  },",
+            '  "e": {},',
+            '  "l": []',
+            "}",
+        }, lines)
+    end)
+
+    it("скобки, запятые и кавычки внутри строк json не трогает", function()
+        local lines = table_view.display_value([[{"q":"a, {b}: [c] \"d\"","n":"x\ny"}]])
+
+        assert.same({ "{", [[  "q": "a, {b}: [c] \"d\"",]], [[  "n": "x\ny"]], "}" }, lines)
+    end)
+
+    it("json с отступами, которые сайдкар превратил в \\n, тоже разбирается", function()
+        local lines, ft = table_view.display_value([[{\n  "a": 1\n}]])
+
+        assert.equals("json", ft)
+        assert.same({ "{", '  "a": 1', "}" }, lines)
+    end)
+
+    it("не json — текст с настоящими переводами строк вместо \\n", function()
+        local lines, ft = table_view.display_value([[select 1\nfrom t\twhere x]])
+
+        assert.is_nil(ft)
+        assert.same({ "select 1", "from t\twhere x" }, lines)
+        assert.same({ "{не json" }, (table_view.display_value("{не json")))
+    end)
+
+    it("<CR> открывает окно с текстом, <S-CR> копирует как есть", function()
+        local value = [[{"a":1}]]
+        local view = table_view.new({
+            sidecar = {
+                request = function(_, _, _, cb)
+                    cb(nil, { header = { "id", "payload" }, rows = { { "1", value } }, offset = 0, total_rows = 1 })
+                end,
+            },
+            page_size = 50,
+        })
+        view:open("/tmp/df.parquet")
+        vim.api.nvim_win_set_cursor(view.win, { 3, view.layout[2].from - 1 })
+        local table_win = view.win
+
+        vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+
+        local float = vim.api.nvim_get_current_win()
+        assert.are_not.equal(table_win, float)
+        assert.is_truthy(vim.api.nvim_win_get_config(float).relative ~= "")
+        assert.same({ "{", '  "a": 1', "}" }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+        assert.equals("json", vim.bo.filetype)
+
+        vim.fn.setreg('"', "")
+        vim.api.nvim_feedkeys("y", "x", false)
+        assert.equals(value, vim.fn.getreg('"'), "из окна копируется значение как в данных")
+
+        vim.api.nvim_feedkeys("q", "x", false)
+        assert.is_false(vim.api.nvim_win_is_valid(float))
+        assert.equals(table_win, vim.api.nvim_get_current_win())
+
+        vim.fn.setreg('"', "")
+        vim.api.nvim_feedkeys(vim.keycode("<S-CR>"), "x", false)
+        assert.equals(value, vim.fn.getreg('"'))
+        view:close()
+    end)
+end)

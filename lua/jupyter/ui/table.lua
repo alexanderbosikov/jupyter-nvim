@@ -23,7 +23,8 @@ M.DEFAULT_KEYS = {
     { mode = "n", key = "R", action = "refresh" },
     { mode = "n", key = "y", action = "yank_page" },
     { mode = "n", key = "Y", action = "yank_all" },
-    { mode = "n", key = "<CR>", action = "yank_cell" },
+    { mode = "n", key = "<CR>", action = "show_cell" },
+    { mode = "n", key = "<S-CR>", action = "yank_cell" },
     { mode = "n", key = "q", action = "close" },
 }
 
@@ -80,6 +81,96 @@ end
 local function to_registers(text)
     vim.fn.setreg('"', text)
     return (pcall(vim.fn.setreg, "+", text))
+end
+
+---Отступы для JSON, заведомо валидного. По тексту, а не через decode/encode: Lua-таблица
+---теряет порядок ключей и путает пустой объект с пустым массивом, а показанное должно
+---совпадать с данными. Строки идут как есть, вместе со своими экранированиями.
+---@param text string
+---@return string[]
+local function indent_json(text)
+    local lines, cur, depth = {}, {}, 0
+    local in_str, esc = false, false
+    local function newline()
+        local line = table.concat(cur):gsub("%s+$", "")
+        if line ~= "" then
+            table.insert(lines, line)
+        end
+        cur = { ("  "):rep(depth) }
+    end
+    cur = { "" }
+    local i, n = 1, #text
+    while i <= n do
+        local ch = text:sub(i, i)
+        if in_str then
+            table.insert(cur, ch)
+            if esc then
+                esc = false
+            elseif ch == "\\" then
+                esc = true
+            elseif ch == '"' then
+                in_str = false
+            end
+        elseif ch == '"' then
+            in_str = true
+            table.insert(cur, ch)
+        elseif ch == "{" or ch == "[" then
+            -- пустой контейнер остаётся в одну строку: {} и [] читаются лучше, чем две скобки
+            local close = ch == "{" and "}" or "]"
+            local j = text:find("%S", i + 1)
+            if j and text:sub(j, j) == close then
+                table.insert(cur, ch .. close)
+                i = j
+            else
+                table.insert(cur, ch)
+                depth = depth + 1
+                newline()
+            end
+        elseif ch == "}" or ch == "]" then
+            depth = depth - 1
+            newline()
+            table.insert(cur, ch)
+        elseif ch == "," then
+            table.insert(cur, ch)
+            newline()
+        elseif ch == ":" then
+            table.insert(cur, ": ")
+        elseif not ch:match("%s") then
+            table.insert(cur, ch)
+        end
+        i = i + 1
+    end
+    newline()
+    return lines
+end
+
+---Вернуть видимые экранирования сайдкара (`\n`, `\t`, `\r`) в настоящие символы.
+---Только для показа: отличить их от настоящего обратного слеша в данных нельзя, поэтому
+---копирование (`<S-CR>`) по-прежнему отдаёт значение как есть.
+---@param text string
+---@return string
+local function unescape(text)
+    return (text:gsub("\\r\\n", "\n"):gsub("\\([nrt])", { n = "\n", r = "\n", t = "\t" }))
+end
+
+---Значение клетки в том виде, в каком его удобно читать.
+---
+---JSON — объект или массив — раскладывается по строкам с отступами. Сначала пробуем как
+---есть: переводы строк внутри JSON-строк уже записаны как `\n`, и сайдкар их не трогает.
+---Не вышло — пробуем после `unescape`: так разбирается JSON, сохранённый с отступами, где
+---настоящие переводы строк между токенами сайдкар превратил в `\n`.
+---@param value string
+---@return string[] lines
+---@return string|nil filetype "json", если разобрался JSON
+function M.display_value(value)
+    for _, text in ipairs({ value, unescape(value) }) do
+        local trimmed = vim.trim(text)
+        local first = trimmed:sub(1, 1)
+        if (first == "{" or first == "[") and pcall(vim.json.decode, trimmed) then
+            return indent_json(trimmed), "json"
+        end
+    end
+    return vim.split(unescape(value), "\n", { plain = true }), nil
 end
 
 ---Хвост сообщения о копировании: куда именно легло.
@@ -343,6 +434,57 @@ function View:cell_at(line, col)
     }
 end
 
+---Полный текст клетки во всплывающем окне. В таблице он обрезан по max_col, а прочитать
+---длинный sql или json там нельзя вовсе.
+---@param cell table из cell_at
+---@return integer win
+function View:show_cell(cell)
+    local lines, ft = M.display_value(cell.value)
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.bo[buf].buftype = "nofile"
+    vim.bo[buf].bufhidden = "wipe"
+    vim.bo[buf].modifiable = false
+    if ft then
+        vim.bo[buf].filetype = ft
+    end
+
+    local widest = 0
+    for _, line in ipairs(lines) do
+        widest = math.max(widest, vim.fn.strdisplaywidth(line))
+    end
+    local width = math.max(30, math.min(widest, math.floor(vim.o.columns * 0.8)))
+    local height = math.max(1, math.min(#lines, math.floor(vim.o.lines * 0.7)))
+    local win = vim.api.nvim_open_win(buf, true, {
+        relative = "editor",
+        width = width,
+        height = height,
+        row = math.max(0, math.floor((vim.o.lines - height) / 2) - 1),
+        col = math.max(0, math.floor((vim.o.columns - width) / 2)),
+        style = "minimal",
+        border = "rounded",
+        title = (" %s · строка %d "):format(cell.column, cell.number),
+        title_pos = "center",
+        footer = " y скопировать · q закрыть ",
+        footer_pos = "center",
+    })
+    vim.wo[win].wrap = ft == nil -- json уже разложен; длинный текст иначе не прочитать
+
+    local function close()
+        pcall(vim.api.nvim_win_close, win, true)
+    end
+    for _, key in ipairs({ "q", "<Esc>" }) do
+        vim.keymap.set("n", key, close, { buffer = buf, nowait = true })
+    end
+    vim.keymap.set("n", "y", function()
+        local ok = to_registers(cell.value)
+        vim.notify(("jupyter.nvim: %s, строка %d — скопировано%s"):format(cell.column, cell.number, where(ok)))
+    end, { buffer = buf, nowait = true })
+    -- ушёл из окна — окно не нужно: иначе оно висит поверх таблицы без фокуса
+    vim.api.nvim_create_autocmd("WinLeave", { buffer = buf, once = true, callback = close })
+    return win
+end
+
 ---Добавить колонку в стек сортировки главным ключом.
 ---
 ---Прежние ключи не теряются, а становятся тай-брейкерами: так каждая следующая сортировка
@@ -436,6 +578,14 @@ function View:get_actions()
             end
             local ok = to_registers(M.tsv(self.header, self.rows))
             vim.notify(("jupyter.nvim: страница скопирована, строк — %d%s"):format(#self.rows, where(ok)))
+        end,
+        show_cell = function()
+            local cell = self:cell_at()
+            if not cell then
+                vim.notify("jupyter.nvim: курсор не на клетке таблицы", vim.log.levels.WARN)
+                return
+            end
+            self:show_cell(cell)
         end,
         yank_cell = function()
             -- Клетка целиком, без многоточия: длинный текст в таблице виден обрезанным, а
