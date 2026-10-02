@@ -1026,14 +1026,8 @@ Not closed:
   occurrence — which is what it was put there for;
 - the user-visible problems are listed in the README ("Known issues") and are not
   duplicated here;
-- protection against accidentally joining cells has not been made, and when it is, it will
-  not be a prohibition. A miss by a couple of lines (`3dd` across a boundary) joins two
-  cells silently: verified — 25 cells and 21 outputs turn into 24 and 20, and the code of
-  the vanished cell cannot be restored from the history, which holds only a `code_sha`.
-  Forbidding the edit is not an option: a guard that reverts changes cannot tell a slip
-  from an intention and sooner or later will eat something needed. The idea is to notice:
-  an id backed by history has disappeared from the document, so say so and remind about
-  `u`. The signal is narrow, cells with no runs stay silent.
+- protection against accidentally joining cells has not been made; the plan, and why it
+  will not be a prohibition, is item 2 of the work queue in CONTRIBUTING.md.
 
 ## 11. What it costs
 

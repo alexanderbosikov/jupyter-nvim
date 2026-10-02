@@ -193,11 +193,14 @@ Ordered by benefit against risk.
 
 7. **A claim on a cell with no id.** Cells made by the plugin's commands and by an agent's
    insert get their `jncell` at once (§7.2), but one typed or pasted by hand has none until
-   its first run, so an agent can neither edit nor delete it. `edit_begin({index = N})`
-   would write the id and mark the cell in one go — what `ask.lua` already does when a
-   prompt is sent. The snag: `index` comes from a snapshot and drifts if the user inserts a
-   cell in between, so the call must carry the body's sha from that snapshot and refuse on
-   a mismatch. About an hour.
+   its first run, so an agent can neither edit nor delete it: the snapshot gives such a
+   cell no `id` at all, only its `index`. `edit_begin({index = N, sha = …})` would find the
+   cell by number, then `cellid.ensure` writes the id inside `begin` and the claim holds on
+   to that, not to the number — what `ask.lua` already does when a prompt is sent. The
+   number only finds the cell; it drifts if the user inserts a cell in between, so the call
+   carries the body's sha from the snapshot and refuses on a mismatch. That means the
+   snapshot has to start returning the body's sha for cells without an id — today it has
+   none. About an hour.
 
 8. **An atomic batch of edits.** Several claims can be open at once, but each is applied
    by its own call and is its own undo step: five edits cost five `u`, and a `changed` on
