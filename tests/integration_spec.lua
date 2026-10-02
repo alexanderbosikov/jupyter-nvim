@@ -613,6 +613,53 @@ describe("таблица", function()
         assert.is_truthy(said and said:find("нет результата%-таблицы"))
         assert.is_false(session.table:is_open())
     end)
+
+    it("<Tab> листает таблицы соседних ячеек, пропуская ячейки без таблицы", function()
+        local _, b = notebook({
+            "# %%",
+            "import polars as pl",
+            "pl.DataFrame({'a': [1, 2]})",
+            "# %%",
+            'print("между ними")',
+            "# %%",
+            "pl.DataFrame({'b': [1, 2, 3]})",
+        })
+        buf, session = b, nil
+        local nb_win = vim.api.nvim_get_current_win()
+        for _, row in ipairs({ 2, 5, 7 }) do
+            vim.api.nvim_win_set_cursor(0, { row, 0 })
+            jupyter.run_cell()
+        end
+        session = jupyter.session(buf)
+        local first, last = cid(buf, 2), cid(buf, 7)
+        wait(function()
+            local r = session.exec:run_for(last)
+            return r and r.status == "ok" and r.table ~= nil
+        end, 60000, "три прогона")
+
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+        jupyter.open_table()
+        wait(function() return session.table.total == 2 end, 30000, "первую таблицу")
+
+        session.table:get_actions().table_next()
+        wait(function() return session.table.total == 3 end, 30000, "таблицу через ячейку")
+        assert.equals(last, session.table.cell_id)
+        assert.is_truthy(vim.wo[session.table.win].winbar:find("ячейка " .. last, 1, true))
+        assert.equals(7, vim.api.nvim_win_get_cursor(nb_win)[1], "курсор ноутбука поехал следом")
+
+        local said
+        local notify = vim.notify
+        vim.notify = function(msg) said = msg end
+        session.table:get_actions().table_next()
+        vim.notify = notify
+        assert.is_truthy(said and said:find("ниже таблиц нет"))
+        assert.equals(last, session.table.cell_id, "на краю таблица осталась прежней")
+
+        session.table:get_actions().table_prev()
+        wait(function() return session.table.total == 2 end, 30000, "обратно к первой")
+        assert.equals(first, session.table.cell_id)
+        assert.equals(2, vim.api.nvim_win_get_cursor(nb_win)[1])
+    end)
 end)
 
 describe("история переживает перезагрузку", function()

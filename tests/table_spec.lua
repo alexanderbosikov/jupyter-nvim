@@ -304,6 +304,50 @@ describe("сортировка", function()
         assert.equals("S", keys.sort_desc)
         assert.equals("c", keys.sort_clear)
     end)
+
+    it("у каждой таблицы своя сортировка: возврат к таблице её возвращает", function()
+        view.path = nil
+        view:open("/tmp/a.parquet", "a", "aaaa")
+        view:sort_by("день", true)
+
+        view:open("/tmp/b.parquet", "b", "bbbb")
+        assert.same({}, view.order, "у новой таблицы сортировки ещё нет")
+        assert.equals("bbbb", view.cell_id)
+        view:sort_by("сессии", false)
+
+        view:open("/tmp/a.parquet", "a", "aaaa")
+        assert.same({ { column = "день", desc = true } }, view.order)
+        assert.same({ { column = "день", desc = true } }, sent[#sent].args.order_by,
+            "первая страница запрошена уже в запомненном порядке")
+        view:open("/tmp/b.parquet", "b", "bbbb")
+        assert.same({ { column = "сессии" } }, view.order)
+        view:close()
+    end)
+end)
+
+describe("таблица соседней ячейки", function()
+    it("<Tab> и <S-Tab> спрашивают ноутбук о соседней в нужную сторону", function()
+        local asked = {}
+        local view = table_view.new({
+            sidecar = { request = function() end },
+            on_step = function(dir) table.insert(asked, dir) end,
+        })
+        local keys = {}
+        for _, spec in ipairs(table_view.DEFAULT_KEYS) do
+            keys[spec.action] = spec.key
+        end
+        assert.equals("<Tab>", keys.table_next)
+        assert.equals("<S-Tab>", keys.table_prev)
+
+        view:get_actions().table_next()
+        view:get_actions().table_prev()
+        assert.same({ 1, -1 }, asked)
+    end)
+
+    it("без ноутбука за спиной не падает", function()
+        local view = table_view.new({ sidecar = { request = function() end } })
+        view:get_actions().table_next()
+    end)
 end)
 
 -- Копирование результата. Проверяется содержимое регистра: копирование кончается им,

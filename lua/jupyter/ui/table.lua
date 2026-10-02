@@ -25,6 +25,8 @@ M.DEFAULT_KEYS = {
     { mode = "n", key = "Y", action = "yank_all" },
     { mode = "n", key = "<CR>", action = "show_cell" },
     { mode = "n", key = "<S-CR>", action = "yank_cell" },
+    { mode = "n", key = "<Tab>", action = "table_next" },
+    { mode = "n", key = "<S-Tab>", action = "table_prev" },
     { mode = "n", key = "q", action = "close" },
 }
 
@@ -273,11 +275,17 @@ function M.new(opts)
         page_size = opts.page_size or 100,
         max_col = opts.max_col or 40,
         keys = opts.keys or M.DEFAULT_KEYS,
+        -- переход к таблице соседней ячейки: какая ячейка соседняя, знает ноутбук, не окно
+        on_step = opts.on_step,
         buf = nil,
         win = nil,
         tab = nil,
         path = nil,
         label = nil,
+        cell_id = nil, -- чья таблица на экране: от неё ищется соседняя
+        -- сортировка каждой открывавшейся таблицы, по пути к parquet: сравнивают обычно
+        -- «туда и обратно», и сортировать заново на каждом возврате — ровно то, что мешает
+        orders = {},
         offset = 0,
         total = 0,
         header = {},
@@ -305,11 +313,16 @@ end
 ---а q закрывает вкладку и возвращает ноутбук нетронутым.
 ---@param path string путь к parquet
 ---@param label? string что показать в winbar
-function View:open(path, label)
+---@param cell_id? string ячейка, чей это результат
+function View:open(path, label, cell_id)
+    if self.path then
+        self.orders[self.path] = self.order
+    end
     self.path = path
     self.label = label or vim.fn.fnamemodify(path, ":t")
+    self.cell_id = cell_id
     self.offset = 0
-    self.order = {}
+    self.order = self.orders[path] or {}
 
     local buf = self:_ensure_buf()
     if not self:is_open() then
@@ -634,6 +647,8 @@ function View:get_actions()
                 vim.notify(("jupyter.nvim: таблица скопирована, строк — %d%s"):format(#page.rows, where(ok)))
             end)
         end,
+        table_next = function() return self.on_step and self.on_step(1) end,
+        table_prev = function() return self.on_step and self.on_step(-1) end,
         close = function() self:close() end,
     }
 end

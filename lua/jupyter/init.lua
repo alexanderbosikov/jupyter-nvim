@@ -507,6 +507,7 @@ function M.session(buf)
         sidecar = sc,
         page_size = M.config.table.page_size,
         max_col = M.config.table.max_col,
+        on_step = function(dir) M.step_table(buf, dir) end,
     })
 
     local name = vim.api.nvim_buf_get_name(buf)
@@ -1310,6 +1311,22 @@ function M.cell_to_code()
     return true
 end
 
+---@param s table сессия
+---@param run jupyter.Run прогон с результатом-таблицей
+local function show_table(s, run)
+    with_sidecar(s.sidecar, function(err)
+        if err then
+            vim.notify(
+                "jupyter.nvim: сайдкар не поднялся — " .. (err.msg or err.code or "?"),
+                vim.log.levels.ERROR
+            )
+            return
+        end
+        local label = ("ячейка %s · прогон %d"):format(run.cell_id, run.run_id)
+        s.table:open(run.table.path, label, run.cell_id)
+    end)
+end
+
 function M.open_table()
     local s = M.session()
     local run
@@ -1335,17 +1352,55 @@ function M.open_table()
         )
         return
     end
-    with_sidecar(s.sidecar, function(err)
-        if err then
-            vim.notify(
-                "jupyter.nvim: сайдкар не поднялся — " .. (err.msg or err.code or "?"),
-                vim.log.levels.ERROR
-            )
-            return
-        end
-        s.table:open(run.table.path, ("ячейка %s · прогон %d"):format(run.cell_id, run.run_id))
-    end)
+    show_table(s, run)
 end
+
+---Таблица соседней ячейки — той, что выше или ниже на экране, с результатом-таблицей.
+---Ячейки без таблицы пропускаются. Прогон берётся тот же, что открыл бы `open_table` на
+---этой ячейке: идущий или последний из истории. Курсор ноутбука переезжает туда же, чтобы
+---`q` вернул к ячейке, которую смотрел последней, а не к той, с которой начал.
+---@param buf integer буфер ноутбука
+---@param dir integer 1 — вниз, -1 — вверх
+---@return boolean
+function M.step_table(buf, dir)
+    local s = sessions[buf]
+    if not s then
+        return false
+    end
+    local list = cells.list(buf)
+    local from
+    for i, cell in ipairs(list) do
+        if s.table.cell_id and exec.cell_id(buf, cell) == s.table.cell_id then
+            from = i
+            break
+        end
+    end
+    if not from then
+        vim.notify(
+            ("jupyter.nvim: ячейки %s в ноутбуке больше нет — соседнюю не от чего искать")
+                :format(s.table.cell_id or "?"),
+            vim.log.levels.WARN
+        )
+        return false
+    end
+    local i = from + dir
+    while list[i] do
+        local cell = list[i]
+        local id = exec.cell_id(buf, cell)
+        local run = id and (s.exec:run_for(id) or s.store:last_run(id)) or nil
+        if run and run.table and run.table.path then
+            for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+                pcall(vim.api.nvim_win_set_cursor, win, { cell.start_row, 0 })
+            end
+            show_table(s, run)
+            return true
+        end
+        i = i + dir
+    end
+    vim.notify(("jupyter.nvim: %s таблиц нет"):format(dir > 0 and "ниже" or "выше"))
+    return false
+end
+
 
 ---Ядра без хозяина в каталоге текущего файла: показать или снять.
 ---@param kill? boolean

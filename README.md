@@ -131,7 +131,8 @@ In the output window: `t` — table page by page, `y` — copy the output, `c` �
 In the table window: `H`/`L` — pages, `[[`/`]]` — the edges, `R` — re-read, `q` — close the
 tab, `s`/`S` — sort by the column under the cursor, ascending or descending, `c` — drop the
 sorting, `y` — copy the page shown, `Y` — the whole result, `<CR>` — the cell under the cursor in
-full, in a floating window, `<S-CR>` — copy that cell.
+full, in a floating window, `<S-CR>` — copy that cell, `<Tab>`/`<S-Tab>` — the table of the
+next or previous cell.
 
 What is copied is TSV — a header and rows, tab-separated, no borders and no alignment:
 
@@ -167,6 +168,14 @@ stay as tie-breakers. Sort by platform, then by day, and you get an order by day
 order by platform preserved inside each day. The current order is visible in the status
 line; the sorting is done by the sidecar on the parquet side, so paging stays consistent:
 page 2 continues page 1.
+
+`<Tab>` and `<S-Tab>` swap the table for the one of the nearest cell below or above that has
+a table result, in the same tab; cells without one are skipped, and at the edge of the
+notebook the plugin says there are no more. The run taken is the one `:JupyterTable` would
+open on that cell — the running one or the last in the history. The notebook's cursor
+follows, so `q` brings you back to the cell you looked at last. Each table keeps its own
+sorting for the session: compare two results back and forth, and neither has to be sorted
+again.
 
 ## Cells
 
