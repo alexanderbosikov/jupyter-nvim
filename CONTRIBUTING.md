@@ -216,6 +216,27 @@ Ordered by benefit against risk.
     prose from outside, inserting a whole section, and the "markdown inside a code fence"
     trap in one go.
 
+    A cheaper route, worked out on 2026-10-06, makes prose editable without making it a cell:
+    - **One primitive, `replace(old, new)`, over the whole buffer**, for code and prose alike,
+      like Claude's own Edit. `old` must match exactly once, and that match does the job the
+      sha does now ("nobody touched it"). After the write the plugin re-parses the buffer and
+      rolls the edit back if the fences no longer balance or an id disappeared or appeared
+      twice (deleting a cell on purpose is the exception). A new cell with no id just gets
+      one. The edit is checked and written in one tick, so there is no race.
+    - **A claim on a range, as in [99](https://github.com/ThePrimeagen/99).** `:JupyterAsk`
+      over a visual selection puts two extmarks around it, and `apply` writes between them.
+      That gives a paragraph the same "agent is working here" mark a cell has today. 99 has
+      no check at all and silently overwrites anything typed inside the range, so ours keeps
+      the text match.
+    - **What stays out:** the mark when the agent decides on its own to change a paragraph
+      (the plugin learns where the edit goes only when it is written), and history for
+      prose. Two blank lines in `new` are read by jupytext as a cell boundary.
+    - Raw `nvim --remote-expr` with no plugin is not the answer: nobody would check the ids
+      and fences, and each agent would carry its own Lua.
+
+    About 3–4 hours with tests, plus the `jupyter-nvim` skill. `begin`/`adopt`/`apply` can stay
+    for compatibility.
+
 11. **Preview before an agent's edit lands.** Today `edit_apply` writes straight away; the
     claim's mark is the only warning. A mode where the edit is shown as a diff over the cell
     and lands on a key would suit edits the user wants to vet. Two to three hours.
