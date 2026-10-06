@@ -268,3 +268,39 @@ Ordered by benefit against risk.
     cell with no id (only the notebook level); whether the wave count moves out of
     `sidebar.lua` into a shared module so the outcome matches herdr. An hour for the script
     and the skill; two to three with the shared wave and tests.
+
+    Added 2026-10-06 — **run and show**: on completion print not only the outcome but what
+    the agent needs next — the table's shape and first rows (from the run's parquet), the
+    traceback, or the text output. Then "write → run → see the error → fix" is one call for
+    the agent, and the user looks at a finished result. `%%sql` cells are not run without
+    asking (they are Redshift queries): a rule in the skill, and a refusal without
+    `--allow-sql` in the command.
+
+16. **Point in nvim, talk in Claude Code.** The user mostly works from Claude Code and
+    rarely sends prompts from nvim: that is where the conversation and its history are.
+    So instead of pulling the conversation into nvim, let Claude Code know what the user
+    is looking at. The plugin writes the focus — notebook, cell under the cursor, selection,
+    time — to the pane file on `CursorHold` / selection change (next to what `ask.remember`
+    writes). A Claude Code `UserPromptSubmit` hook reads the file of its own pane and, when
+    the focus is fresh (nvim focused in the last ~2 minutes), adds a `[jupyter.nvim] …`
+    context line to the prompt — "why is this empty?" and "rewrite this cell lazily" then
+    need no paths or ids. `<leader>jq` becomes "claim this piece and switch me to the Claude
+    pane"; the prompt float stays for short questions. Forks: the freshness threshold; two
+    nvims focusing one pane (latest wins). Two to three hours, plus the hook in the user's
+    settings.
+
+17. **Describe a variable in the kernel.** To write polars over `df_usage` the agent needs
+    its columns and types; today it reads the last run's parquet (maybe not what is in
+    memory) or asks for kernel access. A fixed describe command — type, schema, size,
+    `head(5)` — runs the plugin's own code with only an identifier from outside, through
+    the sidecar rather than a cell, so it stays out of run history and `Out`. Forks:
+    non-frames (`repr`, clipped); a `LazyFrame` gives its schema without `collect`. An hour
+    and a half to two.
+
+18. **What the agent changed while you were not looking.** When an agent rewrites half
+    the notebook while the user is in Claude Code, there is a flash at write time and a
+    single `u`, and nothing to tell what to review. Keep each `edit_replace`'s old/new:
+    its lines stay highlighted until the cursor visits them, `]a` / `[a` jump between
+    them, and one can be reverted alone (a reverse replace, with the same "text still
+    there" check). Listed in `:JupyterEdits`. A cheaper step towards item 11. About three
+    hours.
