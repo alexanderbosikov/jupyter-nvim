@@ -65,11 +65,26 @@ function M.text_of(run, stale)
     return stale and (text .. " ⚠") or text, group
 end
 
+---Группа статуса в подвале: цвет текста свой, фон — `JupyterStatusFooter`, если он
+---задан, иначе `Normal`. Свой фон у групп `JupyterWinBar*` есть (они для winbar), и на
+---строке фенса он выглядел бы продолжением код-блока. У прозрачного терминала `Normal`
+---без фона — тогда фона нет и у подвала.
+---@param group string
+---@return string
+function M.on_window(group)
+    local name = group .. "Footer"
+    local spec = vim.api.nvim_get_hl(0, { name = group, link = false })
+    local footer = vim.api.nvim_get_hl(0, { name = "JupyterStatusFooter", link = false })
+    spec.bg = footer.bg or vim.api.nvim_get_hl(0, { name = "Normal", link = false }).bg
+    vim.api.nvim_set_hl(0, name, spec)
+    return name
+end
+
 ---@class jupyter.Status
 local Status = {}
 Status.__index = Status
 
----@param opts? table position ("below"|"eol"), enabled
+---@param opts? table position ("below"|"eol"|"fence"), enabled
 function M.new(opts)
     opts = opts or {}
     return setmetatable({
@@ -105,7 +120,21 @@ function Status:render(buf, entries)
     for _, entry in ipairs(entries) do
         local chunk = { { entry.text, entry.group } }
         local ok
-        if self.position == "eol" then
+        if self.position == "fence" and entry.body_row and entry.body_row < entry.row then
+            -- Строка закрывающего фенса становится подвалом ячейки: статус с первой
+            -- колонки на фоне окна и до его края — блок кончается последней строкой кода. Поверх черты, которую рисует
+            -- render-markdown при `border = "thin"`: прервать её посередине значит
+            -- оставить слева обрубок, похожий на срезанный угол. ``` под статусом не
+            -- видно и под курсором — у закрывающего фенса там нет ничего, кроме ```.
+            -- При `border = "hide"` строка скрыта целиком, там нужен "below".
+            local text = " " .. entry.text
+            local pad = math.max(0, vim.o.columns - vim.fn.strdisplaywidth(text))
+            ok = pcall(vim.api.nvim_buf_set_extmark, buf, M.NS, entry.row - 1, 0, {
+                virt_text = { { text .. string.rep(" ", pad), M.on_window(entry.group) } },
+                virt_text_win_col = 0,
+                priority = 10000, -- выше черты render-markdown, иначе она рисуется поверх
+            })
+        elseif self.position == "eol" then
             local row = math.max(0, math.min(entry.row - 1, vim.api.nvim_buf_line_count(buf) - 1))
             ok = pcall(vim.api.nvim_buf_set_extmark, buf, M.NS, row, 0, {
                 virt_text = chunk,

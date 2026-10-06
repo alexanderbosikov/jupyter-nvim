@@ -636,7 +636,7 @@ opts = {
         open_on_attach = false,      -- open the window when a notebook is opened
     },
     table = { page_size = 100, max_col = 40 },
-    status = { enabled = true, position = "below" },
+    status = { enabled = true, position = "below" }, -- or "eol", or "fence": on the closing fence line (background: JupyterStatusFooter, else Normal)
     sidebar = true,                  -- under herdr: the run's status and N/M in its sidebar
     autosave = {
         draft = true,                -- draft of the unsaved buffer

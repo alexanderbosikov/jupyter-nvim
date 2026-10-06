@@ -147,6 +147,27 @@ describe("отрисовка", function()
         local marks = vim.api.nvim_buf_get_extmarks(buf, status_ui.NS, 0, -1, { details = true })
         assert.is_truthy(marks[1][4].virt_text, "в режиме eol ожидается virt_text, а не virt_lines")
     end)
+
+    it("режим fence рисует на строке закрывающего фенса, а без фенса — под ячейкой", function()
+        local st = status_ui.new({ position = "fence" })
+
+        st:render(buf, { { row = 4, body_row = 3, text = "x", group = "JupyterWinBarOk" } })
+        local mark = vim.api.nvim_buf_get_extmarks(buf, status_ui.NS, 0, -1, { details = true })[1]
+        assert.equals(3, mark[2], "строка фенса, 0-based")
+        assert.equals(0, mark[4].virt_text_win_col, "подвал с первой колонки, без обрубка черты")
+        assert.equals("JupyterWinBarOkFooter", mark[4].virt_text[1][2])
+        vim.api.nvim_set_hl(0, "JupyterStatusFooter", { bg = 0x202233 })
+        st:render(buf, { { row = 4, body_row = 3, text = "x", group = "JupyterWinBarOk" } })
+        vim.api.nvim_set_hl(0, "JupyterStatusFooter", {})
+        assert.equals(0x202233, vim.api.nvim_get_hl(0, { name = "JupyterWinBarOkFooter" }).bg,
+            "фон подвала задаётся группой JupyterStatusFooter")
+        assert.is_nil(mark[4].virt_lines)
+
+        -- percent: тело и конец ячейки — одна строка, фенса нет
+        st:render(buf, { { row = 2, body_row = 2, text = "x", group = "JupyterWinBarOk" } })
+        mark = vim.api.nvim_buf_get_extmarks(buf, status_ui.NS, 0, -1, { details = true })[1]
+        assert.is_truthy(mark[4].virt_lines, "поверх кода статус рисовать нельзя")
+    end)
 end)
 
 -- Позиция статуса при правке. Тест смотрит в extmark'и буфера, а не в промежуточную

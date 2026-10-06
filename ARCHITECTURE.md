@@ -246,6 +246,16 @@ plugin draws `virt_lines` (the agent's edit mark is the next candidate).
 
 The same investigation removed a second source of ripple: `images.lua` was sending the
 kitty deletion sequence to the terminal (23 bytes past nvim's renderer, into the same tty
+With render-markdown's `code.border = "thin"` the closing fence is not concealed but drawn as
+a `▀` bar, and a status below it hangs one line away from the cell. `status.position =
+"fence"` turns the fence line into the cell's footer: the status from column 0 on the
+window's own background (`Normal`; the `JupyterWinBar*` groups carry a winbar background
+of their own that would read as part of the code block), padded to the window's edge, priority above render-markdown's bar.
+Breaking the bar in the middle instead left a stub on the left that looked like a cut-off
+corner. The raw ```` ``` ```` is hidden under it even at the cursor — a closing fence never
+holds anything else. In the percent representation there is no fence line and it falls back
+to `below`.
+
 the TUI thread writes to) on **every** redraw of the output window, that is on every move
 between cells — even in a notebook with no images at all. Now it is sent only when there
 was something to remove; the emergency cleanup (`:JupyterClearImages`) still sends it
