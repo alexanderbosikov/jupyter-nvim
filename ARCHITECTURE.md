@@ -585,6 +585,10 @@ modules. Let prose into that list and Run All walks over the headings. Making ma
 cell therefore means **splitting the list by kind, not widening it**: a code-only list for
 whatever runs, and a full one for the snapshot, the agent and the outline.
 
+What was actually built does not need prose to be a cell at all (§7.5.1): edits go by text,
+claims hold lines, and `cells.list` stays code-only. Prose still has no id and no run
+history — it never needed either; what it lacked was a safe way to be edited.
+
 ### 7.2.1. Sorting a table
 
 `order_by` is a list of `{column, desc}` in order of importance. The sidecar does the
@@ -833,6 +837,43 @@ agent is alive is the agent doing something. A token dropped by time is remember
 `apply` can answer `expired` ("open a new claim") rather than `no_request` ("you got the
 token wrong") — two different problems for whoever is on the other end.
 
+### 7.5.1. Editing by text, claiming lines
+
+§7.5 is built around a cell: a claim names one, `apply` rewrites its body. Prose fell
+outside it entirely (§7.2.2), and so did anything spanning prose and code — "rewrite this
+section", "add a cell and a paragraph explaining it". The fix was not to make prose a cell
+but to stop needing one:
+
+- **`agent.replace(buf, old, new)`** — the edit is text, like Claude's own Edit tool. `old`
+  must occur in the buffer exactly once (`not_found`, `ambiguous` otherwise). That match is
+  the check the sha did: if the user changed the text while the agent was thinking, `old`
+  is no longer there. It holds for any piece — a word in a paragraph, a cell's body, three
+  cells and the text between them — so the agent needs one operation, not four.
+- **`agent.claim(buf, {from, to} | {text})`** — a claim on lines: two edges of one extmark,
+  moving with the text as the cell claim's do, drawn the same way (frame, signs, label).
+  Lines touching a cell are widened to the whole cell: half a cell cannot be held or run.
+  The claim does not bind the edit — `replace` finds where it lands and touches whatever
+  claim covers it (that is how the agent keeps it alive and how `отправлено` turns into
+  `агент`). `done` removes it. Cells inside a claim are refused a run, like a claimed cell.
+
+`replace` checks the document **before** writing, on a copy, and refuses three breakages
+the buffer would accept silently: an unclosed ```` ``` ```` (everything below becomes code),
+a `jncell` on two fences (two cells share one history — what copying a fence line does),
+and a `jncell` gone from a cell that is still there (its history becomes unreachable). The
+last one is told from deleting a cell by counting: ids lost may not outnumber cells
+removed. Each check compares with the document before the edit, so a document that was
+already broken is not the agent's fault. New cells without an id get one inside the same
+undo step, as `apply`'s inserts do.
+
+Why not keep the sha: a sha needs a unit to hash, and the unit was the cell. Matching `old`
+is the same question asked of exactly the text the agent read, whatever its shape. What is
+lost is the early warning — an agent-initiated edit shows its mark only at write time unless
+the agent opens `claim` first, which the skill tells it to do.
+
+`old` and `new` usually reach nvim through `--remote-expr`, where every quote and newline is
+escaping; `edit_replace_files` reads them from files instead. The cell API of §7.5 stays as it
+was, and a line claim over exactly one cell can still be `adopt`ed.
+
 ### 7.6. A prompt from the notebook
 
 §7.5 is the agent's half of the protocol: it takes a cell, thinks, writes back. This is the
@@ -869,7 +910,7 @@ own pane id from the environment (`$TMUX_PANE`, `$HERDR_PANE_ID` — set by the 
 for every pane and inherited by the agent's commands), so the file is found with no hint in
 the prompt. That is also why a session marker was not needed: "have I told this session
 already" breaks on `/clear` — same pane, empty memory — while a file read on demand does
-not care. The file holds one entry per notebook (`{ [path] = { socket, at } }`) because
+not care. The file holds one entry per notebook (`{ [path] = { socket, at, claim } }`) because
 several nvims may send to one pane; the header names the notebook as `dir/name`, and the
 agent matches on that. Entries whose socket is gone or older than a week are dropped on the
 next write, which goes through a temporary file and `rename`. If the file cannot be written,
@@ -893,19 +934,21 @@ a claim and apply it in the same second. Formally honest, and it tells the user 
 claim opened at keypress cannot be late, and it does not depend on the agent's discipline at
 all.
 
-What the plugin cannot know is what kind of edit it will be: "add a check after this" and
-"rewrite this" point at the same cell. So the claim is opened as `pending` — it holds the
-cell (and blocks running it, like any claim) but commits to nothing, `apply` on it refuses
-with `not_adopted`, and the agent settles the question with `edit_adopt(token)` or
-`edit_adopt(token, {after = true})`. The sha is taken at that moment rather than at send
-time: otherwise anything the user typed while the prompt was in flight would come back as a
-`changed` refusal of our own making.
+The claim holds what the user pointed at (§7.5.1): the cell under the cursor, the
+paragraph under it, or the selected lines — prose, cells or both, cells widened to whole.
+`:JupyterAsk!` and a cursor on a blank line claim nothing. The claim commits to no kind of
+edit: "add a check after this" and "rewrite this" point at the same cell, and the agent
+settles it by what it writes with `edit_replace`. Its number goes to the pane file with the
+address, not to the prompt: the agent needs it only for `edit_done`. A claim over exactly
+one cell can still be taken the old way, `edit_adopt` — the sha is then taken at that moment
+rather than at send time, so what the user typed while the prompt was in flight is not a
+refusal of our own making.
 
 The claim is dropped the instant sending fails. A mark with nobody behind it lies worse than
 no mark at all — the same reason the deadline exists in §7.5.
 
-One thing does get written into the document: `cellid.ensure` gives the cell under the
-cursor a `jncell` if it has none. Without an id there is nothing to name to the agent and
+One thing does get written into the document: `cellid.ensure` gives every cell in the
+claimed piece a `jncell` if it has none. Without an id there is nothing to name to the agent and
 nothing for a claim to anchor to — a fallback ordinal id belongs to a different cell as soon
 as a neighbour is inserted. The plugin does this at the first run anyway (§7.2).
 
@@ -1008,14 +1051,6 @@ modified, broken json, a new notebook's kernelspec, the netrw re-detection, a sy
 ipywidgets, interactive widgets and HTML tables; exporting output back into the `.ipynb`
 and saving a session; a remote Jupyter server over HTTP; image providers other than
 image.nvim; non-Python kernels.
-
-**Editing prose from outside.** A markdown cell is not a cell in this model (§7.2.2), so it
-has no id to name, nothing for a claim to anchor to and no sha to check. Inserting one is
-not supported either — `cells.insert` writes a code fence, and markdown put there lands
-inside ```` ``` ```` and breaks the next Run All. There is no fallback: writing to the
-`.ipynb` while the notebook is open in nvim is the one thing that
-reliably breaks the document, so an outside reader hands the prose back in its reply and the
-user places it.
 
 `text/html` in v1: if the bundle has a `text/plain`, we take it; if it is HTML only, we
 save a file and show it in the status.

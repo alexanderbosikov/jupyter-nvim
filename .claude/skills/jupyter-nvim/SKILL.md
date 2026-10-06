@@ -56,9 +56,9 @@ nvim --server "$SOCK" --remote-expr 'luaeval("table.concat(vim.api.nvim_buf_get_
 ```
 
 Per cell the snapshot gives: `id` (the `jncell` from the fence — a cell made by the plugin's
-insert/split/to-code commands or by your `edit_apply` has one from the start; one the user
-typed or pasted by hand gets it only at its first run, and until then there is no way to
-claim it: ask the user to run it, or give the change in your reply), `lang`,
+insert/split/to-code commands or by your `edit_replace` has one from the start; one the user
+typed or pasted by hand gets it at its first run or at your first `edit_replace` touching
+it), `lang`,
 `start_row`/`end_row` (the body), `span_start`/`span_end` (with the marker), `runs`,
 `stale`, `running`, `live`, `last`. Inside `last`: `run_id`, `status`, `ename`, `kind`
 (`table`/`text`/`image`/`none`), `rows`, `cols`, `schema`, `duration_ms`,
@@ -105,158 +105,141 @@ arrives with a header like this:
 ```
 [jupyter.nvim] mda-3957-review/01_eda.ipynb · ячейка a3f9 · python · строки 67–74
 вывод: .jupyter-out/01_eda/a3f9/7.parquet · table · 1204×8 · устарел: код правили после прогона
-заявка 7 уже открыта → edit_adopt(7)
 ```
 
-- The first line names the notebook as `<its directory>/<file>`; `выделено 70–72 — речь про
-  этот кусок` is added there when the user selected only part of the cell.
-- `вывод:` is relative to the notebook's directory.
-- `заявки нет: …` instead of the last line — see the end of this section.
+The first line names the notebook as `<its directory>/<file>` and the piece of it the
+prompt is about — what the user pointed at:
 
-**The full path and the socket are in your pane's file**, not in the prompt. The plugin
-writes them to `~/.local/state/nvim/jupyter/panes/<pane>.json` on every send, and the pane
-is yours — its id is in your environment. One entry per notebook (several nvims may send to
-one pane): take the one whose path ends with the name from the header, the latest `at` on a
-tie. Read it again for every `[jupyter.nvim]` prompt, do not reuse a socket from earlier in
-the session — nvim may have been restarted since.
+| first line ends with | the user | what is claimed |
+|---|---|---|
+| `ячейка a3f9 · python · строки 67–74` | had the cursor in that cell | the cell |
+| `… · выделено 70–72 — речь про этот кусок` | selected part of the cell | the cell (whole) |
+| `строки 40–74: проза и ячейка a3f9` | selected text, cells, or both; or had the cursor in a paragraph (`проза`) | those lines, cells widened to whole |
+| `весь ноутбук` | asked about the whole notebook, or the cursor was on a blank line | nothing |
+
+`вывод:` lines (`вывод a3f9:` when there are several cells) are relative to the notebook's
+directory; at most three, the rest are in the snapshot.
+
+**The full path, the socket and the claim's number are in your pane's file**, not in the
+prompt. The plugin writes them to `~/.local/state/nvim/jupyter/panes/<pane>.json` on every
+send, and the pane is yours — its id is in your environment. One entry per notebook
+(several nvims may send to one pane): take the one whose path ends with the name from the
+header, the latest `at` on a tie. Read it again for every `[jupyter.nvim]` prompt, do not
+reuse a socket or a claim from earlier in the session — nvim may have been restarted since.
 
 ```sh
 F="${XDG_STATE_HOME:-$HOME/.local/state}/nvim/jupyter/panes/${TMUX_PANE:-$HERDR_PANE_ID}.json"
-{ read -r NB; read -r SOCK; } < <(python3 -c '
+{ read -r NB; read -r SOCK; read -r CLAIM; } < <(python3 -c '
 import json, sys
 entries = json.load(open(sys.argv[1]))
-at, nb, sock = max((e["at"], nb, e["socket"]) for nb, e in entries.items() if nb.endswith("/" + sys.argv[2]))
-print(nb); print(sock)' "$F" "mda-3957-review/01_eda.ipynb")
+at, nb, e = max((e["at"], nb, e) for nb, e in entries.items() if nb.endswith("/" + sys.argv[2]))
+print(nb); print(e["socket"]); print(e.get("claim") or "")' "$F" "mda-3957-review/01_eda.ipynb")
 ```
 
-If the header itself carries `ноутбук:` and `сокет nvim:` lines, the plugin could not write
-that file — use them as they are. No file and no such lines: fall back to Step 0.
+If the header itself carries `ноутбук:`, `сокет nvim:` (and `заявка:`) lines, the plugin
+could not write that file — use them as they are. No file and no such lines: fall back to
+Step 0.
 
-**Take the claim, do not open your own.** The plugin opened it the moment the user pressed
-the key — that is the whole point of it: the mark has been sitting on that cell since
-before you read the prompt, so the user has known all along that the cell is spoken for.
-Calling `edit_begin` on that cell is refused with `claimed` (one cell, one mark) — the
-answer carries the token of the claim that holds it, and that is the one to adopt.
+**The claim is already open — do not open another one.** The plugin put the mark on that
+piece the moment the user pressed the key: it has been visible since before you read the
+prompt, and the cells inside will not run while it is there. Edit with `edit_replace`
+(below) — edits that land inside the claim keep it alive and turn its label from
+`отправлено` to `агент`. **When you are done, `edit_done($CLAIM)`** — that is what removes
+the mark and lets the cells run again. Done includes "nothing to change" and "I answered in
+words": the mark goes either way.
 
 ```sh
-# the cell is to be rewritten
-nvim --server "$SOCK" --remote-expr 'luaeval("vim.json.encode(require(\"jupyter\").edit_adopt(7, {label = \"Claude\"}))")'
-# → {"ok":true,"kind":"replace","cell_id":"a3f9","start_row":67,"end_row":74,"sha":"13306dab"}
-
-# …or a new cell goes after it ("add a completeness check after this")
-nvim --server "$SOCK" --remote-expr 'luaeval("vim.json.encode(require(\"jupyter\").edit_adopt(7, {label = \"Claude\", after = true}))")'
-# → {"ok":true,"kind":"insert","after":"a3f9","at_row":75}
+nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").edit_done($CLAIM))')"
 ```
 
-- **Which of the two it is, is in the prompt, not in the claim.** The plugin cannot know
-  whether "add a check" means rewriting the cell or appending one, so it leaves the kind
-  open and `edit_apply` refuses (`{"ok":false,"reason":"not_adopted"}`) until you say.
-- `label` is your name, shown in the mark. `title` overrides the user's own words with
-  yours ("переписываю на lazy-скан") — worth it when what you are doing turned out to be
-  something other than what the first line of the prompt says.
-- The sha is taken **at adopt time**, not when the prompt was sent: whatever the user typed
-  while the prompt was in flight is part of what you read, not a reason to reject your edit.
-- Everything afterwards is unchanged: `edit_apply(7, lines)` (or `edit_delete(7)` after
-  `{delete = true}`), `edit_touch(7)`, `edit_cancel(7)`.
-- `заявки нет` in the header means the question is not about one cell (the user asked about
-  the whole notebook, or the cursor was in prose). Nothing is marked; if you end up editing,
-  open a claim yourself with `edit_begin`.
+Whether the user wants the cell rewritten, a new cell after it, prose fixed, or nothing
+changed at all — that is in the prompt, not in the claim. The claim only says *where*.
 
 ## Editing
 
-This is the path for an edit **you** initiated — no `[jupyter.nvim]` header, no claim
-waiting for you. Two-phase: claim, then apply. In between the user keeps working, so writing by the line
-numbers from the first phase is **not allowed** — the plugin resolves them by anchor
-itself.
+**One operation for everything: `edit_replace(old, new)`.** Prose, a cell's code, several
+cells with text between them, a new cell, a deleted cell — all the same: find `old` in the
+buffer, put `new` in its place. It works like your own Edit tool:
+
+- `old` must occur in the buffer **exactly once** — `not_found` / `ambiguous` otherwise,
+  and nothing is written. That match is also the check that the user did not change this
+  text while you were thinking: if they did, `old` is no longer there. Re-read and redo.
+- `old` and `new` go in **files**, not inline in the command — no escaping of quotes and
+  newlines. A trailing newline at the end of the file is dropped.
+- Always pass `notebook = "$NB"`: the current buffer is whatever the user is looking at.
 
 ```sh
-# 1. claim: the cell is marked in the buffer (highlight + "✎ Claude"), the user sees it
-nvim --server "$SOCK" --remote-expr 'luaeval("vim.json.encode(require(\"jupyter\").edit_begin({cell = \"a3f9\", label = \"Claude\"}))")'
-# → {"ok":true,"token":1,"start_row":67,"end_row":74,"sha":"13306dab"}
-
-# 2. apply. The code comes from a file: no escaping of quotes or newlines
-cat > /tmp/cell.sql <<'EOF'
-select button_id, count(*) as events
-from events
-group by 1
-EOF
-nvim --server "$SOCK" --remote-expr 'luaeval("vim.json.encode(require(\"jupyter\").edit_apply(1, vim.fn.readfile(\"/tmp/cell.sql\")))")'
-# → {"ok":true,"kind":"replace","cell_id":"a3f9","start_row":72,"end_row":74}
+cat > /tmp/jn-old <<'TXT'
+Вывод: всё сходится.
+TXT
+cat > /tmp/jn-new <<'TXT'
+Вывод: расходится на 3% — разница в часовом поясе.
+TXT
+nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").edit_replace_files(\"/tmp/jn-old\", \"/tmp/jn-new\", {notebook = \"$NB\"}))')"
+# → {"ok":true,"start_row":42,"end_row":42}
 ```
 
-**If a claim was already opened for you, `edit_adopt` it instead of everything below.**
-See "A prompt sent from the notebook".
+**The plugin checks the document before writing** and refuses (nothing written) if after the
+edit:
 
-**The claim comes first, right after the snapshot — before you read the cell bodies, before
-you write a line of code.** That is its whole point: the user is sitting in this buffer, and
-the mark is the only thing telling them that a cell is spoken for. A claim opened one second
-before the write tells them nothing — from their side an edit still lands out of nowhere
-after a long silence.
+- a ```` ``` ```` is left unclosed (`fences`) — everything below would turn into code;
+- two fences carry the same `jncell` (`duplicate_id`) — you copied a fence line; write a new
+  cell's fence **without** `jncell`, the plugin assigns one;
+- a cell lost its `jncell` but is still there (`id_lost`) — keep fence lines as they are when
+  you change a cell's code (or include only the body in `old`).
 
-- Insert a cell: `edit_begin({after = "a3f9"})`; without `after` it goes to the end. The
-  language is inherited from the neighbouring cell. The body is written with the same
-  `edit_apply`, and its result carries the new cell's `cell_id` — the `jncell` is written
-  at insertion, so you can claim, edit or delete your own cell right away, without a run. Claim it the moment you know where the new cell goes — a ghost line appears
-  in the buffer, and the user knows something is coming.
-- Delete a cell: `edit_begin({cell = "a3f9", delete = true})`, then `edit_delete(token)`.
-  With `delete = true` the mark says `удалит ячейку` and the body turns red — the user sees
-  *which* cell is going before it goes; without it the mark says `правит`, and a cell that
-  vanishes under that label is exactly the silent edit this protocol exists to prevent. On a
-  plugin-opened claim: `edit_adopt(token, {delete = true})`. **Delete only a cell the user
-  asked you to remove** (or agreed to when you proposed it) — never as a side effect of
-  "cleaning up". The check is the same as for `edit_apply`: `changed` / `cell_gone` reject it.
-  The cell goes with its fences and one separating blank line; the user gets it back with a
-  single `u`, id and run history included.
-- Changed your mind: `edit_cancel(token)`. Open claims — `:JupyterEdits`; clear them all
-  with `!`.
+Deleting a whole cell (its fences included) is fine — its id goes with it. **Delete only
+what the user asked you to remove** (or agreed to when you proposed it) — never as a side
+effect of "cleaning up".
 
-**A claim has a lifetime.** The mark counts its own age (`✎ Claude · 2м10с`), and after five
-minutes with no word it is dropped by itself — an agent that crashed, hit a limit or went off
-to ask a question never sends a `cancel`, and a mark that outlives it lies to the user about
-the cell being taken.
+**Cells and prose in the markdown representation:**
 
-- Thinking longer than that, or going into a long step (a query, a big read, waiting for the
-  user): `edit_touch(token)` — "still here". It restarts the countdown and is the only way to
-  hold a claim open past its lifetime.
-- **Asking the user something, or dropping the task: `edit_cancel` first.** Your question may
-  hang there for an hour; the mark must not.
-- `{"ok":false,"reason":"expired"}` on apply means the claim was dropped by time, not that
-  you got the token wrong: re-read the snapshot, open a new claim, redo the edit.
-- **A cell you are holding will not run.** `exec:run_at` on it returns `nil` and the user
-  sees `запуск отклонён` — its code is about to change, so the output would be from a
-  version that is already gone. Apply the edit first, then run.
+- a code cell is ```` ```python ```` / ```` ```sql ```` … ```` ``` ````; a new one is written as
+  exactly that, with an empty line before and after, and gets its `jncell` on write;
+- everything outside fences is markdown. **One** blank line keeps text in the same markdown
+  cell, **two** split it into two cells (jupytext's rule) — a new section with its own
+  heading usually wants two;
+- never write prose inside a code fence: it is not a cell then, and Run All fails on it.
+
+**Your own claim, when you started the edit yourself** (no `[jupyter.nvim]` prompt): open it
+before you start thinking about the change, so the user sees the mark before the write, not
+at it. `text` is a piece that occurs once — the claim covers its lines, widened to whole cells.
 
 ```sh
-# still thinking — restart the countdown
-nvim --server "$SOCK" --remote-expr 'luaeval("vim.json.encode(require(\"jupyter\").edit_touch(1))")'
+nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").edit_claim({text = \"Вывод: всё сходится.\", label = \"Claude\", title = \"переписываю вывод\", notebook = \"$NB\"}))')"
+# → {"ok":true,"token":3,"kind":"range","start_row":42,"end_row":42,"cells":[]}
+# … edit_replace …, then edit_done(3)
 ```
 
-**Only a code cell can be inserted.** The language comes from the neighbour
-(`cells.insert`) and cannot be set — `edit_begin` silently ignores `lang`, `cell_type` and
-the like, still returns `ok`, and puts a plain ```` ```<neighbour's language> ```` in the
-buffer. Markdown inserted this way therefore lands inside a code fence: it never appears in
-the snapshot, and the next Run All fails on it. Prose is the user's job — ask them to add
-the heading, or give the text in your reply, or write it into the task's `.md` note. Never
-leave markdown in a code fence silently: that is a broken document, not a cosmetic detail.
+`claimed` means that piece already has a claim (its `token` is in the answer) — usually the
+one the plugin opened for the user's prompt: work in it, do not open another.
+
+**A claim has a lifetime.** The mark counts its own age, and after five minutes with no
+word it is dropped by itself — an agent that crashed or went off to ask a question never
+sends `done`, and a mark that outlives it lies to the user. Every `edit_replace` inside the
+claim restarts the countdown; thinking longer without editing, `edit_touch(token)`.
+**Asking the user something, or dropping the task: `edit_done` first** — your question may
+hang there for an hour; the mark must not.
+
+**Cells inside a claim will not run** (`запуск отклонён`): their code is about to change.
+Finish the edits, `edit_done`, then run.
+
+**Rejections must not be worked around.** Never push a rejected edit through
+`nvim_buf_set_lines` / `nvim_buf_set_text` yourself: that is exactly the case the rejection
+exists for.
+
+An agent's edit is a separate undo step (with the ids it assigned), and it moves neither the
+cursor nor insert mode. Open claims — `:JupyterEdits`; clear them all with `!`.
+
+The older cell-only calls (`edit_begin`, `edit_adopt`, `edit_apply`, `edit_delete`) still
+work, but `edit_replace` does everything they do; do not mix the two on one piece.
 
 **Never write magics into the body.** The fence carries the language, and the magic's
 parameters live in its info string: ```` ```sql magic_args="df_name=orders" ````. The plugin
 prepends `%%sql` itself (`cells.text`) and skips that when the body already starts with
 `%%` — which is why a hand-typed magic seems to work, until jupytext adds its own on save
-and the `.ipynb` ends up with `%%sql` twice. `edit_apply` writes the body only, never the
-info string: if `df_name`, `limit=0` or `cache` are needed, ask the user to run
+and the `.ipynb` ends up with `%%sql` twice. Do not edit `magic_args` in a fence line yourself — if `df_name`, `limit=0` or `cache` are needed, ask the user to run
 `:JupyterCellArgs df_name=orders` on that cell (no arguments opens the current ones).
-
-**Rejections must not be worked around.** `{"ok":false,"reason":"changed"}` means the user
-edited that cell themselves while you were thinking: re-read the snapshot, redo the edit,
-open a new claim. `cell_gone` — the cell is no longer there. `claimed` on `edit_begin` — that
-cell already has a claim (its `token` is in the answer): one cell, one mark. If it is the
-plugin's claim from the prompt header, `edit_adopt` it; if it is your own, use it or
-`edit_cancel` it first. Never push a rejected edit
-through `nvim_buf_set_lines` using the old line numbers: that is exactly the case the
-rejection exists for.
-
-An agent's edit is a separate undo step, and it moves neither the cursor nor insert mode.
 
 ## Running
 
@@ -272,7 +255,7 @@ disk, as above.
 The first run of a cell that has no `jncell` yet — one the user typed or pasted by hand —
 **modifies the document**: the plugin writes `jncell="…"` into the marker. That is expected,
 but it means "just running it" is a buffer change too. Cells made by the plugin's commands or
-by your `edit_apply` already carry their id, and running them writes nothing.
+by your `edit_replace` already carry their id, and running them writes nothing.
 
 The commands in full (for a human, not for you): `:JupyterRun`, `:JupyterRunAll`,
 `:JupyterRunBelow`, `:JupyterInterrupt`, `:JupyterRestart`, `:JupyterTable`,
@@ -288,15 +271,10 @@ client code and the rules are in `reference.md`.
 
 - **Do not write to the notebook file** (`.ipynb` or the jupytext `.md`) while it is open
   in nvim: their `:w` will overwrite your edit, and your write will overwrite what they
-  have not saved. Edits go through `edit_begin`/`edit_apply`.
-- **Existing prose cannot be edited at all, and the file is not the way round it.** In this
-  representation a markdown cell is plain text with no fence, so it is not a cell: it has no
-  id, `edit_begin`/`edit_adopt` have nothing to address, and the snapshot does not list it.
-  That part is a real limit — say so. But do **not** fall back to writing the `.ipynb` or the
-  `.md`: besides the clash above, a write to the `.ipynb` never reaches the open buffer at
-  all (it was converted by jupytext when opened), so it looks like it worked and is gone at
-  the next save. Give the prose in your reply, or say which lines to change, and let the user
-  place it.
+  have not saved. Edits go through `edit_replace`.
+- **A write to the `.ipynb` never reaches the open buffer** (it was converted by jupytext
+  when opened), so it looks like it worked and is gone at the next save. Prose is edited
+  with `edit_replace` like everything else.
 - **Do not use `--remote-send`** (sending keys): it moves the cursor, and it turns into
   garbage if the user is in insert mode. Only `--remote-expr` and the API by buffer number.
 - **Do not move the cursor.** Everything you need takes a buffer and a line; read the

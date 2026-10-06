@@ -113,20 +113,50 @@ end
 
 -- --- адрес ---
 
+---@class jupyter.AddressCell
+---@field id string
+---@field lang string
+---@field start_row integer тело ячейки, 1-based
+---@field end_row integer
+---@field output table|nil последний вывод: path, kind, rows, cols, stale
+
 ---@class jupyter.Address
 ---@field notebook string|nil путь к файлу ноутбука
 ---@field socket string|nil адрес nvim: по нему агент и читает, и пишет
----@field cell_id string|nil ячейка под курсором
----@field lang string|nil
----@field start_row integer|nil тело ячейки, 1-based
----@field end_row integer|nil
----@field selection table|nil { from, to } — что выделено внутри ячейки
----@field output table|nil последний вывод ячейки: path, kind, rows, cols, stale
+---@field from integer|nil первая строка куска, о котором промпт (с фенсами ячеек)
+---@field to integer|nil последняя
+---@field cells jupyter.AddressCell[] код-ячейки внутри куска
+---@field prose boolean в куске есть проза
+---@field selection table|nil { from, to } — что выделено, как выделил человек
+
+---Абзац прозы вокруг строки: до пустой строки или до ячейки с каждой стороны.
+---@param buf integer
+---@param row integer
+---@return integer|nil from, integer|nil to
+local function paragraph(buf, row)
+    local function is_text(r)
+        local line = vim.api.nvim_buf_get_lines(buf, r - 1, r, false)[1]
+        return line ~= nil and line:match("%S") ~= nil and cells.at(buf, r) == nil
+    end
+    if not is_text(row) then
+        return nil, nil
+    end
+    local total = vim.api.nvim_buf_line_count(buf)
+    local from, to = row, row
+    while from > 1 and is_text(from - 1) do
+        from = from - 1
+    end
+    while to < total and is_text(to + 1) do
+        to = to + 1
+    end
+    return from, to
+end
 
 ---Куда относится промпт.
 ---
----`scope = "notebook"` — про весь документ: ячейку под курсором тогда не трогаем вовсе,
----потому что вопрос не о ней. Это же происходит, если курсор стоит в прозе.
+---Кусок, о котором речь: выделение, если оно есть; иначе ячейка под курсором; иначе абзац
+---под курсором. Выделение, задевшее ячейку, расширяется до неё целиком — её нельзя ни
+---запустить, ни занять наполовину. `scope = "notebook"` — про весь документ: куска нет.
 ---@param buf integer
 ---@param opts? table store, row, selection, scope
 ---@return jupyter.Address
@@ -136,45 +166,77 @@ function M.address(buf, opts)
     local addr = {
         notebook = name ~= "" and name or nil,
         socket = vim.v.servername ~= "" and vim.v.servername or nil,
+        cells = {},
+        prose = false,
     }
     if opts.scope == "notebook" then
         return addr
     end
 
-    local row = opts.row or vim.api.nvim_win_get_cursor(0)[1]
-    local cell = cells.at(buf, row)
-    if not cell then
-        return addr
+    local from, to
+    if opts.selection then
+        from, to = opts.selection.from, opts.selection.to
+        addr.selection = { from = from, to = to }
+    else
+        local row = opts.row or vim.api.nvim_win_get_cursor(0)[1]
+        local cell = cells.at(buf, row)
+        if cell then
+            from, to = cell.span_start, cell.span_end
+        else
+            from, to = paragraph(buf, row)
+        end
+    end
+    if not from then
+        return addr -- пустая строка между ячейками: говорить не о чем, вопрос про весь ноутбук
     end
 
-    -- Единственная запись в документ. Без `jncell` ячейку не назвать: заявка ищет её по id,
-    -- и запасной номер для этого не годится — после вставки соседа он достаётся другой
-    -- ячейке. Плагин проставляет id и сам, при первом прогоне (§7.2).
-    local id = cellid.ensure(buf, cell)
-    if not id then
-        return addr
-    end
-    addr.cell_id = id
-    addr.lang = cells.lang_of(buf, cell)
-    addr.start_row, addr.end_row = cell.start_row, cell.end_row
-    addr.selection = opts.selection
+    local covered
+    from, to, covered = agent.expand(buf, from, to)
+    addr.from, addr.to = from, to
 
+    local inside = {}
     local store = opts.store
     if store then
         store:load() -- индекс мог дописаться после последнего прогона
-        local record = store:last_record(id)
-        if record then
-            addr.output = {
-                path = store:path_of(record),
-                kind = record.kind,
-                rows = record.rows,
-                cols = record.cols,
-                status = record.status,
-                -- тот же ответ, что даёт снимок и помета «код изменился» в drawer'е:
-                -- вывод относится не к тому коду, что сейчас в ячейке
-                stale = type(record.code_sha) == "string"
-                    and vim.fn.sha256(cells.text(buf, cell)):sub(1, 8) ~= record.code_sha,
+    end
+    for _, cell in ipairs(covered) do
+        for r = cell.span_start, cell.span_end do
+            inside[r] = true
+        end
+        -- Единственная запись в документ. Без `jncell` ячейку не назвать ни агенту, ни
+        -- заявке. Плагин проставляет id и сам, при первом прогоне (§7.2).
+        local id = cellid.ensure(buf, cell)
+        if id then
+            local entry = {
+                id = id,
+                lang = cells.lang_of(buf, cell),
+                start_row = cell.start_row,
+                end_row = cell.end_row,
             }
+            local record = store and store:last_record(id)
+            if record then
+                entry.output = {
+                    path = store:path_of(record),
+                    kind = record.kind,
+                    rows = record.rows,
+                    cols = record.cols,
+                    status = record.status,
+                    -- тот же ответ, что даёт снимок и помета «код изменился» в drawer'е:
+                    -- вывод относится не к тому коду, что сейчас в ячейке
+                    stale = type(record.code_sha) == "string"
+                        and vim.fn.sha256(cells.text(buf, cell)):sub(1, 8) ~= record.code_sha,
+                }
+            end
+            table.insert(addr.cells, entry)
+        end
+    end
+    for r = from, to do
+        if not inside[r] then
+            local line = vim.api.nvim_buf_get_lines(buf, r - 1, r, false)[1]
+            if line and line:match("%S") then
+                addr.prose = true
+                break
+            end
         end
     end
     return addr
@@ -201,15 +263,16 @@ end
 ---Записать адрес ноутбука в файл панели агента.
 ---
 ---В одну панель могут слать несколько nvim с разными ноутбуками, поэтому внутри файла —
----запись на ноутбук: `{ [путь] = { socket, at } }`. Агент находит свою по имени из шапки,
+---запись на ноутбук: `{ [путь] = { socket, at, claim } }`. Агент находит свою по имени из шапки,
 ---при совпадении имён берёт самую свежую `at`. Чужие записи сохраняются; выбрасываются
 ---только те, чей nvim закрыт (сокета больше нет) или которые старше `PANE_TTL`. Запись
 ---через временный файл и `rename`: два nvim, пишущие разом, не оставят полфайла.
 ---@param pane_id string
 ---@param addr jupyter.Address
 ---@param now? integer
+---@param claim? integer номер заявки этого промпта: агенту он нужен, чтобы её снять
 ---@return boolean записано
-function M.remember(pane_id, addr, now)
+function M.remember(pane_id, addr, now, claim)
     if type(pane_id) ~= "string" or pane_id == "" or not addr.notebook or not addr.socket then
         return false
     end
@@ -232,7 +295,7 @@ function M.remember(pane_id, addr, now)
             kept[notebook] = e
         end
     end
-    kept[addr.notebook] = { socket = addr.socket, at = now }
+    kept[addr.notebook] = { socket = addr.socket, at = now, claim = claim }
 
     vim.fn.mkdir(dir, "p")
     local tmp = ("%s.%d.tmp"):format(path, vim.uv.os_getpid())
@@ -258,13 +321,67 @@ function M.short_name(notebook)
     return vim.fn.fnamemodify(notebook, ":h:t") .. "/" .. vim.fn.fnamemodify(notebook, ":t")
 end
 
----Шапка промпта: где ячейка, что с ней и какая заявка ждёт агента.
+---Единственная ячейка куска, если кусок — ровно она.
+---@param addr jupyter.Address
+---@return string|nil
+function M.cell_of(addr)
+    local list = addr.cells or {}
+    return (#list == 1 and not addr.prose) and list[1].id or nil
+end
+
+---О чём промпт, двумя-тремя словами: для заголовка окна и уведомления.
+---@param addr jupyter.Address
+---@return string
+function M.what(addr)
+    local id = M.cell_of(addr)
+    if id then
+        return "ячейка " .. id
+    end
+    if addr.from then
+        return ("строки %d–%d"):format(addr.from, addr.to)
+    end
+    return "весь ноутбук"
+end
+
+---Сколько выводов ячеек называть в шапке. Остальные — в снимке: шапка, которая длиннее
+---промпта, читается хуже, чем один вызов снимка.
+M.MAX_OUTPUTS = 3
+
+---Вывод ячейки одной строкой.
+---@param addr jupyter.Address
+---@param o table
+---@return string
+local function describe_output(addr, o)
+    local path = o.path
+    if path and addr.notebook then
+        -- от каталога ноутбука: полный путь агент соберёт сам. Через resolve — на macOS
+        -- /var и /private/var один каталог, а строки разные
+        local dir = vim.fn.resolve(vim.fn.fnamemodify(addr.notebook, ":h")) .. "/"
+        local full = vim.fn.resolve(path)
+        if full:sub(1, #dir) == dir then
+            path = full:sub(#dir + 1)
+        end
+    end
+    local parts = { path or "нет на диске" }
+    if o.kind then
+        table.insert(parts, o.kind)
+    end
+    if o.rows and o.cols then
+        table.insert(parts, ("%d×%d"):format(o.rows, o.cols))
+    end
+    if o.stale then
+        table.insert(parts, "устарел: код правили после прогона")
+    end
+    return table.concat(parts, " · ")
+end
+
+---Шапка промпта: о каком куске ноутбука речь и что с его ячейками.
 ---
 ---Пишется словами, а не JSON: это первый текст, который он читает, и человек читает его
 ---тоже — в журнале промптов и в окне сессии. Поэтому в ней только то, что меняется от
----промпта к промпту. Как обращаться с заявкой — в скилле `jupyter-nvim`, его триггер —
----`[jupyter.nvim]` в начале. Полный путь и сокет — в файле панели (`remember`); если его
----записать не удалось (`remembered = false`), они едут в шапке, как раньше.
+---промпта к промпту. Как править — в скилле `jupyter-nvim`, его триггер — `[jupyter.nvim]`
+---в начале. Полный путь, сокет и номер заявки — в файле панели (`remember`); если его
+---записать не удалось (`remembered = false`), они едут в шапке.
 ---@param addr jupyter.Address
 ---@param token integer|nil номер открытой заявки
 ---@param opts? table remembered: адрес лежит в файле панели
@@ -272,19 +389,32 @@ end
 function M.header(addr, token, opts)
     opts = opts or {}
     local first = { "[jupyter.nvim] " .. M.short_name(addr.notebook) }
-    if addr.cell_id then
-        table.insert(first, "ячейка " .. addr.cell_id)
-        if addr.lang then
-            table.insert(first, addr.lang)
+    local list = addr.cells or {}
+    if not addr.from then
+        table.insert(first, "весь ноутбук")
+    elseif #list == 1 and not addr.prose then
+        local c = list[1]
+        table.insert(first, "ячейка " .. c.id)
+        table.insert(first, c.lang)
+        table.insert(first, ("строки %d–%d"):format(c.start_row, c.end_row))
+        -- выделение всей ячейки ничего не добавляет к её строкам
+        local sel = addr.selection
+        if sel and (sel.from > c.start_row or sel.to < c.end_row) then
+            table.insert(first, ("выделено %d–%d — речь про этот кусок"):format(sel.from, sel.to))
         end
-        if addr.start_row then
-            table.insert(first, ("строки %d–%d"):format(addr.start_row, addr.end_row))
+    else
+        local what = {}
+        if addr.prose then
+            table.insert(what, "проза")
         end
-    end
-    -- выделение всей ячейки ничего не добавляет к её строкам
-    local sel = addr.selection
-    if sel and not (sel.from == addr.start_row and sel.to == addr.end_row) then
-        table.insert(first, ("выделено %d–%d — речь про этот кусок"):format(sel.from, sel.to))
+        if #list > 0 then
+            local ids = {}
+            for _, c in ipairs(list) do
+                table.insert(ids, c.id)
+            end
+            table.insert(what, (#ids == 1 and "ячейка " or "ячейки ") .. table.concat(ids, ", "))
+        end
+        table.insert(first, ("строки %d–%d: %s"):format(addr.from, addr.to, table.concat(what, " и ")))
     end
     local out = { table.concat(first, " · ") }
 
@@ -293,37 +423,25 @@ function M.header(addr, token, opts)
         if addr.socket then
             table.insert(out, "сокет nvim: " .. addr.socket)
         end
+        if token then
+            table.insert(out, ("заявка: %d"):format(token))
+        end
     end
 
-    if addr.output then
-        local o = addr.output
-        local path = o.path
-        if path and addr.notebook then
-            -- от каталога ноутбука: полный путь агент соберёт сам. Через resolve — на macOS
-            -- /var и /private/var один каталог, а строки разные
-            local dir = vim.fn.resolve(vim.fn.fnamemodify(addr.notebook, ":h")) .. "/"
-            local full = vim.fn.resolve(path)
-            if full:sub(1, #dir) == dir then
-                path = full:sub(#dir + 1)
+    local shown, more = 0, 0
+    for _, c in ipairs(list) do
+        if c.output then
+            if shown < M.MAX_OUTPUTS then
+                local label = #list == 1 and "вывод: " or ("вывод %s: "):format(c.id)
+                table.insert(out, label .. describe_output(addr, c.output))
+                shown = shown + 1
+            else
+                more = more + 1
             end
         end
-        local parts = { "вывод: " .. (path or "нет на диске") }
-        if o.kind then
-            table.insert(parts, o.kind)
-        end
-        if o.rows and o.cols then
-            table.insert(parts, ("%d×%d"):format(o.rows, o.cols))
-        end
-        if o.stale then
-            table.insert(parts, "устарел: код правили после прогона")
-        end
-        table.insert(out, table.concat(parts, " · "))
     end
-
-    if token then
-        table.insert(out, ("заявка %d уже открыта → edit_adopt(%d)"):format(token, token))
-    else
-        table.insert(out, "заявки нет: вопрос не про одну ячейку; править — своей заявкой, edit_begin")
+    if more > 0 then
+        table.insert(out, ("ещё %d выводов — в снимке"):format(more))
     end
     return out
 end
@@ -354,7 +472,7 @@ end
 ---@param buf integer
 ---@param prompt string
 ---@param opts? table store, row, selection, scope, label
----@return table|nil { token, pane, how, cell_id } — либо nil
+---@return table|nil { token, pane, how, cell_id, what } — либо nil
 ---@return string|nil причина отказа
 ---@return jupyter.Pane[]|nil кандидаты, если выбирать должен человек
 function M.send(buf, prompt, opts)
@@ -378,12 +496,13 @@ function M.send(buf, prompt, opts)
         return nil, how, candidates
     end
 
-    -- Заявка до отправки — весь смысл упражнения. Ячейки под курсором может не быть
-    -- (вопрос про ноутбук целиком) — тогда метить нечего, и это не ошибка.
+    -- Заявка до отправки — весь смысл упражнения. Куска может не быть (вопрос про
+    -- ноутбук целиком) — тогда метить нечего, и это не ошибка.
     local token
-    if addr.cell_id then
-        local claim = agent.begin(buf, {
-            cell = addr.cell_id,
+    if addr.from then
+        local claim = agent.claim(buf, {
+            from = addr.from,
+            to = addr.to,
             pending = true,
             title = prompt,
             label = opts.label,
@@ -394,7 +513,7 @@ function M.send(buf, prompt, opts)
         token = claim.token
     end
 
-    local remembered = M.remember(id, addr)
+    local remembered = M.remember(id, addr, nil, token)
     local ok, err = pane.send(id, M.compose(addr, token, prompt, { remembered = remembered }))
     if not ok then
         if token then
@@ -406,12 +525,14 @@ function M.send(buf, prompt, opts)
     M.save_state(opts.store, { pane = id, notebook = addr.notebook })
     M.record(opts.store, {
         at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-        cell_id = addr.cell_id,
+        cell_id = M.cell_of(addr),
+        from = addr.from,
+        to = addr.to,
         token = token,
         pane = id,
         prompt = prompt,
     })
-    return { token = token, pane = id, how = how, cell_id = addr.cell_id }
+    return { token = token, pane = id, how = how, cell_id = M.cell_of(addr), what = M.what(addr) }
 end
 
 ---Привязать ноутбук к панели агента руками: когда кандидатов несколько или нужен не тот,
@@ -464,7 +585,7 @@ function M.open(buf, opts)
 
     local width = math.min(M.MAX_WIDTH, math.max(30, math.floor(vim.o.columns * M.WIDTH)))
     local height = math.max(3, opts.height or M.HEIGHT)
-    local title = addr.cell_id and (" спросить · ячейка " .. addr.cell_id .. " ") or " спросить · весь ноутбук "
+    local title = " спросить · " .. M.what(addr) .. " "
     local win = vim.api.nvim_open_win(prompt_buf, true, {
         relative = "editor",
         width = width,

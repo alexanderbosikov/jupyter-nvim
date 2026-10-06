@@ -186,7 +186,9 @@ Ordered by benefit against risk.
    is "first" when both were pasted, and whether to rewrite silently or say so once. About
    30 lines plus a test; `cellid.used` already walks the buffer.
 
-7. **A claim on a cell with no id.** Cells made by the plugin's commands and by an agent's
+7. **A claim on a cell with no id** — mostly moot since item 10: `edit_replace` edits a
+   cell with no id and gives it one, and `edit_claim({text})` marks it. Left: the old
+   `edit_begin` path. Cells made by the plugin's commands and by an agent's
    insert get their `jncell` at once (§7.2), but one typed or pasted by hand has none until
    its first run, so an agent can neither edit nor delete it: the snapshot gives such a
    cell no `id` at all, only its `index`. `edit_begin({index = N, sha = …})` would find the
@@ -197,7 +199,8 @@ Ordered by benefit against risk.
    snapshot has to start returning the body's sha for cells without an id — today it has
    none. About an hour.
 
-8. **An atomic batch of edits.** Several claims can be open at once, but each is applied
+8. **An atomic batch of edits** — mostly moot since item 10: one `edit_replace` over a
+   stretch of several cells is one check and one undo step. Left: the old cell API. Several claims can be open at once, but each is applied
    by its own call and is its own undo step: five edits cost five `u`, and a `changed` on
    one leaves the others already applied — a half-rewritten notebook. `edit_batch` would
    check every claim first (anchor + sha) and touch nothing if one fails, then apply bottom
@@ -209,35 +212,14 @@ Ordered by benefit against risk.
    `.ipynb` (the blank line `pad_eof` adds as a hook for the label) — **done** along with
    item 3: the writer does not pass trailing blank lines to jupytext (§7.8).
 
-10. **Markdown as a first-class cell.** §7.2.2 has the measurements: jupytext's
-    `<!-- #region jncell=… -->` gives prose an id and survives the round trip. What stands in
-    the way is `cells.list`, so the job is splitting it by kind — a code-only list for
-    whatever runs, a full one for the snapshot, the agent and the outline. It closes editing
-    prose from outside, inserting a whole section, and the "markdown inside a code fence"
-    trap in one go.
+10. **Editing prose and mixed pieces** — **done** 2026-10-06, without making markdown a cell
+    (§7.5.1): `edit_replace(old, new)` edits any text by an exact unique match and checks
+    fences and ids before writing; `edit_claim` / `:JupyterAsk` hold lines (a paragraph, a
+    cell, a selection of both) instead of one cell; `edit_done` releases. The claim's number
+    went from the prompt header to the pane file. What remains of the original idea — prose
+    with an id and a history (`<!-- #region jncell=… -->`, §7.2.2) — has no use case yet.
 
-    A cheaper route, worked out on 2026-10-06, makes prose editable without making it a cell:
-    - **One primitive, `replace(old, new)`, over the whole buffer**, for code and prose alike,
-      like Claude's own Edit. `old` must match exactly once, and that match does the job the
-      sha does now ("nobody touched it"). After the write the plugin re-parses the buffer and
-      rolls the edit back if the fences no longer balance or an id disappeared or appeared
-      twice (deleting a cell on purpose is the exception). A new cell with no id just gets
-      one. The edit is checked and written in one tick, so there is no race.
-    - **A claim on a range, as in [99](https://github.com/ThePrimeagen/99).** `:JupyterAsk`
-      over a visual selection puts two extmarks around it, and `apply` writes between them.
-      That gives a paragraph the same "agent is working here" mark a cell has today. 99 has
-      no check at all and silently overwrites anything typed inside the range, so ours keeps
-      the text match.
-    - **What stays out:** the mark when the agent decides on its own to change a paragraph
-      (the plugin learns where the edit goes only when it is written), and history for
-      prose. Two blank lines in `new` are read by jupytext as a cell boundary.
-    - Raw `nvim --remote-expr` with no plugin is not the answer: nobody would check the ids
-      and fences, and each agent would carry its own Lua.
-
-    About 3–4 hours with tests, plus the `jupyter-nvim` skill. `begin`/`adopt`/`apply` can stay
-    for compatibility.
-
-11. **Preview before an agent's edit lands.** Today `edit_apply` writes straight away; the
+11. **Preview before an agent's edit lands.** Today `edit_replace` writes straight away; the
     claim's mark is the only warning. A mode where the edit is shown as a diff over the cell
     and lands on a key would suit edits the user wants to vet. Two to three hours.
 

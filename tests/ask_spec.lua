@@ -77,33 +77,54 @@ describe("адрес промпта", function()
     before_each(enter)
     after_each(leave)
 
-    it("называет ноутбук, сокет и ячейку под курсором", function()
+    it("курсор в ячейке — кусок это она, с фенсами", function()
         local addr = ask.address(buf, { row = 4 })
         assert.equals(nb, addr.notebook)
-        assert.equals("a3f9", addr.cell_id)
-        assert.equals("python", addr.lang)
-        assert.equals(4, addr.start_row)
-        assert.equals(4, addr.end_row)
+        assert.equals(3, addr.from)
+        assert.equals(5, addr.to)
+        assert.equals(1, #addr.cells)
+        assert.equals("a3f9", addr.cells[1].id)
+        assert.equals("python", addr.cells[1].lang)
+        assert.equals(4, addr.cells[1].start_row)
+        assert.is_false(addr.prose)
+        assert.equals("a3f9", ask.cell_of(addr))
     end)
 
     it("ячейке без jncell проставляет его: иначе её нечем назвать", function()
         local addr = ask.address(buf, { row = 8 })
-        assert.is_truthy(addr.cell_id)
+        local id = addr.cells[1].id
+        assert.is_truthy(id)
         local marker = vim.api.nvim_buf_get_lines(buf, 6, 7, false)[1]
-        assert.is_truthy(marker:match('jncell="' .. addr.cell_id .. '"'), "id уехал в документ")
-        -- а раз уехал — заявка эту ячейку теперь находит
-        assert.is_true(agent.begin(buf, { cell = addr.cell_id }).ok)
+        assert.is_truthy(marker:match('jncell="' .. id .. '"'), "id уехал в документ")
+        assert.is_true(agent.begin(buf, { cell = id }).ok)
     end)
 
-    it("в прозе ячейки нет — и это не ошибка", function()
+    it("курсор в прозе — кусок это абзац под ним", function()
         local addr = ask.address(buf, { row = 1 })
-        assert.is_nil(addr.cell_id)
-        assert.equals(nb, addr.notebook)
+        assert.equals(1, addr.from)
+        assert.equals(1, addr.to)
+        assert.is_true(addr.prose)
+        assert.equals(0, #addr.cells)
     end)
 
-    it("вопрос про весь ноутбук ячейку под курсором не трогает", function()
+    it("курсор на пустой строке — куска нет, вопрос про весь ноутбук", function()
+        local addr = ask.address(buf, { row = 6 })
+        assert.is_nil(addr.from)
+    end)
+
+    it("выделение прозы и ячейки расширяется до ячейки целиком", function()
+        local addr = ask.address(buf, { selection = { from = 1, to = 4 } })
+        assert.equals(1, addr.from)
+        assert.equals(5, addr.to, "до закрывающего фенса")
+        assert.is_true(addr.prose)
+        assert.equals("a3f9", addr.cells[1].id)
+        assert.is_nil(ask.cell_of(addr), "это не одна ячейка")
+    end)
+
+    it("вопрос про весь ноутбук куска не берёт", function()
         local addr = ask.address(buf, { row = 4, scope = "notebook" })
-        assert.is_nil(addr.cell_id)
+        assert.is_nil(addr.from)
+        assert.equals(0, #addr.cells)
     end)
 
     it("вывод ячейки берёт из истории и говорит, что он устарел", function()
@@ -111,9 +132,10 @@ describe("адрес промпта", function()
             row = 4,
             store = fake_store({ run_id = 7, kind = "table", rows = 1204, cols = 8, code_sha = "деадбиф" }),
         })
-        assert.equals("table", addr.output.kind)
-        assert.equals(1204, addr.output.rows)
-        assert.is_true(addr.output.stale, "код правили после прогона")
+        local output = addr.cells[1].output
+        assert.equals("table", output.kind)
+        assert.equals(1204, output.rows)
+        assert.is_true(output.stale, "код правили после прогона")
     end)
 end)
 
@@ -124,45 +146,46 @@ describe("шапка промпта", function()
     local function header(addr, token, opts)
         return table.concat(ask.header(addr, token, opts), "\n")
     end
+    local function dirname()
+        return vim.fn.fnamemodify(dir, ":t")
+    end
 
-    it("первой строкой — метка плагина, ноутбук с каталогом и ячейка", function()
+    it("одна ячейка — её id, язык и строки тела", function()
         local first = ask.header(ask.address(buf, { row = 4 }), 7, { remembered = true })[1]
-        assert.equals(
-            "[jupyter.nvim] " .. vim.fn.fnamemodify(dir, ":t") .. "/01_eda.ipynb · ячейка a3f9 · python · строки 4–4",
-            first
-        )
+        assert.equals("[jupyter.nvim] " .. dirname() .. "/01_eda.ipynb · ячейка a3f9 · python · строки 4–4", first)
     end)
 
-    it("адрес в файле панели — полного пути и сокета в шапке нет", function()
+    it("проза и ячейка — строки куска и что в нём", function()
+        local first = ask.header(ask.address(buf, { selection = { from = 1, to = 4 } }), 7, { remembered = true })[1]
+        assert.equals("[jupyter.nvim] " .. dirname() .. "/01_eda.ipynb · строки 1–5: проза и ячейка a3f9", first)
+    end)
+
+    it("без куска — весь ноутбук, и ни слова о заявке", function()
+        local text = header(ask.address(buf, { row = 4, scope = "notebook" }), nil, { remembered = true })
+        assert.is_truthy(text:find("весь ноутбук", 1, true))
+        assert.is_nil(text:find("заявк", 1, true))
+    end)
+
+    it("адрес в файле панели — ни пути, ни сокета, ни номера заявки в шапке", function()
         local addr = ask.address(buf, { row = 4 })
         addr.socket = "/tmp/nvim.1.0"
-        local text = header(addr, 7, { remembered = true })
-        assert.is_nil(text:find(nb, 1, true))
-        assert.is_nil(text:find("сокет", 1, true))
+        local lines = ask.header(addr, 7, { remembered = true })
+        assert.equals(1, #lines)
     end)
 
-    it("файл панели не записался — путь и сокет едут в шапке", function()
+    it("файл панели не записался — путь, сокет и заявка едут в шапке", function()
         local addr = ask.address(buf, { row = 4 })
         addr.socket = "/tmp/nvim.1.0"
         local text = header(addr, 7, { remembered = false })
         assert.is_truthy(text:find("ноутбук: " .. nb, 1, true))
         assert.is_truthy(text:find("сокет nvim: /tmp/nvim.1.0", 1, true))
-    end)
-
-    it("заявку называет одной строкой: как с ней обращаться — в скилле", function()
-        local text = header(ask.address(buf, { row = 4 }), 7, { remembered = true })
-        assert.is_truthy(text:match("заявка 7 уже открыта → edit_adopt%(7%)"))
-        assert.equals(2, #ask.header(ask.address(buf, { row = 4 }), 7, { remembered = true }))
-    end)
-
-    it("без заявки говорит об этом прямо", function()
-        local text = header(ask.address(buf, { row = 1 }), nil)
-        assert.is_truthy(text:match("заявки нет"))
-        assert.is_nil(text:match("edit_adopt"))
+        assert.is_truthy(text:find("заявка: 7", 1, true))
     end)
 
     it("выделение части ячейки называет, выделение всей — нет", function()
-        local addr = { notebook = nb, cell_id = "a3f9", lang = "python", start_row = 10, end_row = 20 }
+        local addr = { notebook = nb, from = 9, to = 21, prose = false, cells = {
+            { id = "a3f9", lang = "python", start_row = 10, end_row = 20 },
+        } }
         addr.selection = { from = 12, to = 14 }
         assert.is_truthy(header(addr, 1, { remembered = true }):match("выделено 12–14"))
         addr.selection = { from = 10, to = 20 }
@@ -174,8 +197,19 @@ describe("шапка промпта", function()
             row = 4,
             store = fake_store({ run_id = 7, kind = "table", rows = 42, cols = 10 }),
         })
+        assert.is_truthy(header(addr, 1, { remembered = true }):find("вывод: runs/7.parquet · table · 42×10", 1, true))
+    end)
+
+    it("выводов много — называет три, остальные отсылает в снимок", function()
+        local addr = { notebook = nb, from = 1, to = 50, prose = true, cells = {} }
+        for i = 1, 5 do
+            table.insert(addr.cells, { id = "c" .. i, lang = "python", start_row = i * 10, end_row = i * 10 + 1,
+                output = { path = dir .. "/o" .. i .. ".parquet", kind = "table" } })
+        end
         local text = header(addr, 1, { remembered = true })
-        assert.is_truthy(text:find("вывод: runs/7.parquet · table · 42×10", 1, true))
+        assert.is_truthy(text:find("вывод c3: o3.parquet", 1, true))
+        assert.is_nil(text:find("вывод c4", 1, true))
+        assert.is_truthy(text:find("ещё 2 выводов", 1, true))
     end)
 end)
 
@@ -235,7 +269,7 @@ describe("отправка", function()
 
         assert.is_truthy(res.token)
         assert.equals("a3f9", res.cell_id)
-        assert.is_truthy(sent:match("заявка " .. res.token))
+        assert.is_nil(sent:find("заявка", 1, true), "номер заявки — в файле панели, не в шапке")
         assert.is_truthy(sent:match("перепиши на polars"), "сам промпт на месте")
         assert.equals(1, #agent.list(buf), "метка стоит в буфере")
     end)
@@ -280,6 +314,7 @@ describe("отправка", function()
         local file = ask.PANES_DIR .. "/%19.json"
         local entries = vim.json.decode(table.concat(vim.fn.readfile(file), "\n"))
         assert.equals(vim.v.servername, entries[nb].socket)
+        assert.equals(agent.list(buf)[1].token, entries[nb].claim, "агенту — номер заявки, чтобы её снять")
         assert.is_nil(sent:find("сокет", 1, true))
         assert.is_nil(sent:find("ноутбук: ", 1, true))
     end)
@@ -289,7 +324,7 @@ describe("отправка", function()
 
         assert.is_nil(res.token)
         assert.equals(0, #agent.list(buf), "метить нечего: вопрос не про ячейку")
-        assert.is_truthy(sent:match("заявки нет"))
+        assert.is_truthy(sent:find("весь ноутбук", 1, true))
     end)
 
     it("несохранённому буферу отказывает: адресовать нечего", function()

@@ -81,11 +81,13 @@ M.PRIORITY = 5000
 ---@class jupyter.EditRequest
 ---@field token integer
 ---@field buf integer
----@field kind "replace"|"insert"
+---@field kind "replace"|"insert"|"pending"|"range"
 ---@field intent "delete"|nil заявка держит ячейку, чтобы удалить её, а не переписать
 ---@field cell_id string|nil id ячейки: для replace — какой, для insert — после какой
 ---@field by_id boolean id настоящий (из текста), а не запасной от номера ячейки
 ---@field sha string|nil тело ячейки на момент заявки
+---@field fence integer|nil строк закрывающего фенса за отмеченной областью
+---@field lead integer|nil строк открывающего фенса перед ней (только у "range")
 ---@field mark integer extmark: область правки или точка вставки
 ---@field signs integer[] extmark'и знаков в signcolumn, по одному на строку заявки
 ---@field label string
@@ -664,15 +666,19 @@ function M.adopt(token, opts)
         return fail("no_buffer", "буфер закрыт")
     end
 
+    if req.kind == "range" and not req.cell_id then
+        return fail("not_a_cell", "заявка держит не одну ячейку, а кусок текста: правь его edit_replace, сними edit_done")
+    end
     local cell = req.cell_id and cellid.find(req.buf, req.cell_id) or nil
     if not cell then
         forget(req)
         return fail("cell_gone", "ячейка исчезла из документа")
     end
+    req.lead = nil
 
     if opts.label then
         req.label = opts.label
-    elseif req.kind == "pending" then
+    elseif req.kind == "pending" or req.label == M.LABEL_SENT then
         req.label = M.LABEL -- имени не назвал, но заявку взял: «отправлено» больше не правда
     end
     if opts.title ~= nil then
@@ -730,7 +736,7 @@ function M.apply(token, lines)
         requests[token] = nil
         return fail("no_buffer", "буфер закрыт")
     end
-    if req.kind == "pending" then
+    if req.kind == "pending" or req.kind == "range" then
         -- заявку открыл плагин, и он не знает, переписывают ячейку или дописывают новую:
         -- это сказано в промпте. Отказ, а не догадка — догадка молча перепишет код
         return fail("not_adopted", "заявка не взята: позови edit_adopt, он вернёт границы и sha")
@@ -838,7 +844,7 @@ function M.delete(token)
         requests[token] = nil
         return fail("no_buffer", "буфер закрыт")
     end
-    if req.kind == "pending" then
+    if req.kind == "pending" or req.kind == "range" then
         return fail("not_adopted", "заявка не взята: позови edit_adopt(token, {delete = true})")
     end
     if req.kind ~= "replace" then
@@ -948,6 +954,337 @@ function M.reanchor(buf)
     end
 end
 
+-- --- заявка на кусок текста и правка по тексту ---
+--
+-- Ячейка — не единственное, что правит агент: абзац прозы, раздел из текста и двух
+-- ячеек, несколько ячеек подряд. Заявка `range` держит строки, а не ячейку: два края
+-- extmark'а, которые едут вместе с текстом, как и у заявки на ячейку. Рисуется так же.
+--
+-- Правка к ней не привязана. `replace(old, new)` ищет `old` во всём буфере: совпадение
+-- ровно одно — пишем, иначе отказ. Само совпадение и отвечает на «не трогали ли текст,
+-- пока агент думал» — то, на что у ячейки уходит sha. Номер заявки правке не нужен: если
+-- правка легла внутрь заявки, заявка продлевается сама. Снимает её `done`.
+
+---Строки, которые держит заявка: с фенсами, если она начинается или кончается ячейкой.
+---@param req jupyter.EditRequest
+---@return integer|nil from, integer|nil to 1-based, включительно
+local function claimed_rows(req)
+    local pos = vim.api.nvim_buf_get_extmark_by_id(req.buf, M.NS, req.mark, { details = true })
+    if not pos[1] then
+        return nil, nil
+    end
+    local first = pos[1] + 1
+    local last = (pos[3] and pos[3].end_row) or pos[1] + 1
+    return first - (req.lead or 0), last + (req.fence or 0)
+end
+
+---Заявка, пересекающая эти строки.
+---@param buf integer
+---@param from integer
+---@param to integer
+---@return jupyter.EditRequest|nil
+local function claim_over_rows(buf, from, to)
+    for _, req in pairs(requests) do
+        if req.buf == buf and req.kind ~= "insert" then
+            local a, b = claimed_rows(req)
+            if a and a <= to and b >= from then
+                return req
+            end
+        end
+    end
+    return nil
+end
+
+---Расширить строки до целых ячеек: половина ячейки под заявкой — это вся ячейка (её
+---нельзя запустить наполовину), а метке нужны её настоящие края.
+---@param buf integer
+---@param from integer
+---@param to integer
+---@return integer from, integer to, jupyter.Cell[] ячейки внутри
+function M.expand(buf, from, to)
+    local covered = {}
+    for _, cell in ipairs(cells.list(buf)) do
+        if cell.span_start <= to and cell.span_end >= from then
+            table.insert(covered, cell)
+            from = math.min(from, cell.span_start)
+            to = math.max(to, cell.span_end)
+        end
+    end
+    return from, to, covered
+end
+
+---Где в буфере `needle`: сколько раз и где первое вхождение.
+---
+---Текст склеивается через `\n`, поэтому `old` может тянуться через сколько угодно строк.
+---Перекрывающиеся вхождения считаются: «ааа» в «аааа» — два, и это честный отказ.
+---@param lines string[]
+---@param needle string
+---@return integer count, integer|nil start, integer|nil stop байтовые смещения, 1-based
+local function find_text(lines, needle)
+    local text = table.concat(lines, "\n")
+    local count, first_s, first_e, init = 0, nil, nil, 1
+    while true do
+        local s, e = text:find(needle, init, true)
+        if not s then
+            break
+        end
+        count = count + 1
+        if count == 1 then
+            first_s, first_e = s, e
+        end
+        init = s + 1
+    end
+    return count, first_s, first_e
+end
+
+---Смещение в склеенном тексте → строка и колонка (0-based, как у nvim_buf_set_text).
+---@param lines string[]
+---@param offset integer 1-based
+---@return integer row, integer col
+local function pos_of(lines, offset)
+    local acc = 0
+    for i, line in ipairs(lines) do
+        if offset <= acc + #line + 1 then
+            return i - 1, offset - acc - 1
+        end
+        acc = acc + #line + 1
+    end
+    return #lines - 1, #(lines[#lines] or "")
+end
+
+---Найти единственное вхождение текста: строки, которые оно задевает.
+---@param buf integer
+---@param needle string
+---@return table|nil { from, to, srow, scol, erow, ecol } — либо nil и отказ
+---@return table|nil
+local function locate_text(buf, needle)
+    if type(needle) ~= "string" or needle == "" then
+        return nil, fail("empty_old", "пустой old: искать нечего")
+    end
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local count, s, e = find_text(lines, needle)
+    if count == 0 then
+        return nil, fail("not_found", "текста нет в буфере: его поменяли — перечитай и повтори")
+    end
+    if count > 1 then
+        local res = fail("ambiguous", ("текст встречается %d раз: возьми кусок длиннее"):format(count))
+        res.count = count
+        return nil, res
+    end
+    local srow, scol = pos_of(lines, s)
+    local erow, ecol = pos_of(lines, e + 1)
+    return { lines = lines, from = srow + 1, to = erow + 1, srow = srow, scol = scol, erow = erow, ecol = ecol }
+end
+
+---Открыть заявку на строки.
+---
+---Её открывает и плагин, когда промпт уходит из nvim (`pending = true`: метка «отправлено»
+---до того, как агент отзовётся), и агент, который сам решил править кусок и хочет, чтобы
+---человек видел это до записи, а не в момент.
+---@param buf integer
+---@param opts table from, to — строки (1-based); или text — кусок, который встречается в
+---буфере ровно один раз; label, title, pending
+---@return table ok, token, start_row, end_row, cells (id ячеек внутри)
+function M.claim(buf, opts)
+    opts = opts or {}
+    if not vim.api.nvim_buf_is_valid(buf) then
+        return fail("no_buffer", "буфера нет")
+    end
+    local from, to = tonumber(opts.from), tonumber(opts.to)
+    if opts.text then
+        local found, err = locate_text(buf, opts.text)
+        if not found then
+            return err
+        end
+        from, to = found.from, found.to
+    end
+    local total = vim.api.nvim_buf_line_count(buf)
+    if not from or not to or from < 1 or to < from or to > total then
+        return fail("bad_range", "строки вне буфера")
+    end
+
+    local covered
+    from, to, covered = M.expand(buf, from, to)
+    local holder = claim_over_rows(buf, from, to)
+    if holder then
+        local res = fail("claimed", ("кусок уже держит заявка %d «%s»"):format(holder.token, holder.label))
+        res.token = holder.token
+        return res
+    end
+
+    last_token = last_token + 1
+    local now = vim.uv.now()
+    local req = {
+        token = last_token,
+        buf = buf,
+        kind = "range",
+        label = opts.label or (opts.pending and M.LABEL_SENT or M.LABEL),
+        title = title_of(opts.title),
+        opened_at = now,
+        touched_at = now,
+        ttl_ms = tonumber(opts.ttl_ms) or M.TTL_MS,
+    }
+    -- Метка рисуется по телу, как у заявки на ячейку: открывающий фенс остаётся над
+    -- рамкой, закрывающий — под ней (его прячет render-markdown, и подпись должна
+    -- встать под него, а не на скрытую строку).
+    local first, last = covered[1], covered[#covered]
+    req.lead = (first and first.span_start == from) and (first.start_row - first.span_start) or 0
+    req.fence = (last and last.span_end == to) and (last.span_end - last.end_row) or 0
+
+    -- кусок — ровно одна ячейка: тогда заявку можно взять и по-старому, `adopt`
+    local ids = {}
+    for _, cell in ipairs(covered) do
+        table.insert(ids, cellid.of(buf, cell))
+    end
+    if #covered == 1 and from == first.span_start and to == first.span_end and ids[1] then
+        req.cell_id, req.by_id = ids[1], true
+    end
+
+    req.mark = vim.api.nvim_buf_set_extmark(buf, M.NS, from - 1 + req.lead, 0, {
+        end_row = to - req.fence,
+        end_col = 0,
+        hl_group = body_group(req),
+        hl_eol = true,
+        hl_mode = "combine",
+    })
+    refresh(req, now)
+    requests[req.token] = req
+    ensure_timer()
+    return { ok = true, token = req.token, kind = "range", start_row = from, end_row = to, cells = ids }
+end
+
+---Проверить, что документ после правки остался документом.
+---
+---Ловим три поломки, которые буфер примет молча, а заметно станет только на Run All
+---или при записи в .ipynb: незакрытый фенс (весь текст ниже стал кодом), задвоенный id
+---(две ячейки делят историю прогонов), id, пропавший у ячейки, которая осталась (её
+---история стала недостижимой). Удалить ячейку целиком — можно: её id уходит вместе с ней.
+---Сравниваем с тем, что было: если документ был сломан до правки, вина не агента.
+---@param buf integer
+---@param before string[]
+---@param after string[]
+---@return table|nil отказ
+local function check(buf, before, after)
+    local function stats(lines)
+        local fences, ids, dup = 0, {}, false
+        for _, line in ipairs(lines) do
+            if line:match("^%s*```") then
+                fences = fences + 1
+            end
+            local id = cellid.parse(line)
+            if id then
+                dup = dup or ids[id] ~= nil
+                ids[id] = true
+            end
+        end
+        return fences, ids, dup
+    end
+    local function count_cells(lines)
+        local scratch = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(scratch, 0, -1, false, lines)
+        local ft = vim.bo[buf].filetype
+        pcall(vim.api.nvim_buf_call, scratch, function()
+            vim.cmd("noautocmd setlocal filetype=" .. ft)
+        end)
+        local n = #cells.list(scratch)
+        vim.api.nvim_buf_delete(scratch, { force = true })
+        return n
+    end
+
+    local f0, ids0, dup0 = stats(before)
+    local f1, ids1, dup1 = stats(after)
+    if cells.representation(buf) == "fence" and f0 % 2 == 0 and f1 % 2 == 1 then
+        return fail("fences", "после правки остаётся незакрытый ``` — весь текст ниже стал бы кодом")
+    end
+    if dup1 and not dup0 then
+        return fail("duplicate_id", "после правки два фенса с одним jncell — не копируй строку фенса, новой ячейке id проставит плагин")
+    end
+    local lost = {}
+    for id in pairs(ids0) do
+        if not ids1[id] then
+            table.insert(lost, id)
+        end
+    end
+    if #lost > 0 and #lost > count_cells(before) - count_cells(after) then
+        table.sort(lost)
+        return fail("id_lost", ("у ячейки пропал jncell (%s), а сама она осталась — оставь строку фенса как есть"):format(
+            table.concat(lost, ", ")
+        ))
+    end
+    return nil
+end
+
+---Заменить кусок текста: прозу, код, несколько ячеек вперемешку.
+---
+---`old` должен встретиться в буфере ровно один раз. Документ проверяется до записи, на
+---копии (`check`); новой ячейке без id он проставляется в том же шаге undo. Заявки,
+---задетые правкой, продлеваются — агент работает в них.
+---@param buf integer
+---@param old string
+---@param new string
+---@return table ok, start_row, end_row — где теперь стоит новый текст; либо отказ
+function M.replace(buf, old, new)
+    if not vim.api.nvim_buf_is_valid(buf) then
+        return fail("no_buffer", "буфера нет")
+    end
+    if type(new) ~= "string" then
+        return fail("bad_new", "new должен быть строкой")
+    end
+    local found, err = locate_text(buf, old)
+    if not found then
+        return err
+    end
+
+    local lines = found.lines
+    local new_lines = vim.split(new, "\n", { plain = true })
+    local head = lines[found.from]:sub(1, found.scol)
+    local tail = lines[found.to]:sub(found.ecol + 1)
+    local middle = vim.deepcopy(new_lines)
+    middle[1] = head .. middle[1]
+    middle[#middle] = middle[#middle] .. tail
+    local after = {}
+    vim.list_extend(after, lines, 1, found.from - 1)
+    vim.list_extend(after, middle)
+    vim.list_extend(after, lines, found.to + 1, #lines)
+    local bad = check(buf, lines, after)
+    if bad then
+        return bad
+    end
+
+    break_undo(buf)
+    vim.api.nvim_buf_set_text(buf, found.srow, found.scol, found.erow, found.ecol, new_lines)
+    local start_row, end_row = found.from, found.from + #new_lines - 1
+    for _, cell in ipairs(cells.list(buf)) do
+        if cell.span_start <= end_row and cell.span_end >= start_row and not cellid.of(buf, cell) then
+            cellid.ensure(buf, cell)
+        end
+    end
+    break_undo(buf)
+
+    local now = vim.uv.now()
+    for _, req in pairs(requests) do
+        if req.buf == buf and req.kind ~= "insert" then
+            local a, b = claimed_rows(req)
+            if a and a <= end_row and b >= start_row then
+                req.touched_at = now
+                if req.kind == "range" and req.label == M.LABEL_SENT then
+                    req.label = M.LABEL -- правка пришла: «отправлено» больше не правда
+                end
+            end
+        end
+    end
+    flash(buf, start_row, end_row)
+    return { ok = true, buf = buf, start_row = start_row, end_row = end_row }
+end
+
+---Снять заявку: работа сделана. То же, что `cancel`, но словом, которое не врёт агенту,
+---закончившему правку.
+---@param token integer
+---@return table
+function M.done(token)
+    return M.cancel(token)
+end
+
 ---Заявка, которая прямо сейчас держит эту ячейку под правку.
 ---
 ---Нужна запуску: пока агент переписывает тело, выполнять прежнее бессмысленно — вывод
@@ -967,7 +1304,9 @@ function M.claim_of(buf, cell_id)
             return req
         end
     end
-    return nil
+    -- заявка на кусок текста держит все ячейки, которые задевает
+    local cell = cellid.find(buf, cell_id)
+    return cell and claim_over_rows(buf, cell.span_start, cell.span_end) or nil
 end
 
 ---Открытые заявки: чем они держат документ и с какого места.

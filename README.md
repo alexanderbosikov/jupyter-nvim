@@ -464,36 +464,43 @@ is still going on somewhere else.
 
 ## Editing the notebook from outside
 
-The snapshot answers "what is in the notebook"; editing answers "here is a new version of
-this cell". Writing into the buffer by line numbers is not an option: tens of seconds pass
-between an outside reader taking a cell and handing back an answer, and the document is
-alive the whole time. So editing is two-phase — a claim, then its application:
+The snapshot answers "what is in the notebook"; editing answers "put this text in place of
+that one". It is one operation for everything — a word in a paragraph, a cell's code, a new
+cell, a section of prose and cells together:
 
 ```lua
 local jn = require("jupyter")
-local req = jn.edit_begin({ cell = "a3f9", label = "Claude" })  -- the cell is marked in the buffer
--- ... the agent thinks, you keep working ...
-jn.edit_apply(req.token, { "x = 2", "print(x)" })
+jn.edit_replace("Вывод: всё сходится.", "Вывод: расходится на 3%.", { notebook = path })
+jn.edit_replace_files("/tmp/old", "/tmp/new", { notebook = path })  -- the same, text from files
 ```
 
-To insert a new cell — `edit_begin({ after = "a3f9" })`, or without `after` (at the end of
-the document); the language is inherited from the neighbouring cell, as with `<leader>jb`.
-Changed your mind — `jn.edit_cancel(req.token)`.
-
-Between the claim and the application you can do anything: add lines above, reorder cells,
-edit the neighbours — the edit will still land in the right place. There are two anchors
-because shifts come in different kinds: `jncell` survives a whole cell being moved, an
-extmark survives edits above and below. On top of both, the sha of the body is checked, and
-this is the important part: **if you edited the cell itself while the agent was thinking,
-the edit is not applied**:
+Writing into the buffer by line numbers is not an option: tens of seconds pass between an
+outside reader reading the notebook and handing back an answer, and the document is alive the
+whole time. So the edit names the text, not the lines: `old` must occur in the buffer
+**exactly once**. If you changed that text while the agent was thinking, it is not there any
+more, and **the edit is not applied**:
 
 ```json
-{"ok": false, "reason": "changed", "msg": "ячейку правили после заявки, правка не применена"}
+{"ok": false, "reason": "not_found", "msg": "текста нет в буфере: его поменяли — перечитай и повтори"}
 ```
 
-A cell that is gone answers the same way (`cell_gone`). An edit cannot silently overwrite
-what you typed — that is the very reason it is built as something more than "write these
-lines".
+An edit cannot silently overwrite what you typed — that is the very reason it is built as
+something more than "write these lines". Nor can it quietly break the document: before
+writing, the plugin refuses an edit that would leave a ```` ``` ```` unclosed, give two cells
+the same `jncell`, or strip the `jncell` from a cell that stays. A new cell gets its `jncell`
+on the spot.
+
+**A claim** is the mark that tells you a piece is being worked on, before anything is written:
+
+```lua
+local c = jn.edit_claim({ text = "Вывод: всё сходится.", label = "Claude", notebook = path })
+-- ... the agent thinks, you keep working; edits inside the claim keep it alive ...
+jn.edit_done(c.token)
+```
+
+It holds lines — a paragraph, a cell, or a stretch of both; lines touching a cell take the
+whole cell. A prompt from the notebook opens one by itself (below). The older cell-only calls
+(`edit_begin` / `edit_adopt` / `edit_apply` / `edit_delete`) still work.
 
 What is visible in the buffer while a claim is open: the piece being worked on is fenced off
 by two virtual lines, above and below, each reading ` ⠋ Claude правит · 1м20с ` — a spinner,
@@ -515,7 +522,7 @@ on screen. Open claims are shown by `:JupyterEdits` (with the age and how long i
 (`Implementing` and a 10-frame braille spinner is where this comes from —
 [ThePrimeagen/99](https://github.com/ThePrimeagen/99)).
 
-**A claimed cell will not run.** `<leader>jc` on it, or a Run All that walks over it, says
+**A claimed cell will not run** — nor any cell inside a claimed stretch. `<leader>jc` on it, or a Run All that walks over it, says
 `ячейку правит Claude — запуск отклонён` and skips it: the code is about to be replaced, so
 the output would belong to a version that will not exist a second later — and it would go
 into the history as if it did. Insert claims block nothing; there is no cell yet.
@@ -523,10 +530,9 @@ into the history as if it did. Insert claims block nothing; there is no cell yet
 A claim does not outlive the agent. With no word for `agent.ttl_ms` (five minutes by
 default) it is dropped by itself, the label turns to a warning colour beforehand, and the
 plugin says so out loud — a crash, an exhausted limit or a question asked and never returned
-from produces no `cancel`, and a mark left behind claims a cell nobody is working on. An
-agent that thinks longer than that says so with `edit_touch(token)`, which restarts the
-countdown; an `apply` after the deadline answers `reason: "expired"` — open a new claim and
-redo the edit.
+from produces no `done`, and a mark left behind claims a cell nobody is working on. Every edit
+inside the claim restarts the countdown; an agent that thinks longer than that without
+editing says so with `edit_touch(token)`.
 
 An agent's edit is a separate undo step: one `u` rolls it back without taking away what you
 typed at the same moment. The cursor does not move: it holds on to text, not to a line
@@ -538,39 +544,43 @@ The other direction: `:JupyterAsk` (`<leader>jq`) opens a small window, you type
 and it goes to the Claude Code session living in a tmux or herdr pane next to nvim.
 
 ```
-:JupyterAsk                      a window to type in; about the cell under the cursor
+:JupyterAsk                      a window to type in; about the cell (or paragraph) under the cursor
 :JupyterAsk rewrite with polars  the same, in one line
 :JupyterAsk!                     about the whole notebook — nothing is claimed
-<leader>jq                       from visual — about the selected lines
+<leader>jq                       from visual — about the selected lines: prose, cells or both
 :JupyterAgentAttach              pick the pane by hand
 ```
 
-**What the agent gets along with the text** is the address: the notebook, the id of the cell
-under the cursor with its language and boundaries, the path to that cell's last output and
-whether it is stale, and the number of the claim waiting for it. That is the whole point —
+**What the agent gets along with the text** is the address: the notebook and the piece you
+pointed at — the cell under the cursor, the paragraph under it, or what you selected (prose,
+cells or both) — with the ids of the cells in it, their last outputs and whether those are
+stale. That is the whole point —
 you stop describing in words which cell you mean, and the agent stops spending turns looking
 for what you are already looking at. It is two or three lines, not a page:
 
 ```
 [jupyter.nvim] mda-3957-review/01_usage.ipynb · ячейка af17 · python · строки 79–96
 вывод: .jupyter-out/01_usage/af17/11.parquet · table · 42×10
-заявка 4 уже открыта → edit_adopt(4)
 ```
 
-The full path and the nvim socket do not ride in every prompt: the plugin leaves them in a
+```
+[jupyter.nvim] mda-3957-review/01_usage.ipynb · строки 60–96: проза и ячейка af17
+```
+
+The full path, the nvim socket and the claim's number do not ride in every prompt: the plugin leaves them in a
 file named after the agent's pane (`~/.local/state/nvim/jupyter/panes/<pane>.json`), which
 the agent finds by its own `$TMUX_PANE` / `$HERDR_PANE_ID` — so they are there after
 `/clear` too. One entry per notebook, so several nvims can send to the same pane; entries of
-closed nvims and ones older than a week are dropped. How to handle the claim is in the
-`jupyter-nvim` skill, not in the prompt.
+closed nvims and ones older than a week are dropped. How to edit and when to release the
+claim is in the `jupyter-nvim` skill, not in the prompt.
 
 **The mark appears the moment you press the key**, not when the agent gets round to reading.
 It is the same claim as in the section above (`✎`, a frame, a ticking age) with the first
-line of your prompt as its title, and it holds the cell the whole time — the cell will not
-run while it is spoken for. The agent takes that claim over instead of opening its own, and
-it is the agent who decides what the edit is: rewrite this cell, or add a new one after it —
-that is in your prompt, not in the claim. If the prompt fails to go out, the claim is
-dropped at once: a mark with nobody behind it is worse than no mark.
+line of your prompt as its title, and it holds the piece the whole time — cells in it will
+not run while it is spoken for. The agent works inside that claim instead of opening its
+own and releases it when done; what the edit is — rewrite the cell, add one after it, fix
+the paragraph — is in your prompt, not in the claim. If the prompt fails to go out, the
+claim is dropped at once: a mark with nobody behind it is worse than no mark.
 
 The pane is found by itself: the one remembered for this notebook, otherwise the one next to
 nvim in the same window (herdr: tab), otherwise the only one in this session (herdr:

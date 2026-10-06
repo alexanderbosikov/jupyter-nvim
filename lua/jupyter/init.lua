@@ -1802,8 +1802,7 @@ end
 ---@param candidates table[]|nil
 local function report_ask(res, err, candidates)
     if res then
-        local what = res.cell_id and ("ячейка " .. res.cell_id) or "весь ноутбук"
-        vim.notify(("jupyter.nvim: промпт ушёл агенту — %s, панель %s"):format(what, res.pane))
+        vim.notify(("jupyter.nvim: промпт ушёл агенту — %s, панель %s"):format(res.what or "весь ноутбук", res.pane))
         return
     end
     local msg = "jupyter.nvim: " .. (err or "промпт не ушёл")
@@ -1923,6 +1922,95 @@ end
 ---@return table
 function M.edit_touch(token)
     return agent.touch(token)
+end
+
+---Буфер, о котором говорит агент: по пути ноутбука, по номеру или текущий.
+---
+---Путь нужен затем, что в одном nvim открыто бывает несколько ноутбуков, а текущий буфер —
+---тот, на который сейчас смотрит человек, и он не обязан быть тем, о котором промпт.
+---@param opts table notebook | buf
+---@return integer|nil
+local function target_buf(opts)
+    if opts.buf then
+        return M.session(opts.buf).buf
+    end
+    if opts.notebook then
+        local want = vim.fn.resolve(vim.fn.fnamemodify(opts.notebook, ":p"))
+        for _, b in ipairs(vim.api.nvim_list_bufs()) do
+            local name = vim.api.nvim_buf_get_name(b)
+            if name ~= "" and vim.fn.resolve(name) == want then
+                return b
+            end
+        end
+        return nil
+    end
+    return M.session().buf
+end
+
+---Заменить кусок текста ноутбука: прозу, код, несколько ячеек вперемешку (§7.5).
+---`old` должен встретиться в буфере ровно один раз — это и есть проверка «текст не
+---трогали, пока агент думал».
+---@param old string
+---@param new string
+---@param opts? table notebook — путь ноутбука; buf
+---@return table
+function M.edit_replace(old, new, opts)
+    local buf = target_buf(opts or {})
+    if not buf then
+        return { ok = false, reason = "no_buffer", msg = "этот ноутбук не открыт в nvim" }
+    end
+    local res = agent.replace(buf, old, new)
+    if res.ok then
+        M.repaint(buf)
+    end
+    return res
+end
+
+---То же, что `edit_replace`, но `old` и `new` — из файлов. Снаружи текст в nvim иначе
+---передаётся строкой внутри `--remote-expr`, и каждая кавычка и перевод строки в нём —
+---экранирование, на котором агент ошибается. Последний перевод строки файла не входит в
+---текст: его добавляет почти любой редактор и heredoc.
+---@param old_path string
+---@param new_path string
+---@param opts? table notebook, buf
+---@return table
+function M.edit_replace_files(old_path, new_path, opts)
+    local function read(path)
+        local ok, lines = pcall(vim.fn.readfile, vim.fn.expand(path), "b")
+        if not ok then
+            return nil
+        end
+        if lines[#lines] == "" then
+            table.remove(lines) -- перевод строки в конце файла
+        end
+        return table.concat(lines, "\n")
+    end
+    local old, new = read(old_path), read(new_path)
+    if not old or not new then
+        return { ok = false, reason = "no_file", msg = "не читается файл с текстом правки" }
+    end
+    return M.edit_replace(old, new, opts)
+end
+
+---Поставить метку на кусок, который агент собирается править: человек видит её до
+---записи, а ячейки внутри не запускаются.
+---@param opts table text — кусок, встречающийся ровно один раз, или from/to; label, title,
+---notebook, buf
+---@return table
+function M.edit_claim(opts)
+    opts = opts or {}
+    local buf = target_buf(opts)
+    if not buf then
+        return { ok = false, reason = "no_buffer", msg = "этот ноутбук не открыт в nvim" }
+    end
+    return agent.claim(buf, opts)
+end
+
+---Снять заявку: работа сделана.
+---@param token integer
+---@return table
+function M.edit_done(token)
+    return agent.done(token)
 end
 
 ---Открытые заявки этого буфера.
