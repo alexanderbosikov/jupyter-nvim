@@ -859,6 +859,22 @@ vanished. "Next to nvim" sits above "by directory" deliberately — the agent a 
 beside their editor is the one they are working with, while matching directories is only a
 guess.
 
+**The address lives in the agent's pane file, not in every prompt.** The first header
+carried everything on every send: the skill to use, the full notebook path, the socket, an
+unsaved-changes warning, the output's absolute path and six lines on how to take the claim —
+ten lines before the user's one. All but the cell, the output and the claim's number are
+either the same every time or already in the skill. The full path and the socket go to
+`stdpath("state")/jupyter/panes/<pane id>.json` instead (`ask.remember`): the agent knows its
+own pane id from the environment (`$TMUX_PANE`, `$HERDR_PANE_ID` — set by the multiplexer
+for every pane and inherited by the agent's commands), so the file is found with no hint in
+the prompt. That is also why a session marker was not needed: "have I told this session
+already" breaks on `/clear` — same pane, empty memory — while a file read on demand does
+not care. The file holds one entry per notebook (`{ [path] = { socket, at } }`) because
+several nvims may send to one pane; the header names the notebook as `dir/name`, and the
+agent matches on that. Entries whose socket is gone or older than a week are dropped on the
+next write, which goes through a temporary file and `rename`. If the file cannot be written,
+the header carries the path and the socket itself, as before.
+
 **herdr is the second backend** (`pane/herdr.lua`), picked when nvim runs inside herdr and not
 inside tmux — tmux wins when both are set, being the one closer to nvim. The ladder is the
 same, with a tab for a window and a workspace for a session. What differs is that herdr knows

@@ -1,6 +1,6 @@
 ---
 name: jupyter-nvim
-description: Read and edit a .ipynb the user has open in nvim via the jupyter.nvim plugin: snapshot of cells and runs, results from .jupyter-out (parquet/txt/png), safe edits to the live buffer, running cells. Do NOT use mcp__jupyter__* for these — it needs a Jupyter Server.
+description: Read and edit a .ipynb the user has open in nvim via the jupyter.nvim plugin: snapshot of cells and runs, results from .jupyter-out (parquet/txt/png), safe edits to the live buffer, running cells. Also any prompt that starts with `[jupyter.nvim]` — it was sent from that notebook. Do NOT use mcp__jupyter__* for these — it needs a Jupyter Server.
 ---
 
 # A notebook open in nvim (jupyter.nvim)
@@ -16,11 +16,11 @@ that is an independent third session — your edits will not land there.
 ## Step 0: find the session
 
 **If the prompt you are reading starts with `[jupyter.nvim]`, skip this step.** That header
-was written by the plugin when the user sent the prompt from the notebook, and it already
-carries everything below: the notebook path, the nvim socket, the cell the cursor was on,
-the path to that cell's last output, and — this is the part that matters — the number of a
-claim that is **already open and already visible to the user**. Read "A prompt sent from the
-notebook" below before you touch anything.
+was written by the plugin when the user sent the prompt from the notebook: it names the
+notebook, the cell the cursor was on, that cell's last output, and — this is the part that
+matters — the number of a claim that is **already open and already visible to the user**.
+The notebook's full path and the nvim socket are in your pane's file. Read "A prompt sent
+from the notebook" below before you touch anything.
 
 ```sh
 NB=~/work/sandbox/.../01_eda.ipynb                      # the notebook
@@ -103,16 +103,34 @@ The user can send you a prompt straight from the buffer (`:JupyterAsk`, `<leader
 arrives with a header like this:
 
 ```
-[jupyter.nvim] ноутбук открыт в nvim; читать и править его — через скилл jupyter-nvim.
-ноутбук: /Users/…/01_eda.ipynb
-сокет nvim: /tmp/nvim.12345.0
-ячейка: a3f9 · python · строки 67–74
-вывод ячейки: /Users/…/.jupyter-out/01_eda/runs/0007.parquet · table · 1204×8 · устарел…
-заявка: 7 — уже открыта, метка стоит в буфере, человек её видит.
-  взять её: edit_adopt(7) — перепишешь тело ячейки;
-           edit_adopt(7, {after = true}) — допишешь новую после неё.
-           edit_adopt(7, {delete = true}) — удалишь её, если об этом просили: edit_delete(7).
+[jupyter.nvim] mda-3957-review/01_eda.ipynb · ячейка a3f9 · python · строки 67–74
+вывод: .jupyter-out/01_eda/a3f9/7.parquet · table · 1204×8 · устарел: код правили после прогона
+заявка 7 уже открыта → edit_adopt(7)
 ```
+
+- The first line names the notebook as `<its directory>/<file>`; `выделено 70–72 — речь про
+  этот кусок` is added there when the user selected only part of the cell.
+- `вывод:` is relative to the notebook's directory.
+- `заявки нет: …` instead of the last line — see the end of this section.
+
+**The full path and the socket are in your pane's file**, not in the prompt. The plugin
+writes them to `~/.local/state/nvim/jupyter/panes/<pane>.json` on every send, and the pane
+is yours — its id is in your environment. One entry per notebook (several nvims may send to
+one pane): take the one whose path ends with the name from the header, the latest `at` on a
+tie. Read it again for every `[jupyter.nvim]` prompt, do not reuse a socket from earlier in
+the session — nvim may have been restarted since.
+
+```sh
+F="${XDG_STATE_HOME:-$HOME/.local/state}/nvim/jupyter/panes/${TMUX_PANE:-$HERDR_PANE_ID}.json"
+{ read -r NB; read -r SOCK; } < <(python3 -c '
+import json, sys
+entries = json.load(open(sys.argv[1]))
+at, nb, sock = max((e["at"], nb, e["socket"]) for nb, e in entries.items() if nb.endswith("/" + sys.argv[2]))
+print(nb); print(sock)' "$F" "mda-3957-review/01_eda.ipynb")
+```
+
+If the header itself carries `ноутбук:` and `сокет nvim:` lines, the plugin could not write
+that file — use them as they are. No file and no such lines: fall back to Step 0.
 
 **Take the claim, do not open your own.** The plugin opened it the moment the user pressed
 the key — that is the whole point of it: the mark has been sitting on that cell since

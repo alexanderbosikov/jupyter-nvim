@@ -116,7 +116,6 @@ end
 ---@class jupyter.Address
 ---@field notebook string|nil путь к файлу ноутбука
 ---@field socket string|nil адрес nvim: по нему агент и читает, и пишет
----@field modified boolean в буфере есть несохранённое
 ---@field cell_id string|nil ячейка под курсором
 ---@field lang string|nil
 ---@field start_row integer|nil тело ячейки, 1-based
@@ -137,7 +136,6 @@ function M.address(buf, opts)
     local addr = {
         notebook = name ~= "" and name or nil,
         socket = vim.v.servername ~= "" and vim.v.servername or nil,
-        modified = vim.bo[buf].modified,
     }
     if opts.scope == "notebook" then
         return addr
@@ -182,69 +180,150 @@ function M.address(buf, opts)
     return addr
 end
 
----Шапка промпта: всё, что агенту иначе пришлось бы искать.
+-- --- адрес для агента: файл его панели ---
+
+---Каталог, где плагин оставляет агенту адрес ноутбука: файл на панель, `<id панели>.json`.
+---Id своей панели агент знает сам — tmux и herdr ставят его в окружение каждой панели
+---(`$TMUX_PANE`, `$HERDR_PANE_ID`), и команды агента его наследуют. Поэтому файл находится
+---без всякой подсказки в промпте, и шапке не нужно каждый раз нести полный путь и сокет —
+---в том числе после `/clear`, когда агент забыл всё, что ему говорили раньше.
+---`nil` — `stdpath("state")/jupyter/panes`; задаётся в тестах.
+M.PANES_DIR = nil
+
+---Запись старше этого — выброшена при следующей записи в файл: ноутбук давно не спрашивали.
+M.PANE_TTL = 7 * 24 * 3600
+
+---@return string
+function M.panes_dir()
+    return M.PANES_DIR or vim.fs.joinpath(vim.fn.stdpath("state"), "jupyter", "panes")
+end
+
+---Записать адрес ноутбука в файл панели агента.
+---
+---В одну панель могут слать несколько nvim с разными ноутбуками, поэтому внутри файла —
+---запись на ноутбук: `{ [путь] = { socket, at } }`. Агент находит свою по имени из шапки,
+---при совпадении имён берёт самую свежую `at`. Чужие записи сохраняются; выбрасываются
+---только те, чей nvim закрыт (сокета больше нет) или которые старше `PANE_TTL`. Запись
+---через временный файл и `rename`: два nvim, пишущие разом, не оставят полфайла.
+---@param pane_id string
+---@param addr jupyter.Address
+---@param now? integer
+---@return boolean записано
+function M.remember(pane_id, addr, now)
+    if type(pane_id) ~= "string" or pane_id == "" or not addr.notebook or not addr.socket then
+        return false
+    end
+    now = now or os.time()
+    local dir = M.panes_dir()
+    local path = vim.fs.joinpath(dir, pane_id .. ".json")
+
+    local entries = {}
+    if vim.fn.filereadable(path) == 1 then
+        local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), "\n"))
+        if ok and type(decoded) == "table" then
+            entries = decoded
+        end
+    end
+    local kept = {}
+    for notebook, e in pairs(entries) do
+        local alive = type(e) == "table" and type(e.socket) == "string" and vim.uv.fs_stat(e.socket) ~= nil
+        local fresh = type(e) == "table" and type(e.at) == "number" and now - e.at <= M.PANE_TTL
+        if alive and fresh then
+            kept[notebook] = e
+        end
+    end
+    kept[addr.notebook] = { socket = addr.socket, at = now }
+
+    vim.fn.mkdir(dir, "p")
+    local tmp = ("%s.%d.tmp"):format(path, vim.uv.os_getpid())
+    if not pcall(vim.fn.writefile, { vim.json.encode(kept) }, tmp) then
+        return false
+    end
+    local ok = vim.uv.fs_rename(tmp, path)
+    if not ok then
+        pcall(vim.fn.delete, tmp)
+        return false
+    end
+    return true
+end
+
+---Имя ноутбука в шапке: каталог и файл. Одного имени мало — `01_eda.ipynb` есть в каждой
+---задаче; с каталогом совпадение в одной панели практически исключено.
+---@param notebook string|nil
+---@return string
+function M.short_name(notebook)
+    if not notebook then
+        return "ноутбук не сохранён на диск"
+    end
+    return vim.fn.fnamemodify(notebook, ":h:t") .. "/" .. vim.fn.fnamemodify(notebook, ":t")
+end
+
+---Шапка промпта: где ячейка, что с ней и какая заявка ждёт агента.
 ---
 ---Пишется словами, а не JSON: это первый текст, который он читает, и человек читает его
----тоже — в журнале промптов и в окне сессии.
+---тоже — в журнале промптов и в окне сессии. Поэтому в ней только то, что меняется от
+---промпта к промпту. Как обращаться с заявкой — в скилле `jupyter-nvim`, его триггер —
+---`[jupyter.nvim]` в начале. Полный путь и сокет — в файле панели (`remember`); если его
+---записать не удалось (`remembered = false`), они едут в шапке, как раньше.
 ---@param addr jupyter.Address
 ---@param token integer|nil номер открытой заявки
+---@param opts? table remembered: адрес лежит в файле панели
 ---@return string[]
-function M.header(addr, token)
-    local out = {
-        "[jupyter.nvim] ноутбук открыт в nvim; читать и править его — через скилл jupyter-nvim.",
-        "ноутбук: " .. (addr.notebook or "не сохранён на диск"),
-    }
-    if addr.socket then
-        table.insert(out, "сокет nvim: " .. addr.socket)
-    end
-    if addr.modified then
-        table.insert(out, "в буфере есть несохранённое: читай через сокет, не с диска")
-    end
-
+function M.header(addr, token, opts)
+    opts = opts or {}
+    local first = { "[jupyter.nvim] " .. M.short_name(addr.notebook) }
     if addr.cell_id then
-        local where = ("ячейка: %s"):format(addr.cell_id)
+        table.insert(first, "ячейка " .. addr.cell_id)
         if addr.lang then
-            where = where .. " · " .. addr.lang
+            table.insert(first, addr.lang)
         end
         if addr.start_row then
-            where = where .. (" · строки %d–%d"):format(addr.start_row, addr.end_row)
+            table.insert(first, ("строки %d–%d"):format(addr.start_row, addr.end_row))
         end
-        table.insert(out, where)
     end
-    if addr.selection then
-        table.insert(
-            out,
-            ("выделено: строки %d–%d — речь про этот кусок"):format(addr.selection.from, addr.selection.to)
-        )
+    -- выделение всей ячейки ничего не добавляет к её строкам
+    local sel = addr.selection
+    if sel and not (sel.from == addr.start_row and sel.to == addr.end_row) then
+        table.insert(first, ("выделено %d–%d — речь про этот кусок"):format(sel.from, sel.to))
     end
+    local out = { table.concat(first, " · ") }
+
+    if not opts.remembered then
+        table.insert(out, "ноутбук: " .. (addr.notebook or "не сохранён на диск"))
+        if addr.socket then
+            table.insert(out, "сокет nvim: " .. addr.socket)
+        end
+    end
+
     if addr.output then
         local o = addr.output
-        local desc = ("вывод ячейки: %s"):format(o.path or "нет на диске")
-        local marks = {}
+        local path = o.path
+        if path and addr.notebook then
+            -- от каталога ноутбука: полный путь агент соберёт сам. Через resolve — на macOS
+            -- /var и /private/var один каталог, а строки разные
+            local dir = vim.fn.resolve(vim.fn.fnamemodify(addr.notebook, ":h")) .. "/"
+            local full = vim.fn.resolve(path)
+            if full:sub(1, #dir) == dir then
+                path = full:sub(#dir + 1)
+            end
+        end
+        local parts = { "вывод: " .. (path or "нет на диске") }
         if o.kind then
-            table.insert(marks, o.kind)
+            table.insert(parts, o.kind)
         end
         if o.rows and o.cols then
-            table.insert(marks, ("%d×%d"):format(o.rows, o.cols))
+            table.insert(parts, ("%d×%d"):format(o.rows, o.cols))
         end
         if o.stale then
-            table.insert(marks, "устарел: код правили после прогона")
+            table.insert(parts, "устарел: код правили после прогона")
         end
-        if #marks > 0 then
-            desc = desc .. " · " .. table.concat(marks, " · ")
-        end
-        table.insert(out, desc)
+        table.insert(out, table.concat(parts, " · "))
     end
 
     if token then
-        table.insert(out, ("заявка: %d — уже открыта, метка стоит в буфере, человек её видит."):format(token))
-        table.insert(out, ("  взять её: edit_adopt(%d) — перепишешь тело ячейки;"):format(token))
-        table.insert(out, ("           edit_adopt(%d, {after = true}) — допишешь новую после неё."):format(token))
-        table.insert(out, ("           edit_adopt(%d, {delete = true}) — удалишь её, если об этом просили: edit_delete(%d)."):format(token, token))
-        table.insert(out, "  edit_begin не зови: на ячейке окажется вторая метка.")
-        table.insert(out, ("  дальше как обычно: edit_apply(%d, строки), edit_touch(%d), edit_cancel(%d)."):format(token, token, token))
+        table.insert(out, ("заявка %d уже открыта → edit_adopt(%d)"):format(token, token))
     else
-        table.insert(out, "заявки нет: вопрос не про одну ячейку. Возьмёшься править — открой её сам (edit_begin).")
+        table.insert(out, "заявки нет: вопрос не про одну ячейку; править — своей заявкой, edit_begin")
     end
     return out
 end
@@ -254,8 +333,9 @@ end
 ---@param token integer|nil
 ---@param prompt string
 ---@return string
-function M.compose(addr, token, prompt)
-    local out = M.header(addr, token)
+---@param opts? table remembered
+function M.compose(addr, token, prompt, opts)
+    local out = M.header(addr, token, opts)
     table.insert(out, "")
     table.insert(out, prompt)
     return table.concat(out, "\n")
@@ -314,7 +394,8 @@ function M.send(buf, prompt, opts)
         token = claim.token
     end
 
-    local ok, err = pane.send(id, M.compose(addr, token, prompt))
+    local remembered = M.remember(id, addr)
+    local ok, err = pane.send(id, M.compose(addr, token, prompt, { remembered = remembered }))
     if not ok then
         if token then
             agent.cancel(token) -- промпт не ушёл: за меткой никого нет, и висеть ей нельзя

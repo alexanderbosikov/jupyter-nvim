@@ -545,11 +545,24 @@ and it goes to the Claude Code session living in a tmux or herdr pane next to nv
 :JupyterAgentAttach              pick the pane by hand
 ```
 
-**What the agent gets along with the text** is the address: the notebook, the nvim socket,
-the id of the cell under the cursor with its language and boundaries, the path to that
-cell's last output and whether it is stale. That is the whole point — you stop describing in
-words which cell you mean, and the agent stops spending turns looking for what you are
-already looking at.
+**What the agent gets along with the text** is the address: the notebook, the id of the cell
+under the cursor with its language and boundaries, the path to that cell's last output and
+whether it is stale, and the number of the claim waiting for it. That is the whole point —
+you stop describing in words which cell you mean, and the agent stops spending turns looking
+for what you are already looking at. It is two or three lines, not a page:
+
+```
+[jupyter.nvim] mda-3957-review/01_usage.ipynb · ячейка af17 · python · строки 79–96
+вывод: .jupyter-out/01_usage/af17/11.parquet · table · 42×10
+заявка 4 уже открыта → edit_adopt(4)
+```
+
+The full path and the nvim socket do not ride in every prompt: the plugin leaves them in a
+file named after the agent's pane (`~/.local/state/nvim/jupyter/panes/<pane>.json`), which
+the agent finds by its own `$TMUX_PANE` / `$HERDR_PANE_ID` — so they are there after
+`/clear` too. One entry per notebook, so several nvims can send to the same pane; entries of
+closed nvims and ones older than a week are dropped. How to handle the claim is in the
+`jupyter-nvim` skill, not in the prompt.
 
 **The mark appears the moment you press the key**, not when the agent gets round to reading.
 It is the same claim as in the section above (`✎`, a frame, a ticking age) with the first
