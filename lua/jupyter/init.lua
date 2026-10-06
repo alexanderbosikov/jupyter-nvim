@@ -84,6 +84,8 @@ M.defaults = {
         open_on_attach = false,
     },
     table = { page_size = 100, max_col = 40 },
+    -- чем .ipynb превращается в markdown и обратно (ipynb.lua): строка или список
+    jupytext = "jupytext",
     -- статус строкой под ячейкой: enabled = false выключает, position = "eol" ставит в конец строки
     status = { enabled = true, position = "below" },
     -- Статус прогона в сайдбаре herdr, в одном ряду с агентами: идёт — «3/7», досчиталось —
@@ -1584,8 +1586,8 @@ end
 
 ---Сохранить ноутбук по-настоящему.
 ---
----Именно `:w`, а не `noautocmd write`: markdown в `.ipynb` превращает jupytext, и делает
----он это автокомандой `BufWriteCmd`. Без автокоманд в файл ноутбука уехал бы сырой
+---Именно `:w`, а не `noautocmd write`: markdown в `.ipynb` превращает jupytext, и зовёт
+---его автокоманда `BufWriteCmd` (ipynb.lua). Без автокоманд в файл ноутбука уехал бы сырой
 ---markdown — то есть молча испорченный `.ipynb`.
 ---@param buf integer
 ---@return boolean

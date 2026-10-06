@@ -143,16 +143,11 @@ Ordered by benefit against risk.
    disappeared from the document. The signal is narrow, cells with no runs stay silent.
    About 40 lines; `repaint` already walks every cell.
 
-3. **The intermediate file.** Right now reading and writing an `.ipynb` goes through a
-   `<name>.md` on disk — that is how jupytext.nvim works, and that is where the whole
-   "stale snapshot" class comes from (see README, "Requirements"). jupytext can work through
-   pipes; all three links have been verified, including `--update` from stdin with outputs
-   preserved. Our own `BufReadCmd`/`BufWriteCmd` (~150 lines) remove the file entirely, and
-   with it the second source of truth and the dependency itself. Mandatory: do not leave an
-   empty buffer when the conversion fails, and write through a temporary file with `rename`,
-   otherwise an interrupted save corrupts the notebook. On top of that, those 137 ms can be
-   brought back with a proper cache — outside the working directory, keyed by path and
-   mtime.
+3. **The intermediate file** — **done** (`ipynb.lua`, `ftdetect/jupyter.lua`, §7.8): our
+   own `BufReadCmd`/`BufWriteCmd`, jupytext through pipes, nothing on disk but the
+   notebook; raw json instead of an empty buffer on a failed read, a temporary file and
+   `rename` on write. What is left is the 137 ms per opening: a proper cache — outside the
+   working directory, keyed by path and mtime — would bring them back.
 
 4. **Images.** As long as image.nvim draws them, we are managing someone else's state:
    `state.images` is not cleaned up, and redrawing happens on every scroll. The only way out
@@ -210,16 +205,9 @@ Ordered by benefit against risk.
    cell the same batch deletes (an insert holds only an extmark, not an id — untested), and
    one mark for the batch or one per cell. Two to three hours with tests.
 
-9. **`:w` while an end-of-file insert claim is open** writes an extra empty cell into the
-   `.ipynb`: it is the blank line `pad_eof` adds as a hook for the label. Seen on the live
-   config; jupytext turns any trailing blank line into an empty markdown cell, `--update`
-   included. **Deferred as not critical**: it only happens on an explicit `:w` during an
-   end-of-file insert, and the plugin never writes the notebook by itself unless
-   `write_on_run`/`write_on_focus_lost` are on. `BufWritePre` is not a way out — measured:
-   jupytext.nvim writes through its own `BufWriteCmd`, no `*Pre` event fires, and a
-   `BufWriteCmd` of ours runs after its write. What is left: wrap jupytext.nvim's
-   `BufWriteCmd` (take its callback from `nvim_get_autocmds`), drop the pad label and draw
-   it inside the cell, or let item 3 — our own `BufWriteCmd` — strip the line for free.
+9. **`:w` while an end-of-file insert claim is open** wrote an extra empty cell into the
+   `.ipynb` (the blank line `pad_eof` adds as a hook for the label) — **done** along with
+   item 3: the writer does not pass trailing blank lines to jupytext (§7.8).
 
 10. **Markdown as a first-class cell.** §7.2.2 has the measurements: jupytext's
     `<!-- #region jncell=… -->` gives prose an id and survives the round trip. What stands in
@@ -246,3 +234,34 @@ Ordered by benefit against risk.
     `input()`; every ending is pinned on a live kernel. What is left is answering `input()`
     from nvim at all: the sidecar has `stdin.reply`, Lua ignores `input_request`, so such a
     cell can only be interrupted — the sidebar at least says it waits.
+
+14. **Export to HTML/PDF from the outputs we already have.** Today export lives outside the
+    plugin: `~/.local/bin/nb-export` wraps `jupyter nbconvert --execute` with a custom
+    `report` template, bound to `<leader>ne` / `<leader>nE` in the user's config. It has to
+    re-execute because our outputs live in `.jupyter-out`, not in the `.ipynb` (§8) — fine
+    for a notebook on local parquet (7 s), but a notebook on Redshift re-runs every query.
+    The idea: build a temporary `.ipynb` with outputs from the latest run of each cell
+    (`index.jsonl` → parquet as `text/html`, png as `image/png`, txt as `text/plain`) and
+    hand it to nbconvert without `--execute`. Forks: a cell edited after its run (`⚠`) —
+    export the stale output, skip it, or refuse; a cell never run — empty or refuse; parquet
+    tables are pages, not the whole frame — how many rows go into the report. Half a day
+    with tests.
+
+15. **Waiting for a run from outside: `jn-wait`.** An agent that runs a cell polls the
+    snapshot through `nvim --remote-expr` with an until-condition (the skill's recipe).
+    Polling is cheap; what hurts is that every agent rebuilds a long `luaeval` and gets the
+    condition wrong (waits on `running` while the cell is still `queued`), that the
+    notebook level does not exist outside — the wave, `N/M` and its outcome live only in
+    `sidebar.lua` — and that when the user started Run All, the agent has no idea where the
+    wave began. The idea: `jn-wait <notebook> [--cell <id>]` blocks until the run ends and
+    prints the outcome (`ok 12/12 · 4m31s`, `error in a3f9: ProgrammingError`,
+    `interrupted`), exit code 0/1; run in the background, it wakes the agent when it exits
+    — a subscription through the harness rather than a poll in the agent's context. For the
+    whole notebook: remember the highest `run_id` at the call, wait until a newer run exists
+    **and** no cell is busy — that closes the race of subscribing before the run starts.
+    Not now: pushing "done" into the agent's pane through `ask.lua` — injected text mixes
+    with what the user types or cuts the agent's turn; the proper channel is item 12.
+    Forks: the default timeout; `input()` in a cell (return at once with its own code); a
+    cell with no id (only the notebook level); whether the wave count moves out of
+    `sidebar.lua` into a shared module so the outcome matches herdr. An hour for the script
+    and the skill; two to three with the shared wave and tests.

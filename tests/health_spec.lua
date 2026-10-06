@@ -141,6 +141,45 @@ describe("здоровье", function()
     end)
 end)
 
+describe("кто открывает .ipynb", function()
+    local ipynb = require("jupyter.ipynb")
+    vim.cmd("runtime! ftdetect/jupyter.lua")
+
+    it("без jupytext — ошибка: ноутбук откроется сырым json", function()
+        local real = ipynb.command
+        ipynb.command = function()
+            return { "/нет/такого/jupytext" }
+        end
+
+        local entry = health.ipynb()[1]
+
+        ipynb.command = real
+        assert.equals("error", entry.level)
+        assert.is_truthy(entry.msg:find("сырым json", 1, true))
+    end)
+
+    it("jupytext.nvim на месте — ноутбуки за ним, это не ошибка", function()
+        local group = vim.api.nvim_create_augroup("jupytext-nvim", { clear = true })
+        vim.api.nvim_create_autocmd("BufReadCmd", { group = group, pattern = "*.ipynb", command = "" })
+
+        local entry = health.ipynb()[1]
+
+        vim.api.nvim_del_augroup_by_id(group)
+        assert.equals("info", entry.level)
+        assert.is_truthy(entry.msg:find("jupytext.nvim", 1, true))
+    end)
+
+    it("ftdetect не прочитан — ошибка с подсказкой", function()
+        vim.api.nvim_create_augroup("jupyter.ipynb", { clear = true })
+
+        local entry = health.ipynb()[1]
+
+        vim.cmd("runtime! ftdetect/jupyter.lua")
+        assert.equals("error", entry.level)
+        assert.is_truthy(entry.msg:find("ftdetect", 1, true))
+    end)
+end)
+
 -- Отчёт про историю прогонов. Проверяем разбор и арифметику, а не отрисовку: collect()
 -- и history() возвращают список записей. Python и сайдкар тут не нужны — отчёт читает
 -- только индекс на диске и текст буфера.

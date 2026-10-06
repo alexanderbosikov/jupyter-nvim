@@ -18,13 +18,14 @@ already taken by the metapackage), and the CLI is a `jupyter-out` binary that
 | cell boundaries | **regexes behind a detector interface** | they work, and the interface makes treesitter a one-module replacement | edge cases such as a fence inside a string |
 | output | **one scratch buffer per notebook plus a status under the cell** | output is copied, searched and scrolled by the usual means; the state of every cell is visible at once | you cannot see the output of two cells at the same time |
 | cell id | **a short hash in the document's text** | output is found outside the editor, without starting nvim | a cell's first run edits the buffer (one undo-able edit) |
+| reading `.ipynb` | **our own `BufReadCmd`/`BufWriteCmd`, jupytext through pipes** | jupytext.nvim went through `<name>.md` on disk, a second source of truth that showed yesterday's notebook and wrote it back (§7.8) | the jupytext CLI is a dependency; registration has to live in `ftdetect/` to beat lazy loading |
 | interpreter | **an explicit path from the config; otherwise a search: `$VIRTUAL_ENV`, a `.venv` next to the notebook, PATH** | the kernel and the sidecar have to come from the same environment; one nvim config lives on several machines, and the path to the environment differs on each | a guessed environment may turn out to have no `jupyter_client` — the sidecar then does not start, and the session journal and `:checkhealth` say which python was taken and where from |
 
 ## 2. Processes and data flows
 
 ```
 ┌─────────────────── nvim ───────────────────┐
-│  buffer (.py / .md after jupytext)         │
+│  buffer (.py / markdown from jupytext)     │
 │  cell-id in the text · status under cell   │
 │  output drawer · table tab                 │
 │              lua/jupyter/*                 │
@@ -189,6 +190,7 @@ Messages outside that table fall into three cases, and they must not be mixed:
 | `kernel.lua` | the state machine, a queue of runs until readiness | — |
 | `exec.lua` | runs, `run_id`, rejecting stale events, `result_expr` | does not draw |
 | `store.lua` | reading `index.jsonl` back, assembling a run for drawing; where a notebook's directory is | does not write |
+| `ipynb.lua` | `.ipynb` ↔ markdown buffer through jupytext's pipes: reading, writing through a temporary file, raw json on failure | registers nothing itself — `ftdetect/jupyter.lua` does, at startup |
 | `draft.lua` | the draft of an unsaved buffer: debounce, atomic write, finding orphaned ones | never writes into the notebook file |
 | `highlight.lua` | highlight groups: contrast from `Normal`, meaning from `Diagnostic*` | defines no colours of its own |
 | `ui/common.lua` | scratch buffer, window options, **actions → keys** | not a single hard-coded key |
@@ -244,8 +246,6 @@ lives in a single function, `common.virt_line_below`, rather than scattered arou
 same pair of "our virtual line above someone's concealed line" is possible everywhere the
 plugin draws `virt_lines` (the agent's edit mark is the next candidate).
 
-The same investigation removed a second source of ripple: `images.lua` was sending the
-kitty deletion sequence to the terminal (23 bytes past nvim's renderer, into the same tty
 With render-markdown's `code.border = "thin"` the closing fence is not concealed but drawn as
 a `▀` bar, and a status below it hangs one line away from the cell. `status.position =
 "fence"` turns the fence line into the cell's footer: the status from column 0 on the
@@ -256,6 +256,8 @@ corner. The raw ```` ``` ```` is hidden under it even at the cursor — a closin
 holds anything else. In the percent representation there is no fence line and it falls back
 to `below`.
 
+The same investigation removed a second source of ripple: `images.lua` was sending the
+kitty deletion sequence to the terminal (23 bytes past nvim's renderer, into the same tty
 the TUI thread writes to) on **every** redraw of the output window, that is on every move
 between cells — even in a notebook with no images at all. Now it is sent only when there
 was something to remove; the emergency cleanup (`:JupyterClearImages`) still sends it
@@ -659,8 +661,8 @@ notebook file and past other people's autocommands.
 
 Decisions, each of them paid for by a specific breakage:
 
-- **Not a `<name>.md` next to the notebook.** That is precisely the file jupytext.nvim
-  considers its own cache and starts reading instead of the notebook, without comparing
+- **Not a `<name>.md` next to the notebook.** That is precisely the file jupytext.nvim, when
+  it is the one opening notebooks (§7.8), considers its own cache and starts reading instead of the notebook, without comparing
   dates (the "Known issues" section of the README). A draft with such a name would turn
   insurance into quiet data corruption. Its place is `.jupyter-out/<name>/drafts/`, the
   same directory as the history, and it is in `.gitignore` already.
@@ -681,7 +683,7 @@ Decisions, each of them paid for by a specific breakage:
   silently. The same field answers "may the draft be dropped": **not by the `modified`
   flag**. That flag is set by more than nvim — jupytext.nvim clears it in its
   `BufWriteCmd` before the external converter has run, and regardless of whether it runs at
-  all. Verified on a live session: the buffer "saved", the `.ipynb` half an hour old, the
+  all (the plugin's own writer, §7.8, clears it only after `rename`). Verified on a live session: the buffer "saved", the `.ipynb` half an hour old, the
   draft dropped. We drop it only once the notebook file has changed since the draft was
   written. Milliseconds as a whole number, not seconds: `getftime` cannot tell two writes
   within the same second apart, and a fractional value through `vim.json` loses its last
@@ -932,6 +934,59 @@ sums over busy notebooks, the name is `eda.ipynb +1`. On `VimLeavePre` the statu
 synchronously (500 ms at most) — a pane left in working would hang there. The tests clear
 `HERDR_ENV` in `minimal_init.lua`: they run from a herdr pane and would report into it.
 
+### 7.8. Reading and writing `.ipynb`
+
+The buffer is markdown, the file is json, and the conversion goes through jupytext's pipes
+(`lua/jupyter/ipynb.lua`): `jupytext --to md:markdown --output - nb.ipynb` on reading,
+`jupytext --from md:markdown --to ipynb --update --output <tmp> -` with the buffer on stdin
+on writing. Nothing but the notebook is ever on disk.
+
+It used to be jupytext.nvim, which went through `<name>.md` next to the notebook and read
+that file instead of converting whenever it existed, without comparing dates. A `.md` that
+survived a crash became permanent: edits from Jupyter Lab were invisible, and `:w` wrote
+the stale snapshot back over them. Three autocommands in the user's config held that
+together — dropping the stale cache, seeding a new file, adding a missing kernelspec —
+and none of them is needed now.
+
+Decisions:
+
+- **Registration in `ftdetect/jupyter.lua`, not in `setup()`.** `BufReadCmd` has to exist
+  before the first notebook is opened, and the plugin loads lazily — on `FileType`, which
+  for a notebook comes only after reading. `ftdetect` is read at startup by built-in packages
+  and by lazy.nvim for a plugin with `ft`. The file holds three autocommands and a
+  `filetype.add`; the module is required by the first notebook.
+- **A failed conversion shows the raw json, not an empty buffer.** An empty buffer under the
+  notebook's name is a notebook erased by the first `:w`. `b:jupyter_ipynb = false` marks such
+  a buffer: `ft=json`, and `:w` writes it back as it is. If even reading the bytes fails, the
+  buffer is `readonly`.
+- **Writing through a temporary file in the same directory and `rename`.** An interrupted
+  save leaves either the old notebook or the new one. The temporary file starts as a copy of
+  the notebook, because `--update` takes the outputs from the file it writes over; a new
+  notebook starts from a seed carrying the kernelspec of `kernel_name` (its `display_name`
+  read from `kernel.json` in the Jupyter data dirs, without starting python).
+- **`modified` is cleared only after `rename`.** Otherwise `:wq` would quit with the work lost.
+  `BufWritePre`/`BufWritePost` are fired by hand, as nvim does not fire them around a
+  `*Cmd`: the draft (§7.4.1) and other plugins listen to them.
+- **The mtime is set by hand.** `--update` with nothing to change leaves the file alone, and
+  the copy would keep the old mtime — while the draft decides by the notebook's mtime whether
+  the work reached the disk.
+- **Trailing blank lines are not written.** jupytext turns any of them into an empty
+  markdown cell, `--update` included (measured: one blank line is enough). That closed the
+  extra cell an end-of-file insert claim used to leave (its `pad_eof` line, CONTRIBUTING
+  item 9). The price: an empty markdown cell at the very end of a notebook does not survive
+  a save — nobody needs one.
+- **`filetype.add` for `ipynb` is a function of `b:jupyter_ipynb`.** nvim re-detects the
+  filetype on every `BufRead` (§10, the netrw case), and the plain `json` default would undo
+  the markdown. A buffer that is not ours (`nil`) is left alone.
+- **jupytext.nvim, if installed, wins.** Two converters on one buffer would mean `:w` going two
+  ways at once; when its `BufReadCmd` exists ours steps aside, and `:checkhealth` says who
+  is opening notebooks.
+
+The cost stays the same 137–141 ms per opening (§11): it is jupytext's python starting, not the
+file. Covered by `tests/ipynb_spec.lua` against the real jupytext: outputs through `:w`, no
+files left beside the notebook, a failed write leaving the file byte-for-byte and the buffer
+modified, broken json, a new notebook's kernelspec, the netrw re-detection, a symlink.
+
 ## 8. What is not supported
 
 ipywidgets, interactive widgets and HTML tables; exporting output back into the `.ipynb`
@@ -942,7 +997,7 @@ image.nvim; non-Python kernels.
 has no id to name, nothing for a claim to anchor to and no sha to check. Inserting one is
 not supported either — `cells.insert` writes a code fence, and markdown put there lands
 inside ```` ``` ```` and breaks the next Run All. There is no fallback: writing to the
-`.ipynb` or to the jupytext `.md` while the notebook is open in nvim is the one thing that
+`.ipynb` while the notebook is open in nvim is the one thing that
 reliably breaks the document, so an outside reader hands the prose back in its reply and the
 user places it.
 
@@ -1005,7 +1060,8 @@ what has to be checked is the buffer's contents.
 
 Done: the protocol and the sidecar, running cells, output into a buffer, paged tables,
 stable ids and run history, the status under a cell, images, `:checkhealth`, text objects,
-restructuring cells (§5, `edit.lua`), magic arguments, finding kernels with no owner and
+restructuring cells (§5, `edit.lua`), magic arguments, reading and writing `.ipynb` with no
+intermediate file (§7.8), finding kernels with no owner and
 attaching to a live kernel (§6.5), choosing the interpreter from the notebook's environment.
 
 A "cell navigation mode" is no longer in the plans, and that is a decision rather than
@@ -1063,4 +1119,4 @@ not live that long, a trace remains by which the kernel can be found (§6.5).
 (reading a ready file takes 0.02 ms), but a cache with no validity check shows yesterday's
 document, and saving overwrites the real one with it. A proper cache lives outside the
 working directory and is keyed by mtime; until there is one, we pay 137 ms for seeing the
-real file.
+real file. Since §7.8 there is no file to cache in at all: the conversion goes through a pipe.

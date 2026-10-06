@@ -219,7 +219,10 @@ function M.collect(config)
         add("warn", "image.nvim не найден: картинки будут показаны путём к файлу")
     end
 
-    -- 6. осиротевшие ядра. Сюда попадают только те, чей сайдкар умер не своей смертью:
+    -- 6. кто открывает .ipynb
+    vim.list_extend(report, M.ipynb())
+
+    -- 7. осиротевшие ядра. Сюда попадают только те, чей сайдкар умер не своей смертью:
     -- при обычном выходе ядро гасится, а след убирается (см. jupyter.orphans).
     local orphans = require("jupyter.orphans")
     local dir = vim.fn.expand("%:p:h")
@@ -231,9 +234,52 @@ function M.collect(config)
         add(orphan.stale and "warn" or "error", orphans.describe(orphan) .. " — снять: :JupyterOrphans!")
     end
 
-    -- 7. история прогонов: её вес и ячейки, которых в документе больше нет
+    -- 8. история прогонов: её вес и ячейки, которых в документе больше нет
     vim.list_extend(report, M.history(config))
 
+    return report
+end
+
+---Кто превращает .ipynb в markdown и обратно.
+---
+---Сбой тут не виден, пока не откроешь ноутбук: ftdetect, не прочитанный менеджером
+---плагинов, или jupytext не в PATH дают сырой json вместо ячеек (ipynb.lua).
+---@return table[] список { level, msg }
+function M.ipynb()
+    local report = {}
+    local function add(level, msg)
+        table.insert(report, { level = level, msg = msg })
+    end
+    local function registered(group)
+        local ok, found = pcall(vim.api.nvim_get_autocmds, { group = group, event = "BufReadCmd" })
+        return ok and #found > 0
+    end
+
+    if vim.g.jupyter_ipynb == false then
+        add("info", ".ipynb открывает не плагин: vim.g.jupyter_ipynb = false")
+        return report
+    end
+    if registered("jupytext-nvim") then
+        add("info", ".ipynb открывает jupytext.nvim, через <имя>.md рядом с ноутбуком; "
+            .. "без него плагин делает это сам, мимо диска")
+        return report
+    end
+    if not registered("jupyter.ipynb") then
+        add("error", "ftdetect/jupyter.lua не прочитан при старте: .ipynb откроется сырым json. "
+            .. "Для lazy.nvim нужен `ft` в спеке плагина")
+        return report
+    end
+
+    local ipynb = require("jupyter.ipynb")
+    local cmd = vim.list_extend(ipynb.command(), { "--version" })
+    local result, err = run(cmd)
+    if not result or result.code ~= 0 then
+        add("error", ("%s не запускается: .ipynb откроется сырым json — %s"):format(
+            cmd[1], err or common.clip(result.stderr or "", 120)
+        ))
+    else
+        add("ok", (".ipynb через jupytext %s, без промежуточного файла"):format(vim.trim(result.stdout)))
+    end
     return report
 end
 

@@ -20,42 +20,27 @@ the plugin prints it, with a translation where it matters.
 - Neovim 0.10+
 - Python with `jupyter_client`, `ipykernel` and (for tables) `polars`
 - [image.nvim](https://github.com/3rd/image.nvim) — optional, for images
-- [jupytext.nvim](https://github.com/GCBallesteros/jupytext.nvim) — if you work with `.ipynb`
+- [jupytext](https://jupytext.readthedocs.io) on PATH — if you work with `.ipynb`
 
-**About `.ipynb` and filetype.** `jupytext.nvim` sets `ft=markdown` on the buffer once, in
-its own `BufReadCmd`. But nvim re-decides the filetype on **every** `BufRead` from the file
-name, and `*.ipynb` in its detection is `json`. The event fires on more than opening: netrw
-on `:Ex` triggers `BufRead` on the buffer currently in the window. Open a notebook, step
-into `:Ex`, come back — and cells stop being recognised, while the plugin writes
-«представление fence при filetype=json» into `:JupyterLog`. Cured by one line in the
-config, before `require("jupytext").setup`:
+**How `.ipynb` is opened.** The plugin does it itself: the buffer is markdown, the file on
+disk stays json, and `jupytext` converts through pipes in both directions — nothing is
+written next to the notebook. Outputs that Jupyter Lab sees survive `:w` (`--update`). If
+the conversion fails, the buffer shows the raw json with `ft=json` instead of an empty
+buffer, and `:w` writes it back as it is; a failed save leaves the file untouched and the
+buffer modified, so `:wq` does not quit. A new `.ipynb` gets the kernelspec named in
+`kernel_name` on its first write. The details are in §7.8 of ARCHITECTURE.md.
 
-```lua
-vim.filetype.add({ extension = { ipynb = "markdown" } })
-```
+The autocommands live in `ftdetect/jupyter.lua`, because they have to be there before the
+first notebook is opened while the plugin itself loads lazily. Built-in packages read
+`ftdetect` at startup, and so does lazy.nvim for a plugin with `ft` in its spec. Without
+`ft` (a plugin loaded on `cmd` or `keys`) the notebook opens as raw json —
+`:checkhealth jupyter` says so.
 
-**One more thing worth knowing about jupytext.nvim.** It puts the conversion result into
-`<name>.md` next to the notebook and, if that file already exists, **does not convert
-again** — it reads it without comparing timestamps (`init.lua:81`). Normally such a file is
-treated as temporary and removed when the buffer closes, but one that survives — after a
-crash, or created by hand — becomes permanent. From that moment nvim shows it instead of
-the notebook: edits made in Jupyter Lab are invisible, and `:w` overwrites them with stale
-content. The plugin has nothing to do with this and cannot help — it is handed a
-ready-made buffer. Cured by an autocommand that drops the cache when the notebook is newer:
-
-```lua
-vim.api.nvim_create_autocmd("BufReadCmd", { -- BEFORE jupytext.setup(): registration order
-    pattern = "*.ipynb",
-    group = vim.api.nvim_create_augroup("JupytextDropStaleCache", { clear = true }),
-    callback = function(ev)
-        local notebook = vim.fn.resolve(vim.fn.expand(ev.match))
-        local cache = vim.fn.fnamemodify(notebook, ":r") .. ".md"
-        if vim.fn.filereadable(cache) == 1 and vim.fn.getftime(cache) < vim.fn.getftime(notebook) then
-            vim.fn.delete(cache)
-        end
-    end,
-})
-```
+If [jupytext.nvim](https://github.com/GCBallesteros/jupytext.nvim) is installed, notebooks
+stay with it and the plugin does not interfere. To switch, remove it together with whatever
+was set up around it — the `filetype.add` for `ipynb` and the hook that dropped its stale
+`<name>.md` are not needed any more. `vim.g.jupyter_ipynb = false` before startup turns the
+plugin's own reading off.
 
 ## Installation
 
@@ -362,10 +347,12 @@ the text and the notebook's mtime at that moment.
 
 A draft is dropped not on a "buffer saved" flag but on the fact of it: only once the
 notebook file on disk has changed since the draft was written. The difference is not
-theoretical. jupytext.nvim clears `modified` in its `BufWriteCmd` right after writing the
-intermediate `.md` — before the external converter runs, and regardless of whether it runs
+theoretical. jupytext.nvim cleared `modified` in its `BufWriteCmd` right after writing the
+intermediate `.md` — before the external converter ran, and regardless of whether it ran
 at all. That has already cost a session's work once: the buffer said "saved", the `.ipynb`
-held a state half an hour old, and the draft had been dropped as unneeded.
+held a state half an hour old, and the draft had been dropped as unneeded. The plugin's own
+writer clears the flag only after the notebook is on disk, but jupytext.nvim may still be
+the one doing the writing, so the rule stays.
 
 Close it unsaved (`:bd!`, `:q!`, a crash) and the draft stays; the next time the notebook is
 opened the plugin says:
@@ -636,6 +623,7 @@ opts = {
         open_on_attach = false,      -- open the window when a notebook is opened
     },
     table = { page_size = 100, max_col = 40 },
+    jupytext = "jupytext",           -- command for .ipynb ↔ markdown: a string or a list
     status = { enabled = true, position = "below" }, -- or "eol", or "fence": on the closing fence line (background: JupyterStatusFooter, else Normal)
     sidebar = true,                  -- under herdr: the run's status and N/M in its sidebar
     autosave = {
