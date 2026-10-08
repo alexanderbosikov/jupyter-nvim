@@ -83,6 +83,7 @@ value may be a string or a list of keys); `keys = false` turns them off entirely
 | cell above / below | `<leader>ja` / `<leader>jb` |
 | next / previous cell | `]c` / `[c` |
 | output window | `<leader>jo` |
+| pin this cell's output (again — unpin) | `<leader>jp` |
 | table, page by page | `<leader>jt` |
 | previous / next run of this cell | `[r` / `]r` |
 | notebook outline | `<leader>jT` |
@@ -102,6 +103,7 @@ always whole lines. They are configured separately from the other keys because t
 other modes: `textobjects = { inner = "ic", around = "ac" }`.
 
 Commands: `:JupyterRun`, `:JupyterRunAll`, `:JupyterRunBelow`, `:JupyterOutput`,
+`:JupyterPin`, `:JupyterUnpin`,
 `:JupyterTable`, `:JupyterRunPrev`, `:JupyterRunNext`, `:JupyterInterrupt`,
 `:JupyterRestart`, `:JupyterHistory`, `:JupyterToc`, `:JupyterRepaint`,
 `:JupyterClearImages`, `:JupyterLog`, `:JupyterStatus`, `:JupyterStop`,
@@ -461,6 +463,14 @@ with no kernel started. To keep old output from passing itself off as fresh, mar
 the status line: the time of the run (`из истории · 03.09 12:46` — "from history"),
 `⚠ код изменился` if the cell's code was edited after the run, and `⏳ ещё N` if computation
 is still going on somewhere else.
+
+One output can be kept in view while the cursor goes elsewhere: `<leader>jp` pins the output
+of the cell under the cursor into a second window, `📌 ячейка …`, which shares the column
+with the main one — pinned on top, the cell under the cursor below; with nothing pinned the
+main window has the column to itself. Only one cell is pinned at a time: pinning another
+replaces it, pinning the same one (or `q` in the pinned window) unpins it. The
+pinned window changes only when its own cell is run again. Images stay in the main window —
+the terminal shows one at a time — and the pinned one names the file instead.
 
 ## Editing the notebook from outside
 

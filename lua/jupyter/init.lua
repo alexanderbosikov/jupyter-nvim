@@ -121,6 +121,7 @@ M.defaults = {
         insert_above = "<leader>ja",
         insert_below = "<leader>jb",
         toggle_output = "<leader>jo",
+        pin_output = "<leader>jp", -- закрепить вывод ячейки в окне над основным; повтор снимает
         show_toc = "<leader>jT",
         open_table = "<leader>jt",
         edit_cell_args = "<leader>jg", -- g как «аргументы»: jа/jb/jc уже заняты
@@ -227,7 +228,7 @@ function M.setup(opts)
             -- показан. Событие от чужого буфера (в том числе не-ноутбука: открыли
             -- в том же окне текстовый файл) проверку по-прежнему запускает.
             for _, session in pairs(sessions) do
-                if ev.buf == session.output.buf or ev.buf == session.table.buf then
+                if ev.buf == session.output.buf or ev.buf == session.pinned.buf or ev.buf == session.table.buf then
                     return
                 end
             end
@@ -281,6 +282,14 @@ function M.sync_output_windows()
             end
             session.output_hidden = nil
             shown = shown + 1
+        end
+        -- закреплённое окно — следом за основным, оно пристраивается к нему сверху
+        if not visible and session.pinned:is_open() then
+            session.pinned:close()
+            session.pinned_hidden = true
+        elseif visible and session.pinned_hidden and session.pinned.run and not session.pinned:is_open() then
+            session.pinned:show(session.pinned.run)
+            session.pinned_hidden = nil
         end
     end
     return hidden, shown
@@ -390,7 +399,7 @@ function M.session(buf)
     -- курсор может стоять в наших же окнах — в drawer'е или во вкладке таблицы.
     -- Тогда сессия та же, что у ноутбука, которому они принадлежат, а не новая.
     for _, session in pairs(sessions) do
-        if buf == session.output.buf or buf == session.table.buf then
+        if buf == session.output.buf or buf == session.pinned.buf or buf == session.table.buf then
             return session
         end
     end
@@ -410,8 +419,33 @@ function M.session(buf)
         env = M.config.env,
         text_progress = M.config.text_progress,
     })
-    local ex, drawer
+    -- предпросмотр таблицы — общий для обоих окон вывода
+    local function preview(run, limit, cb)
+        with_sidecar(sc, function(start_err)
+            if start_err then
+                return cb({ "(сайдкар не поднялся: " .. (start_err.msg or start_err.code or "?") .. ")" })
+            end
+            sc:request("table.page", { path = run.table.path, offset = 0, limit = limit }, function(err, page)
+                if err then
+                    return cb({ "(не удалось прочитать таблицу: " .. (err.msg or err.code or "?") .. ")" })
+                end
+                local lines = table_view.format(page.header, page.rows, { max_col = M.config.table.max_col })
+                local shown = #page.rows
+                if page.total_rows > shown then
+                    table.insert(lines, (" … ещё %d строк · :JupyterTable"):format(page.total_rows - shown))
+                end
+                cb(lines)
+            end)
+        end)
+    end
+    local ex, drawer, pinned
     drawer = output.new(vim.tbl_extend("force", M.config.output, {
+        -- закреплённое окно открыто — делим колонку с ним, вставая снизу
+        dock = function()
+            if pinned and pinned:is_open() then
+                return { win = pinned.win, side = "below" }
+            end
+        end,
         -- сколько прогонов идёт помимо показываемого: без статуса под ячейкой (шаг 6)
         -- это единственный признак, что где-то ещё выполняется запрос
         pending = function()
@@ -432,29 +466,34 @@ function M.session(buf)
         stale = function(run)
             return M.is_stale(buf, run)
         end,
-        preview = function(run, limit, cb)
-            with_sidecar(sc, function(start_err)
-            if start_err then
-                return cb({ "(сайдкар не поднялся: " .. (start_err.msg or start_err.code or "?") .. ")" })
-            end
-            sc:request("table.page", { path = run.table.path, offset = 0, limit = limit }, function(err, page)
-                if err then
-                    return cb({ "(не удалось прочитать таблицу: " .. (err.msg or err.code or "?") .. ")" })
-                end
-                local lines = table_view.format(page.header, page.rows, { max_col = M.config.table.max_col })
-                local shown = #page.rows
-                if page.total_rows > shown then
-                    table.insert(lines, (" … ещё %d строк · :JupyterTable"):format(page.total_rows - shown))
-                end
-                cb(lines)
-            end)
-            end)
-        end,
+        preview = preview,
         preview_rows = M.config.output.preview_rows,
         on_open_table = function()
             M.open_table()
         end,
         images = images.new({ enabled = M.config.images ~= false }),
+    }))
+    -- Закреплённый вывод: одна ячейка, которая не уходит из вида, пока курсор ходит по
+    -- остальным. Своих картинок у него нет — на экране она одна, и её держит drawer.
+    pinned = output.new(vim.tbl_extend("force", M.config.output, {
+        name = "jupyter://output-pinned",
+        label = "📌 ",
+        dock = function()
+            if drawer:is_open() then
+                return { win = drawer.win, side = "above" }
+            end
+        end,
+        on_close = function()
+            M.unpin_output(buf)
+        end,
+        stale = function(run)
+            return M.is_stale(buf, run)
+        end,
+        preview = preview,
+        preview_rows = M.config.output.preview_rows,
+        on_open_table = function(run)
+            M.open_table(run)
+        end,
     }))
     -- Ячейку, которую прямо сейчас переписывает агент, не запускаем: её код через
     -- секунду будет другим, а прогон уже уедет в историю как настоящий. Сообщаем не
@@ -500,6 +539,18 @@ function M.session(buf)
             elseif not drawer:update(run) then
                 drawer:refresh_status()
             end
+            -- закреплённое окно живёт своей ячейкой: перезапустили её — показываем новый прогон
+            local session = sessions[buf]
+            if session and session.pin_cell == run.cell_id then
+                if not is_new then
+                    pinned:update(run)
+                elseif #vim.fn.win_findbuf(buf) > 0 then
+                    pinned:show(run)
+                else
+                    pinned:stage(run)
+                    session.pinned_hidden = true
+                end
+            end
             M.repaint(buf)
             sidebar.update(buf, run, is_new)
         end,
@@ -519,6 +570,8 @@ function M.session(buf)
         sidecar = sc,
         exec = ex,
         output = drawer,
+        pinned = pinned,
+        pin_cell = nil, -- cell_id закреплённой ячейки
         table = tbl,
         status = status_ui.new(M.config.status),
         store = store.new({ notebook = name ~= "" and name or nil, out_dir = M.config.out_dir }),
@@ -605,6 +658,7 @@ function M.session(buf)
             local session = sessions[buf]
             if session then
                 session.output:resize()
+                session.pinned:resize()
             end
         end,
     })
@@ -842,6 +896,9 @@ function M.repaint(buf)
     if s.output:is_open() then
         s.output:refresh_status()
     end
+    if s.pinned:is_open() then
+        s.pinned:refresh_status()
+    end
     return drawn
 end
 
@@ -988,6 +1045,7 @@ function M.detach(buf, timeout_ms)
     sidebar.detach(buf)
     s.status:clear(buf)
     s.output:close()
+    s.pinned:close()
     s.table:close()
     s.kernel:stop()
     if timeout_ms and timeout_ms > 0 then
@@ -1329,12 +1387,12 @@ local function show_table(s, run)
     end)
 end
 
-function M.open_table()
+---@param run? jupyter.Run какой прогон открыть; без него — по курсору
+function M.open_table(run)
     local s = M.session()
-    local run
     -- позиция курсора имеет смысл только в самом ноутбуке: из drawer'а берём
     -- тот прогон, который в нём сейчас показан
-    if vim.api.nvim_get_current_buf() == s.buf then
+    if not run and vim.api.nvim_get_current_buf() == s.buf then
         local cell = cells.at(s.buf, vim.api.nvim_win_get_cursor(0)[1])
         if cell then
             local cell_id = exec.cell_id(s.buf, cell)
@@ -1714,6 +1772,55 @@ end
 
 function M.toggle_output()
     M.session().output:toggle()
+end
+
+---Закрепить вывод ячейки под курсором в отдельном окне над основным.
+---
+---Закреплённая ячейка одна: новое закрепление заменяет прежнее, повтор на той же ячейке
+---(или из самого закреплённого окна) снимает его. Основное окно продолжает ходить за
+---курсором, закреплённое меняется, только когда перезапускают его ячейку.
+function M.pin_output()
+    local s = M.session()
+    local current = vim.api.nvim_get_current_buf()
+    if current == s.pinned.buf then
+        return M.unpin_output(s.buf)
+    end
+
+    local run
+    if current == s.buf then
+        local cell = cells.at(s.buf, vim.api.nvim_win_get_cursor(0)[1])
+        if cell then
+            local cell_id = exec.cell_id(s.buf, cell)
+            -- листают историю этой ячейки — закрепляем тот прогон, что на экране
+            local browsing = s.browse[cell_id]
+            if browsing then
+                run = s.store:to_run(s.store:records_of(cell_id)[browsing])
+            end
+            run = run or s.exec:run_for(cell_id) or s.store:last_run(cell_id)
+        end
+    else
+        run = s.output.run -- из окна вывода закрепляем то, что в нём показано
+    end
+    if not run then
+        vim.notify("jupyter.nvim: у ячейки под курсором нет вывода — закреплять нечего", vim.log.levels.WARN)
+        return
+    end
+    if s.pin_cell == run.cell_id and s.pinned:is_open() then
+        return M.unpin_output(s.buf)
+    end
+    s.pin_cell = run.cell_id
+    s.pinned_hidden = nil
+    s.pinned:show(run)
+end
+
+---Снять закрепление: окно уходит, основное снова занимает колонку целиком.
+---@param buf? integer
+function M.unpin_output(buf)
+    local s = M.session(buf)
+    s.pin_cell = nil
+    s.pinned_hidden = nil
+    s.pinned:close()
+    s.pinned.run = nil
 end
 
 function M.interrupt()

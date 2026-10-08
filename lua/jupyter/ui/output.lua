@@ -33,10 +33,18 @@ local STATUS = {
 local Output = {}
 Output.__index = Output
 
----@param opts? table position ("bottom"|"right"), size, keys, follow, pending
+---@param opts? table position ("bottom"|"right"), size, keys, follow, pending, name, label, dock
 function M.new(opts)
     opts = opts or {}
     return setmetatable({
+        name = opts.name or "jupyter://output",
+        -- что написать в winbar перед номером ячейки: у закреплённого окна — 📌
+        label = opts.label,
+        -- функция → { win, side = "above"|"below" }: к какому окну пристроиться. Так два
+        -- окна вывода делят одну колонку справа (или одну полосу снизу), а не плодят вторую
+        dock = opts.dock,
+        -- что делает q: у закреплённого окна закрыть его — значит снять закрепление
+        on_close = opts.on_close,
         -- функция-счётчик прогонов, идущих не в этом окне: рисуется в winbar
         pending = opts.pending,
         -- функция «код ячейки изменился с момента этого прогона»: главный признак,
@@ -66,7 +74,7 @@ function Output:_ensure_buf()
     if self.buf and vim.api.nvim_buf_is_valid(self.buf) then
         return self.buf
     end
-    self.buf = common.scratch_buf("jupyter://output", "jupyter-output")
+    self.buf = common.scratch_buf(self.name, "jupyter-output")
     common.apply_keys(self.buf, self:get_actions(), self.keys)
     return self.buf
 end
@@ -96,7 +104,14 @@ function Output:open()
     local buf = self:_ensure_buf()
     local vertical = self.position == "right"
 
-    vim.cmd(("botright %d%s"):format(self:computed_size(), vertical and "vsplit" or "split"))
+    local dock = self.dock and self.dock()
+    if dock and dock.win and vim.api.nvim_win_is_valid(dock.win) then
+        -- делим соседнее окно вывода пополам: сторона и размер у колонки уже свои
+        vim.api.nvim_set_current_win(dock.win)
+        vim.cmd(("%s %s"):format(dock.side == "above" and "aboveleft" or "belowright", vertical and "split" or "vsplit"))
+    else
+        vim.cmd(("botright %d%s"):format(self:computed_size(), vertical and "vsplit" or "split"))
+    end
     self.win = vim.api.nvim_get_current_win()
     vim.api.nvim_win_set_buf(self.win, buf)
 
@@ -205,15 +220,26 @@ function Output:_want_preview()
     if not run or not run.table or not run.table.path then
         return
     end
-    if run._preview or run._preview_asked or not self.preview or self.preview_rows <= 0 then
+    if run._preview or not self.preview or self.preview_rows <= 0 then
+        return
+    end
+    -- один прогон бывает сразу в двух окнах (основное и закреплённое): страницу просим
+    -- один раз, а перерисовываем всех, кто её ждёт
+    run._preview_waiting = run._preview_waiting or {}
+    run._preview_waiting[self] = true
+    if run._preview_asked then
         return
     end
 
     run._preview_asked = true
     self.preview(run, self.preview_rows, function(lines)
         run._preview = lines or {}
-        if self.run == run then
-            self:render()
+        local waiting = run._preview_waiting or {}
+        run._preview_waiting = nil
+        for out in pairs(waiting) do
+            if out.run == run then
+                out:render()
+            end
         end
     end)
 end
@@ -234,6 +260,10 @@ function Output:render()
         if image_path then
             table.insert(lines, "") -- строка-якорь под картинку
         end
+    elseif image_path then
+        -- картинок на экране одна на всех (Images:clear снимает все разом), поэтому
+        -- окну без своих картинок остаётся сказать, где она лежит
+        table.insert(lines, "🖼 " .. image_path)
     end
 
     if #lines == 0 then
@@ -310,7 +340,7 @@ function Output:_render_winbar()
     local cell = self.run and self.run.cell_id or "—"
     local pending = self.pending and self.pending() or 0
     vim.wo[self.win].winbar = table.concat({
-        hl.wrap("JupyterWinBar", " " .. common.escape_status("ячейка " .. cell)),
+        hl.wrap("JupyterWinBar", " " .. common.escape_status((self.label or "") .. "ячейка " .. cell)),
         "%=",
         hl.wrap(
             hl.for_status(self.run and self.run.status),
@@ -338,7 +368,13 @@ function Output:get_actions()
                 vim.notify("jupyter.nvim: открывать таблицу нечем", vim.log.levels.WARN)
             end
         end,
-        close = function() self:close() end,
+        close = function()
+            if self.on_close then
+                self.on_close()
+            else
+                self:close()
+            end
+        end,
         clear = function()
             if self.run then
                 self.run.lines = {}
