@@ -166,7 +166,7 @@ describe("ipynb: свои BufReadCmd и BufWriteCmd", function()
         package.loaded["jupyter"] = { config = { kernel_name = "proba" } }
 
         vim.cmd.edit(path)
-        assert.same({ "" }, lines())
+        assert.same(ipynb.STARTER, lines())
         assert.equals("markdown", vim.bo.filetype)
         vim.api.nvim_buf_set_lines(0, 0, -1, false, { "```python", "x = 1", "```" })
         vim.cmd("silent write")
@@ -175,6 +175,59 @@ describe("ipynb: свои BufReadCmd и BufWriteCmd", function()
         local nb = decode(path)
         assert.same({ name = "proba", display_name = "Проба", language = "python" }, nb.metadata.kernelspec)
         assert.equals("x = 1", table.concat(nb.cells[1].source, ""))
+    end)
+
+    it("пустой файл открывается новым ноутбуком и пишется с метаданными", function()
+        if not available then
+            return
+        end
+        vim.fn.writefile({}, path)
+        vim.cmd.edit(path)
+        assert.same(ipynb.STARTER, lines())
+        assert.equals("markdown", vim.bo.filetype)
+
+        vim.cmd("silent write")
+
+        local nb = decode(path)
+        assert.equals(4, nb.nbformat)
+        assert.is_not_nil(nb.metadata.kernelspec)
+        assert.equals(1, #nb.cells)
+        assert.equals("code", nb.cells[1].cell_type)
+    end)
+
+    it("шапку с метаданными не показывает, а :w их сохраняет", function()
+        if not available then
+            return
+        end
+        notebook(path)
+        vim.cmd.edit(path)
+        assert.equals("# Заголовок", lines()[1])
+        assert.is_false(vim.list_contains(lines(), "jupyter:"))
+
+        vim.api.nvim_buf_set_lines(0, -1, -1, false, { "", "```python", "z = 3", "```" })
+        vim.cmd("silent write")
+
+        local nb = decode(path)
+        assert.equals("python3", nb.metadata.kernelspec.name)
+        assert.equals(3, #nb.cells)
+    end)
+
+    it("новый ноутбук заполняется из vim.g.jupyter_new_notebook", function()
+        if not available then
+            return
+        end
+        vim.g.jupyter_new_notebook = function(p)
+            return { "# " .. vim.fn.fnamemodify(p, ":t:r"), "", "```python", "import nb_utils", "```" }
+        end
+        vim.cmd.edit(path)
+        vim.g.jupyter_new_notebook = nil
+        assert.same({ "# nb", "", "```python", "import nb_utils", "```" }, lines())
+
+        vim.cmd("silent write")
+
+        local nb = decode(path)
+        assert.equals(2, #nb.cells)
+        assert.equals("import nb_utils", table.concat(nb.cells[2].source, ""))
     end)
 
     it("повторный BufRead (netrw на :Ex) не делает из ноутбука json", function()
@@ -203,6 +256,15 @@ describe("ipynb: свои BufReadCmd и BufWriteCmd", function()
 
         assert.equals("link", vim.uv.fs_lstat(link).type)
         assert.equals(3, #decode(path).cells)
+    end)
+end)
+
+describe("ipynb.strip_header", function()
+    it("срезает только шапку jupytext", function()
+        assert.same({ "x" }, ipynb.strip_header({ "---", "jupyter:", "  a: 1", "---", "", "x" }))
+        local rule = { "---", "", "текст", "---" }
+        assert.same(rule, ipynb.strip_header(rule))
+        assert.same({ "---" }, ipynb.strip_header({ "---" }))
     end)
 end)
 

@@ -95,6 +95,73 @@ local function fill(buf, lines)
     vim.bo[buf].undolevels = levels
 end
 
+---Нового ноутбука ещё нет: файла нет вовсе или он пустой — `touch nb.ipynb`, «New File»
+---в файловом менеджере. jupytext такой файл не читает (не json), но это не битый
+---ноутбук, а чистый лист: показывать его сырым json-ом незачем.
+---@param path string
+---@return boolean
+function M.blank(path)
+    local stat = vim.uv.fs_stat(path)
+    if not stat then
+        return true
+    end
+    if stat.size > 4096 then
+        return false
+    end
+    local ok, raw = pcall(vim.fn.readfile, path)
+    return ok and not table.concat(raw, ""):match("%S")
+end
+
+-- Чистый лист открывается с одной пустой ячейкой кода: ноутбук без ячеек нечем запускать.
+M.STARTER = { "```python", "", "```" }
+
+---Чем заполнить новый ноутбук: `vim.g.jupyter_new_notebook` — строки markdown-буфера или
+---функция `(path) -> строки`, иначе одна пустая ячейка. Именно `vim.g`, а не `opts`:
+---первый ноутбук читается до setup() — ленивый плагин грузится на его же FileType.
+---@param path string
+---@return string[]
+function M.template(path)
+    local spec = vim.g.jupyter_new_notebook
+    if type(spec) == "function" then
+        local ok, lines = pcall(spec, path)
+        if ok and type(lines) == "table" then
+            return lines
+        end
+        notify("jupyter_new_notebook упал, взята пустая ячейка: " .. tostring(lines), vim.log.levels.WARN)
+    elseif type(spec) == "table" then
+        return vim.deepcopy(spec)
+    end
+    return vim.deepcopy(M.STARTER)
+end
+
+---YAML-шапку `---\njupyter: ...\n---` jupytext пишет в начало markdown ради метаданных
+---ноутбука (kernelspec, версия формата). В буфере она не нужна: `--update` на записи берёт
+---метаданные из самого ноутбука, когда шапки в тексте нет. Срезается вместе с пустыми
+---строками после неё. Чужое `---` в начале (горизонтальная черта) не трогаем: шапка —
+---это только блок с ключом `jupyter:`.
+---@param lines string[]
+---@return string[]
+function M.strip_header(lines)
+    if lines[1] ~= "---" then
+        return lines
+    end
+    local close
+    for i = 2, #lines do
+        if lines[i] == "---" then
+            close = i
+            break
+        end
+    end
+    if not close or not vim.list_contains(vim.list_slice(lines, 2, close - 1), "jupyter:") then
+        return lines
+    end
+    local first = close + 1
+    while first <= #lines and lines[first] == "" do
+        first = first + 1
+    end
+    return vim.list_slice(lines, first)
+end
+
 ---@param text string
 ---@return string[]
 local function split(text)
@@ -113,10 +180,14 @@ end
 ---@param path string абсолютный путь
 function M.read(buf, path)
     local lines, converted = {}, true
-    if vim.uv.fs_stat(path) then
+    if M.blank(path) then
+        -- файла нет или он пустой — новый ноутбук по шаблону, kernelspec и прочие
+        -- метаданные появятся при первой записи (seed)
+        lines = M.template(path)
+    else
         local out, err = jupytext({ "--quiet", "--from", "ipynb", "--to", M.FORMAT, "--output", "-", path })
         if out then
-            lines = split(out)
+            lines = M.strip_header(split(out))
         else
             converted = false
             local ok, raw = pcall(vim.fn.readfile, path)
@@ -131,7 +202,6 @@ function M.read(buf, path)
             ), vim.log.levels.ERROR)
         end
     end
-    -- файла нет — новый ноутбук: пустой буфер, kernelspec появится при первой записи
 
     fill(buf, lines)
     vim.bo[buf].fileencoding = "utf-8"
@@ -236,7 +306,7 @@ function M.write(buf, path, range)
         ok = vim.fn.writefile(lines, tmp) == 0
         err = not ok and "не удалось записать временный файл" or nil
     else
-        if vim.uv.fs_stat(target) then
+        if not M.blank(target) then
             ok, err = vim.uv.fs_copyfile(target, tmp)
         else
             ok = seed(tmp)

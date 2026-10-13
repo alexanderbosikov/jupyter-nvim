@@ -42,6 +42,12 @@ was set up around it — the `filetype.add` for `ipynb` and the hook that droppe
 `<name>.md` are not needed any more. `vim.g.jupyter_ipynb = false` before startup turns the
 plugin's own reading off.
 
+The jupytext YAML header (`---` / `jupyter:` / kernelspec) is not shown in the buffer:
+notebook metadata stays in the `.ipynb` and survives `:w`. A new notebook — a missing or
+empty file — opens with one empty code cell, or with `vim.g.jupyter_new_notebook`: a list
+of markdown lines, or a function `(path) -> lines`. It is a `vim.g` and not an `opts` key
+because the first notebook is read before `setup()` runs.
+
 ## Installation
 
 ```lua
