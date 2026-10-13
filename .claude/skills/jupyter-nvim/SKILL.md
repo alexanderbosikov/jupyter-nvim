@@ -38,6 +38,14 @@ the buffer still reads fine, and you can ask the user for the socket address
 (`:echo v:servername`). There may be several notebooks and several sockets — match them by
 the `notebook` field in the snapshot.
 
+`owner_pid` is the nvim that holds the **kernel**, not necessarily the one the user is looking
+at: the same notebook can be open in two nvims. Check two fields of the snapshot before you
+edit: `visible` (is the buffer shown in a window of this nvim) and `other_instances`
+(`[{pid, socket, at}]` — other live nvims with this notebook open). If `visible` is false and
+`other_instances` is not empty, the user is most likely looking at the other one: take the
+snapshot from that socket, and if it is `visible` there, work there. Unsure — ask; an edit
+made in the hidden copy is invisible to the user and can overwrite the file on `:wa`.
+
 If you get back `attempt to call field 'snapshot_json' (a nil value)` — this nvim session
 has a build of the plugin without snapshot and editing. Do not work around it by parsing
 fences by hand: ask for a restart of nvim (or a reload of the plugin) and carry on.

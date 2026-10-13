@@ -193,6 +193,7 @@ function M.setup(opts)
             -- Черновики первыми: detach_all гасит сессии и может занять время, а выход с
             -- несохранённым буфером — ровно тот случай, ради которого черновик и есть.
             draft.flush_all("выход из редактора")
+            M.release_all_instances()
             M.detach_all()
             sidebar.release()
         end,
@@ -250,6 +251,7 @@ function M.setup(opts)
                 M.set_keys(ev.buf)
             end
             M.warn_orphan(ev.buf)
+            M.claim_instance(ev.buf)
             M.watch_draft(ev.buf)
             if M.config.output.open_on_attach then
                 M.open_for(ev.buf)
@@ -1601,6 +1603,97 @@ function M.warn_orphan(buf)
     return orphan
 end
 
+-- --- тот же ноутбук в другом nvim ---
+
+-- buf → путь, под которым мы отметились в реестре (jupyter.instances)
+local claimed = {}
+
+---Отметиться в реестре открытых ноутбуков и предупредить, если ноутбук уже открыт в
+---другом nvim: правки там и тут друг друга не видят, а `:wa` в забытом перезапишет файл.
+---@param buf integer
+---@return table[]|nil другие экземпляры
+function M.claim_instance(buf)
+    local name = vim.api.nvim_buf_get_name(buf)
+    if name == "" or vim.b[buf].jupyter_ipynb == nil or claimed[buf] == name then
+        return nil
+    end
+    local instances = require("jupyter.instances")
+    if claimed[buf] then
+        instances.release(claimed[buf]) -- буфер переименовали
+    end
+    claimed[buf] = name
+    instances.claim(name)
+    vim.api.nvim_create_autocmd("BufUnload", {
+        buffer = buf,
+        once = true,
+        callback = function()
+            if claimed[buf] then
+                instances.release(claimed[buf])
+                claimed[buf] = nil
+            end
+        end,
+    })
+    local others = instances.others(name)
+    if #others > 0 then
+        M.ask_other_instance(buf, others)
+    end
+    return others
+end
+
+---Спросить, что делать с ноутбуком, открытым в другом nvim, — как vim при чужом swap-файле.
+---
+---Обычное сообщение тут не годится: ноутбук чаще всего открывается при старте
+---(`nvim x.ipynb`), и первая же перерисовка стирает его раньше, чем человек его увидит.
+---Поэтому диалог, и не раньше конца старта. Без интерфейса (headless, тесты) спрашивать
+---некого — только сообщение.
+---@param buf integer
+---@param others table[]
+function M.ask_other_instance(buf, others)
+    local text = ("%s уже открыт в другом nvim (%s).\nПравки там и здесь друг друга не видят, а :wa в одном перезапишет файл другого."):format(
+        vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t"),
+        require("jupyter.instances").describe(others)
+    )
+    local function ask()
+        if not vim.api.nvim_buf_is_valid(buf) then
+            return
+        end
+        if #vim.api.nvim_list_uis() == 0 then
+            vim.notify("jupyter.nvim: " .. text:gsub("\n", " "), vim.log.levels.WARN)
+            return
+        end
+        -- confirm() красит текст группой MoreMsg, :echohl на него не действует. Красным
+        -- на время диалога: голубой вопрос при старте легко принять за рядовой
+        local more = vim.api.nvim_get_hl(0, { name = "MoreMsg" })
+        vim.api.nvim_set_hl(0, "MoreMsg", { link = "ErrorMsg" })
+        local ok, choice = pcall(vim.fn.confirm, text, "&Open Read-Only\n&Edit anyway\n&Quit", 1, "Warning")
+        vim.api.nvim_set_hl(0, "MoreMsg", more)
+        if not ok then
+            return
+        end
+        if choice == 1 then
+            -- как «Open Read-Only» у swap: :w предупредит, :wa такой буфер пропустит
+            vim.bo[buf].readonly = true
+        elseif choice == 3 then
+            pcall(vim.api.nvim_buf_delete, buf, {})
+        end
+    end
+    if vim.v.vim_did_enter == 1 then
+        vim.schedule(ask)
+    else
+        -- VimEnter, а не UIEnter: TUI и --embed подключаются до чтения файлов, и
+        -- UIEnter к этому моменту уже прошёл — обработчик не вызвался бы никогда
+        vim.api.nvim_create_autocmd("VimEnter", { once = true, callback = vim.schedule_wrap(ask) })
+    end
+end
+
+function M.release_all_instances()
+    local instances = require("jupyter.instances")
+    for buf, name in pairs(claimed) do
+        instances.release(name)
+        claimed[buf] = nil
+    end
+end
+
 -- --- черновик несохранённого буфера ---
 
 ---@return table
@@ -1889,7 +1982,13 @@ end
 ---@return table
 function M.snapshot(buf)
     local s = M.session(buf)
-    return snapshot.build(s.buf, { store = s.store, kernel = s.kernel, exec = s.exec })
+    local snap = snapshot.build(s.buf, { store = s.store, kernel = s.kernel, exec = s.exec })
+    -- Агенту: смотрит ли человек на этот буфер и нет ли ноутбука в другом nvim — тогда
+    -- правка сюда может уйти мимо того, что у человека на экране
+    snap.visible = #vim.fn.win_findbuf(s.buf) > 0
+    local name = vim.api.nvim_buf_get_name(s.buf)
+    snap.other_instances = name ~= "" and require("jupyter.instances").others(name) or {}
+    return snap
 end
 
 ---Тот же снимок строкой JSON: форма, в которой его забирает `--remote-expr`.
