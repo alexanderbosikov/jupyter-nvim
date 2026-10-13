@@ -226,6 +226,7 @@ one the plugin opened for the user's prompt: work in it, do not open another.
 word it is dropped by itself — an agent that crashed or went off to ask a question never
 sends `done`, and a mark that outlives it lies to the user. Every `edit_replace` inside the
 claim restarts the countdown; thinking longer without editing, `edit_touch(token)`.
+**A Stop hook checks this** (`.claude/hooks/jupyter_claim.py`): end your turn with the prompt's claim still open and you are sent back to close it; the second time the hook closes it itself and tells the user.
 **Asking the user something, or dropping the task: `edit_done` first** — your question may
 hang there for an hour; the mark must not.
 

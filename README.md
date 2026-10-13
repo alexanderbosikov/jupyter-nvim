@@ -563,9 +563,19 @@ and it goes to the Claude Code session living in a tmux or herdr pane next to nv
 ```
 :JupyterAsk                      a window to type in; about the cell (or paragraph) under the cursor
 :JupyterAsk rewrite with polars  the same, in one line
-:JupyterAsk!                     about the whole notebook — nothing is claimed
+:JupyterAsk!  (<leader>jQ)       about the whole notebook — nothing is claimed
 <leader>jq                       from visual — about the selected lines: prose, cells or both
 :JupyterAgentAttach              pick the pane by hand
+```
+
+**The claim must not outlive the agent's turn.** An agent that answers without loading the
+skill leaves the mark on the cell. `.claude/hooks/jupyter_claim.py` is a Claude Code hook for
+that: on `UserPromptSubmit` it reminds the agent which claim to close, on `Stop` it sends the
+agent back if the claim is still open — and closes it itself the second time. Enable it in
+`~/.claude/settings.json` for both events:
+
+```json
+{ "type": "command", "command": "python3 ~/Projects/jupyter.nvim/.claude/hooks/jupyter_claim.py", "timeout": 15 }
 ```
 
 **What the agent gets along with the text** is the address: the notebook and the piece you

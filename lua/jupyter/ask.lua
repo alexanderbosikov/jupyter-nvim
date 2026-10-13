@@ -380,8 +380,8 @@ end
 ---Пишется словами, а не JSON: это первый текст, который он читает, и человек читает его
 ---тоже — в журнале промптов и в окне сессии. Поэтому в ней только то, что меняется от
 ---промпта к промпту. Как править — в скилле `jupyter-nvim`, его триггер — `[jupyter.nvim]`
----в начале. Полный путь, сокет и номер заявки — в файле панели (`remember`); если его
----записать не удалось (`remembered = false`), они едут в шапке.
+---в начале. Полный путь и сокет — в файле панели (`remember`); если его записать не
+---удалось (`remembered = false`), они едут в шапке. Заявка — в шапке всегда.
 ---@param addr jupyter.Address
 ---@param token integer|nil номер открытой заявки
 ---@param opts? table remembered: адрес лежит в файле панели
@@ -423,9 +423,11 @@ function M.header(addr, token, opts)
         if addr.socket then
             table.insert(out, "сокет nvim: " .. addr.socket)
         end
-        if token then
-            table.insert(out, ("заявка: %d"):format(token))
-        end
+    end
+    -- Заявка — всегда, и не номером, а действием: агент, не загрузивший скилл, иначе
+    -- отвечает и уходит, а метка висит на ячейке у человека, пока не истечёт
+    if token then
+        table.insert(out, ("заявка %d открыта — до конца ответа сними: edit_done(%d) (скилл jupyter-nvim)"):format(token, token))
     end
 
     local shown, more = 0, 0
