@@ -26,6 +26,13 @@ M.LINKS = {
     JupyterAgentDelete = "DiffDelete", -- та же область, когда агент собирается её удалить
     JupyterAgentStale = "DiagnosticWarn", -- та же подпись, когда о заявке давно нет вестей
     JupyterAgentFlash = "IncSearch", -- вспышка на только что вставленном
+    -- магика в python-ячейке (magic.lua): имя `%connect` и аргументы `rs`. Statement, а не
+    -- PreProc: в части тем PreProc того же цвета, что `import`, и магика с ним сливается
+    JupyterMagic = "Statement",
+    JupyterMagicArgs = "@variable",
+    -- фон ячейки под курсором (ui/current.lua). CursorLine — «здесь курсор» в любой теме;
+    -- кому ярко на всю ячейку, задаёт свой фон, например между Normal и CursorLine
+    JupyterCellCurrent = "CursorLine",
 }
 
 local function fg_of(name)

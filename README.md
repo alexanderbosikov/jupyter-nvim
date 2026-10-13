@@ -653,6 +653,8 @@ opts = {
     insert_on_new_cell = true,       -- a freshly inserted cell goes straight to insert; it is empty anyway
     images = true,
     highlight = true,                -- own highlight groups for the winbar
+    current_cell = true,             -- background of the cell under the cursor: JupyterCellCurrent,
+                                     -- linked to CursorLine; set your own bg if a whole cell of it is too loud
     text_progress = true,            -- ask the kernel for a text progress bar, not a widget one
     output = {
         position = "bottom",         -- or "right"

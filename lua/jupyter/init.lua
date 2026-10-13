@@ -47,6 +47,8 @@ M.defaults = {
     keep_kernel_on_exit = false,
     -- false — не определять группы подсветки, если хочешь задать их сам
     highlight = true,
+    -- фон ячейки под курсором (группа JupyterCellCurrent); false — без подсветки
+    current_cell = true,
     -- Прогресс-бар текстом вместо виджета: tqdm в ядре с ipywidgets рисует бар через
     -- comm-протокол, которого у нас нет, и ячейка с долгим циклом навсегда остаётся на
     -- «0%» (§6.6). false — не трогать ядро, бар тогда не обновляется вовсе.
@@ -179,6 +181,10 @@ function M.setup(opts)
     require("jupyter.commands").setup(M)
     if M.config.highlight ~= false then
         highlight.attach(augroup)
+        require("jupyter.magic").attach()
+        if M.config.current_cell ~= false then
+            require("jupyter.ui.current").attach(augroup)
+        end
     end
 
     vim.api.nvim_create_autocmd("VimLeavePre", {
