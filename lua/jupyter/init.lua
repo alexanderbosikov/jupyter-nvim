@@ -137,6 +137,7 @@ M.defaults = {
         cell_lang = "<leader>jl", -- l как «language»: переключает python ↔ sql
         -- q как «вопрос»: тот же ключ в visual спрашивает про выделенный кусок
         ask = "<leader>jq",
+        ask_notebook = "<leader>jQ", -- то же про весь ноутбук, без привязки к ячейке
         -- начало и конец своей ячейки: пара к ]c/[c, которые ходят по соседним
         cell_start = "[C",
         cell_end = "]C",
@@ -303,6 +304,43 @@ function M.sync_output_windows()
     return hidden, shown
 end
 
+-- Описания мап для which-key и :map. Имя действия («run_cell») человеку ничего не говорит,
+-- а в which-key видно только описание.
+M.KEY_DESC = {
+    run_cell = "выполнить ячейку",
+    run_all = "выполнить все ячейки",
+    run_below = "выполнить с этой ячейки и ниже",
+    next_cell = "следующая ячейка",
+    prev_cell = "предыдущая ячейка",
+    prev_run = "предыдущий прогон ячейки",
+    next_run = "следующий прогон ячейки",
+    insert_above = "новая ячейка выше",
+    insert_below = "новая ячейка ниже",
+    toggle_output = "показать/скрыть вывод",
+    pin_output = "закрепить вывод ячейки",
+    show_toc = "оглавление ноутбука",
+    open_table = "таблица постранично",
+    edit_cell_args = "параметры %%sql ячейки",
+    split_cell = "разрезать ячейку по курсору",
+    merge_cell = "склеить со следующей",
+    move_cell_up = "переставить ячейку выше",
+    move_cell_down = "переставить ячейку ниже",
+    cell_to_markdown = "ячейку в markdown",
+    cell_to_code = "markdown в код",
+    cell_lang = "язык ячейки: python ↔ sql",
+    ask = "спросить агента про ячейку",
+    ask_notebook = "спросить агента про весь ноутбук",
+    cell_start = "к началу ячейки",
+    cell_end = "к концу ячейки",
+    interrupt = "прервать выполнение",
+    restart = "перезапустить ядро",
+}
+
+---Спросить агента про ноутбук целиком — то же, что `:JupyterAsk!`.
+function M.ask_notebook()
+    M.ask({ scope = "notebook" })
+end
+
 ---Поставить буфер-локальные мапы. Значением действия может быть как одна клавиша,
 ---так и список: `next_cell = { "<C-j>", "]n" }` — привычная и идиоматичная разом.
 ---@param buf? integer
@@ -315,7 +353,7 @@ function M.set_keys(buf)
                 common.map("n", key, function() fn() end, {
                     buffer = buf,
                     silent = true,
-                    desc = "jupyter: " .. action,
+                    desc = "jupyter: " .. (M.KEY_DESC[action] or action),
                 })
             end
         end
@@ -327,7 +365,7 @@ function M.set_keys(buf)
     if ask_key then
         common.map("x", ask_key, function()
             M.ask_selection()
-        end, { buffer = buf, silent = true, desc = "jupyter: спросить про выделенное" })
+        end, { buffer = buf, silent = true, desc = "jupyter: спросить агента про выделенное" })
     end
 
     for kind, key in pairs(M.config.textobjects or {}) do

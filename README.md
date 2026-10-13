@@ -97,6 +97,7 @@ value may be a string or a list of keys); `keys = false` turns them off entirely
 | cell as a text object | `ic` — the body, `ac` — with the marker |
 | magic arguments of the cell | `<leader>jg` |
 | ask the agent about this cell | `<leader>jq` (in visual — about the selection) |
+| ask the agent about the whole notebook | `<leader>jQ` |
 | split / join cell | `<leader>js` / `<leader>jM` |
 | move cell up / down | `<leader>jK` / `<leader>jJ` |
 | to markdown / back to code | `<leader>jm` / `<leader>jy` |
