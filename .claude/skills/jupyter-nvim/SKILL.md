@@ -57,11 +57,17 @@ never moves, and unsaved edits are read as well.
 
 ```sh
 # snapshot: the cells, their ids, boundaries, language and the last run of each
-nvim --server "$SOCK" --remote-expr 'luaeval("require(\"jupyter\").snapshot_json()")'
+nvim --server "$SOCK" --remote-expr "luaeval('require(\"jupyter\").snapshot_json(\"$NB\")')"
 
 # the whole notebook text (including anything unsaved)
-nvim --server "$SOCK" --remote-expr 'luaeval("table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), \"\\n\")")'
+nvim --server "$SOCK" --remote-expr "luaeval('table.concat(vim.api.nvim_buf_get_lines(require(\"jupyter\").snapshot(\"$NB\").buf, 0, -1, false), \"\\n\")')"
 ```
+
+**Always address the notebook by its path (`$NB`), never by "the current buffer"** —
+`snapshot_json()` without an argument, buffer `0`, `ensure_started()`. Over `--remote-expr`
+the current buffer is wherever the user's cursor happens to be: the output window, a
+picker, a file tree. A snapshot by path answers `{"ok":false,"reason":"no_buffer"}` when
+the notebook is not open in that nvim.
 
 Per cell the snapshot gives: `id` (the `jncell` from the fence — a cell made by the plugin's
 insert/split/to-code commands or by your `edit_replace` has one from the start; one the user
@@ -253,9 +259,27 @@ and the `.ipynb` ends up with `%%sql` twice. Do not edit `magic_args` in a fence
 ## Running
 
 ```sh
-# run the cell whose body starts at line 67; the cursor is left alone
-nvim --server "$SOCK" --remote-expr 'luaeval("(function() local jn = require(\"jupyter\") local s = jn.ensure_started() s.exec:run_at(s.buf, 67) return \"sent\" end)()")'
+# run cell af4b of this notebook; the cursor is left alone
+nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").agent_run({notebook = \"$NB\", cell = \"af4b\"}))')"
+# → {"ok":true,"cell_id":"af4b","run_id":3,"buf":3}
 ```
+
+Address the cell by **id** (`cell`), not by line: your own edits shift the lines. `row = N`
+works too (any line inside the cell). Several cells: one call per cell, back to back; they
+queue in the kernel and run in order, no need to wait between them.
+
+**Read the answer.** `ok: false` comes with a `reason`: `no_buffer` (notebook not open in
+this nvim), `no_cell`, `empty`, `claimed` (a claim holds the cell: `edit_done(token)` first),
+`no_python`. Do not report a run you did not get `ok: true` for.
+
+**Never `ensure_started()` / `s.exec:run_at(...)`** without a buffer. They take nvim's
+*current* buffer, and over `--remote-expr` that can be the output window, a picker, a file
+tree: the run goes to a wrong session, finds no cell, and returns nothing, while a wrapper's
+`return "sent"` tells you it went fine.
+
+What the user sees is the same as for their own key: the status under the cell («в очереди»
+→ «выполняется» → ✓) and the output window opening with the run, if the notebook is on
+screen (`visible`). The buffer is not saved before the run (their key does `:w`; you do not).
 
 Then poll the snapshot until the cell loses `running` and `last.run_id` grows (in Claude
 Code, wait with Monitor and an until-condition, not with `sleep`). Take the result from

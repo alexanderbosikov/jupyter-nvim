@@ -2011,14 +2011,36 @@ function M.status()
     }
 end
 
+---Буфер, в котором открыт этот ноутбук. Агент адресует ноутбук путём, а не текущим
+---буфером: через `--remote-expr` текущим может оказаться что угодно — окно вывода,
+---пикер, дерево файлов, — смотря где у человека курсор.
+---@param path string
+---@return integer|nil
+local function buf_of_notebook(path)
+    local want = vim.fn.resolve(vim.fn.fnamemodify(path, ":p"))
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        local name = vim.api.nvim_buf_get_name(b)
+        if name ~= "" and vim.fn.resolve(name) == want then
+            return b
+        end
+    end
+end
+
 ---Снимок ноутбука одной структурой: ячейки, их id и последний прогон каждой.
 ---
 ---Нужен тому, кто читает ноутбук снаружи — скрипту или агенту через `--remote-expr`:
 ---иначе он повторяет разбор фенсов и раскладку `.jupyter-out` у себя, и эта копия
 ---правил расходится с нашей. Ничего не пишет: снимок — производное представление.
----@param buf? integer
+---@param buf? integer|string буфер или путь ноутбука; без него — текущий буфер
 ---@return table
 function M.snapshot(buf)
+    if type(buf) == "string" then
+        local found = buf_of_notebook(buf)
+        if not found then
+            return { ok = false, reason = "no_buffer", msg = "этот ноутбук не открыт в nvim" }
+        end
+        buf = found
+    end
     local s = M.session(buf)
     local snap = snapshot.build(s.buf, { store = s.store, kernel = s.kernel, exec = s.exec })
     -- Агенту: смотрит ли человек на этот буфер и нет ли ноутбука в другом nvim — тогда
@@ -2185,14 +2207,7 @@ local function target_buf(opts)
         return M.session(opts.buf).buf
     end
     if opts.notebook then
-        local want = vim.fn.resolve(vim.fn.fnamemodify(opts.notebook, ":p"))
-        for _, b in ipairs(vim.api.nvim_list_bufs()) do
-            local name = vim.api.nvim_buf_get_name(b)
-            if name ~= "" and vim.fn.resolve(name) == want then
-                return b
-            end
-        end
-        return nil
+        return buf_of_notebook(opts.notebook)
     end
     return M.session().buf
 end
@@ -2240,6 +2255,58 @@ function M.edit_replace_files(old_path, new_path, opts)
         return { ok = false, reason = "no_file", msg = "не читается файл с текстом правки" }
     end
     return M.edit_replace(old, new, opts)
+end
+
+---Запустить ячейку по просьбе агента — так же, как своей клавишей её запустил бы человек:
+---статус под ячейкой, окно вывода (если ноутбук на экране).
+---
+---Ноутбук ищется по пути, а не берётся текущим буфером: агент приходит через
+---`--remote-expr`, и текущим в этот момент может оказаться что угодно — окно вывода,
+---пикер, дерево файлов. `ensure_started()` без буфера тогда заводит сессию чужому буферу,
+---`run_at` не находит там ячейки и молча возвращает nil, а агент видит свой `"sent"`.
+---Поэтому и ответ здесь — что случилось на самом деле, с причиной отказа.
+---@param opts table notebook — путь ноутбука (или buf); cell — id ячейки (или row — строка в ней)
+---@return table { ok, cell_id, run_id } | { ok = false, reason, msg }
+function M.agent_run(opts)
+    opts = opts or {}
+    local buf = target_buf(opts)
+    if not buf or not vim.api.nvim_buf_is_valid(buf) then
+        return { ok = false, reason = "no_buffer", msg = "этот ноутбук не открыт в nvim" }
+    end
+    local cell
+    if opts.cell then
+        cell = cellid.find(buf, opts.cell)
+    elseif opts.row then
+        cell = cells.at(buf, opts.row)
+    end
+    if not cell then
+        return { ok = false, reason = "no_cell", msg = "ячейки нет: " .. tostring(opts.cell or opts.row) }
+    end
+    if not cells.text(buf, cell):match("%S") then
+        return { ok = false, reason = "empty", msg = "ячейка пустая" }
+    end
+    local holder = agent.claim_of(buf, exec.cell_id(buf, cell))
+    if holder then
+        return {
+            ok = false,
+            reason = "claimed",
+            msg = ("ячейку держит заявка %d «%s»: сначала edit_done"):format(holder.token, holder.label),
+            token = holder.token,
+        }
+    end
+
+    local s = M.ensure_started(buf)
+    if not s.started then
+        return { ok = false, reason = "no_python", msg = "ядро не поднять: python для сайдкара не найден" }
+    end
+    -- Без write_before_run: `:w` чужими руками посреди правки человека — не то, о чём
+    -- просили. Отметка в черновике та же, что у запуска клавишей.
+    draft.note(draft.of(buf), "run", "прогон ячейки (агент)")
+    local run = s.exec:run(buf, cell)
+    if not run then
+        return { ok = false, reason = "not_started", msg = "запуск не начался, причина в :JupyterLog" }
+    end
+    return { ok = true, buf = buf, cell_id = run.cell_id, run_id = run.run_id }
 end
 
 ---Поставить метку на кусок, который агент собирается править: человек видит её до
