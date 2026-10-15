@@ -159,6 +159,9 @@ local augroup
 
 local LOG_LIMIT = 200
 
+-- ноутбук грузит agent_open: окна вывода при этом не открываем — человек смотрит в другое
+local opening_hidden = false
+
 ---@param opts? jupyter.Config
 function M.setup(opts)
     opts = opts or {}
@@ -254,7 +257,7 @@ function M.setup(opts)
             M.warn_orphan(ev.buf)
             M.claim_instance(ev.buf)
             M.watch_draft(ev.buf)
-            if M.config.output.open_on_attach then
+            if M.config.output.open_on_attach and not opening_hidden then
                 M.open_for(ev.buf)
             end
         end,
@@ -2339,7 +2342,7 @@ function M.agent_run(opts)
     opts = opts or {}
     local buf = target_buf(opts)
     if not buf or not vim.api.nvim_buf_is_valid(buf) then
-        return { ok = false, reason = "no_buffer", msg = "этот ноутбук не открыт в nvim" }
+        return { ok = false, reason = "no_buffer", msg = "этот ноутбук не открыт в nvim: сначала agent_open" }
     end
     local cell
     if opts.cell then
@@ -2375,6 +2378,58 @@ function M.agent_run(opts)
         return { ok = false, reason = "not_started", msg = "запуск не начался, причина в :JupyterLog" }
     end
     return { ok = true, buf = buf, cell_id = run.cell_id, run_id = run.run_id }
+end
+
+---Открыть ноутбук агента в этом nvim скрытым буфером и поднять ему ядро.
+---
+---Без этого агент, создав ноутбук, ждал, пока человек откроет его руками: `agent_run` по
+---неоткрытому ноутбуку отвечает `no_buffer`. Свой nvim агенту не годится — буферы у
+---каждого процесса свои, человек свой ноутбук в `:ls` не увидит, а открыв его у себя,
+---получит вторую копию. Поэтому буфер заводится здесь, в nvim человека, но ни одно окно
+---не трогается: курсор и текущий буфер остаются его, а ноутбук ждёт в списке буферов.
+---
+---Открыт в другом nvim — отказ с его сокетом: агенту туда, а не заводить вторую копию.
+---@param opts table notebook — путь; kernel = false — ядро не поднимать
+---@return table { ok, buf, opened, kernel } | { ok = false, reason, msg, others }
+function M.agent_open(opts)
+    opts = opts or {}
+    if not opts.notebook or opts.notebook == "" then
+        return { ok = false, reason = "no_path", msg = "нужен notebook — путь ноутбука" }
+    end
+    local path = vim.fn.fnamemodify(opts.notebook, ":p")
+    local buf = buf_of_notebook(path)
+    local opened = false
+    if not (buf and vim.api.nvim_buf_is_loaded(buf)) then
+        local others = require("jupyter.instances").others(path)
+        if #others > 0 then
+            return {
+                ok = false,
+                reason = "other_instance",
+                msg = "ноутбук открыт в другом nvim: " .. require("jupyter.instances").describe(others),
+                others = others,
+            }
+        end
+        buf = buf or vim.fn.bufadd(path)
+        opening_hidden = true
+        local ok, err = pcall(vim.fn.bufload, buf)
+        opening_hidden = false
+        if not ok then
+            return { ok = false, reason = "load_failed", msg = tostring(err) }
+        end
+        vim.bo[buf].buflisted = true
+        opened = true
+    end
+    if vim.b[buf].jupyter_ipynb == false then
+        return { ok = false, reason = "not_converted", msg = "ноутбук открылся сырым json: jupytext не сработал, см. :messages" }
+    end
+    if not vim.tbl_contains(M.config.filetypes, vim.bo[buf].filetype) then
+        return { ok = false, reason = "not_notebook", msg = "буфер не ноутбук: filetype " .. vim.bo[buf].filetype }
+    end
+    local res = { ok = true, buf = buf, opened = opened, kernel = false }
+    if opts.kernel ~= false then
+        res.kernel = M.ensure_started(buf).started == true
+    end
+    return res
 end
 
 ---Поставить метку на кусок, который агент собирается править: человек видит её до

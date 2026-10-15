@@ -86,4 +86,101 @@ describe("запуск ячейки агентом", function()
         assert.equals(claim.token, res.token)
         assert.equals(0, #sent)
     end)
+
+    it("agent_open: уже открыт — тот же буфер, ничего не грузит", function()
+        local res = jupyter.agent_open({ notebook = path, kernel = false })
+        assert.is_true(res.ok, res.msg)
+        assert.equals(buf, res.buf)
+        assert.is_false(res.opened)
+    end)
+end)
+
+describe("agent_open: ноутбук агента в nvim человека", function()
+    local instances = require("jupyter.instances")
+    local saved_dir, saved_alive
+
+    before_each(function()
+        jupyter.setup({})
+        saved_dir, saved_alive = instances.DIR, instances.alive
+        instances.DIR = vim.fn.tempname()
+    end)
+
+    after_each(function()
+        instances.DIR, instances.alive = saved_dir, saved_alive
+        vim.cmd("silent! %bwipeout!")
+    end)
+
+    it("открывает скрытым буфером: окно и текущий буфер не меняются", function()
+        local path = vim.fn.tempname() .. ".py"
+        vim.fn.writefile({ '# %% jncell="aa01"', "a = 1" }, path)
+        local win, cur = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+        local res = jupyter.agent_open({ notebook = path, kernel = false })
+        assert.is_true(res.ok, res.msg)
+        assert.is_true(res.opened)
+        assert.equals(win, vim.api.nvim_get_current_win())
+        assert.equals(cur, vim.api.nvim_get_current_buf())
+        assert.is_true(vim.api.nvim_buf_is_loaded(res.buf))
+        assert.is_true(vim.bo[res.buf].buflisted, "виден в :ls")
+        assert.equals(-1, vim.fn.bufwinid(res.buf), "ни в одном окне")
+        assert.equals("python", vim.bo[res.buf].filetype)
+        jupyter.detach(res.buf)
+    end)
+
+    it("после agent_open agent_run находит ноутбук", function()
+        local path = vim.fn.tempname() .. ".py"
+        vim.fn.writefile({ '# %% jncell="aa01"', "a = 1" }, path)
+        local res = jupyter.agent_open({ notebook = path, kernel = false })
+        local s = jupyter.session(res.buf)
+        s.started = true
+        local sent = {}
+        s.kernel.execute = function(_, args)
+            table.insert(sent, args)
+        end
+        local run = jupyter.agent_run({ notebook = path, cell = "aa01" })
+        assert.is_true(run.ok, run.msg)
+        assert.equals("a = 1", sent[1].code)
+        jupyter.detach(res.buf)
+    end)
+
+    it("открыт в другом nvim — отказ с его сокетом, вторую копию не заводит", function()
+        local path = vim.fn.tempname() .. ".ipynb"
+        vim.fn.mkdir(instances.DIR, "p")
+        local key = vim.fn.sha256(vim.fn.resolve(path)):sub(1, 16)
+        vim.fn.writefile({ vim.json.encode({ pid = 999999, socket = "/tmp/other.sock", notebook = path }) },
+            instances.DIR .. "/" .. key .. "-999999.json")
+        instances.alive = function()
+            return true
+        end
+        local res = jupyter.agent_open({ notebook = path, kernel = false })
+        assert.is_false(res.ok)
+        assert.equals("other_instance", res.reason)
+        assert.equals("/tmp/other.sock", res.others[1].socket)
+        assert.equals(-1, vim.fn.bufnr(path))
+    end)
+
+    it("без пути — no_path", function()
+        assert.equals("no_path", jupyter.agent_open({}).reason)
+    end)
+
+    if vim.fn.exepath("jupytext") ~= "" then
+        it(".ipynb открывается через jupytext markdown-буфером, без окна", function()
+            local path = vim.fn.tempname() .. ".ipynb"
+            vim.fn.writefile({ vim.json.encode({
+                cells = { { cell_type = "code", source = { "x = 1" }, metadata = vim.empty_dict(), outputs = {}, execution_count = vim.NIL } },
+                metadata = vim.empty_dict(), nbformat = 4, nbformat_minor = 5,
+            }) }, path)
+            local cur = vim.api.nvim_get_current_buf()
+            -- в изолированном rtp нет парсера markdown, штатный ftplugin падает (как в ipynb_spec)
+            vim.o.eventignore = "FileType"
+            vim.cmd("runtime! ftdetect/jupyter.lua")
+            local res = jupyter.agent_open({ notebook = path, kernel = false })
+            vim.o.eventignore = ""
+            assert.is_true(res.ok, res.msg)
+            assert.equals(cur, vim.api.nvim_get_current_buf())
+            assert.equals("markdown", vim.bo[res.buf].filetype)
+            assert.is_true(vim.b[res.buf].jupyter_ipynb)
+            assert.truthy(table.concat(vim.api.nvim_buf_get_lines(res.buf, 0, -1, false), "\n"):find("x = 1", 1, true))
+            jupyter.detach(res.buf)
+        end)
+    end
 end)

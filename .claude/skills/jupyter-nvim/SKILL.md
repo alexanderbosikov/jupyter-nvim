@@ -35,10 +35,32 @@ SOCK=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('socke
 Read `SOCK` again after the user restarts nvim — the socket is new each time. An empty
 `socket` means an older build of the plugin started that kernel; then the socket is found
 through `owner_pid` (the pid of nvim):
-`lsof -p <owner_pid> | grep -o '/[^ ]*nvim\.[0-9]*\.0' | head -1`. If there is no `runtime.json`, the kernel is not running:
-the buffer still reads fine, and you can ask the user for the socket address
-(`:echo v:servername`). There may be several notebooks and several sockets — match them by
-the `notebook` field in the snapshot.
+`lsof -p <owner_pid> | grep -o '/[^ ]*nvim\.[0-9]*\.0' | head -1`. If there is no `runtime.json`, the kernel is not running —
+see "Not open yet" below: you open the notebook and start the kernel yourself, do not wait
+for the user. There may be several notebooks and several sockets — match them by the
+`notebook` field in the snapshot.
+
+### Not open yet (you just created the notebook, or the kernel is down)
+
+Do not wait for the user to open it, and do not start your own nvim: buffers live per
+process, the user would not see yours in `:ls`, and opening it themselves would make a
+second copy. Open it in **the user's** nvim as a hidden buffer — no window, cursor or
+current buffer changes; the notebook just appears in their buffer list — and the kernel
+starts with it:
+
+```sh
+# the user's nvim for this task: where the notebook is already open, else the one in the
+# same herdr tab / tmux window as your pane, else by cwd. Exit 1 = none or a tie (the
+# candidates are on stderr) — ask the user, do not pick at random.
+SOCK=$(PYTHONPATH=~/Projects/jupyter.nvim/sidecar python3 -m jupyter_nvim.find_nvim "$NB")
+nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").agent_open({notebook = \"$NB\"}))')"
+# → {"ok":true,"buf":7,"opened":true,"kernel":true}
+```
+
+Already open in that nvim → `opened: false`, same buffer, harmless to call again.
+`reason: "other_instance"` → it is open in another nvim; `others[1].socket` is where to work.
+`kernel: true` means the kernel is starting; the first `agent_run` + `jn-wait` waits for it.
+Then tell the user in one line that the notebook is in their buffer list.
 
 `owner_pid` is the nvim that holds the **kernel**, not necessarily the one the user is looking
 at: the same notebook can be open in two nvims. Check two fields of the snapshot before you
@@ -292,7 +314,7 @@ works too (any line inside the cell). Several cells: one call per cell, back to 
 queue in the kernel and run in order, no need to wait between them.
 
 **Read the answer.** `ok: false` comes with a `reason`: `no_buffer` (notebook not open in
-this nvim), `no_cell`, `empty`, `claimed` (a claim holds the cell: `edit_done(token)` first),
+this nvim — `agent_open` it, see Step 0), `no_cell`, `empty`, `claimed` (a claim holds the cell: `edit_done(token)` first),
 `no_python`. Do not report a run you did not get `ok: true` for.
 
 **Never `ensure_started()` / `s.exec:run_at(...)`** without a buffer. They take nvim's
