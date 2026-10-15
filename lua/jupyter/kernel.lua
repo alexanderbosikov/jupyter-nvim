@@ -131,6 +131,7 @@ function Kernel:start(opts, cb)
         out_dir = opts.out_dir,
         history_limit = opts.history_limit,
         text_progress = self.text_progress,
+        nvim_socket = vim.v.servername ~= "" and vim.v.servername or nil,
     }, cb)
 end
 
@@ -162,6 +163,7 @@ function Kernel:attach(opts, cb)
         out_dir = opts.out_dir,
         history_limit = opts.history_limit,
         text_progress = self.text_progress,
+        nvim_socket = vim.v.servername ~= "" and vim.v.servername or nil,
     }, cb)
 end
 

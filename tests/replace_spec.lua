@@ -202,3 +202,62 @@ describe("правка из файлов", function()
         vim.fn.delete(dir, "rf")
     end)
 end)
+
+describe("вставка по месту", function()
+    local jn = require("jupyter")
+    local DOC = {
+        "## Анализ", -- 1
+        "", -- 2
+        '```python jncell="a3f9"', -- 3
+        "df_x", -- 4
+        "```", -- 5
+        "## Ручные запросы", -- 6
+        "", -- 7
+        '```python jncell="b7e1"', -- 8
+        "## Ручные запросы", -- 9: внутри ячейки — не заголовок
+        "```", -- 10
+    }
+
+    before_each(function()
+        agent._reset()
+        buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, DOC)
+        vim.bo[buf].filetype = "markdown"
+    end)
+
+    it("в конец раздела: перед заголовком, с пустыми строками и новым id", function()
+        local res = jn.edit_insert({ buf = buf, before_heading = "## Ручные запросы", text = "```python\ny = 2\n```" })
+        assert.is_true(res.ok, vim.inspect(res))
+        local l = lines_of()
+        assert.same({ "```", "", "```python", "y = 2", "```", "", "## Ручные запросы" }, {
+            l[5], l[6], l[7]:gsub(' jncell="%w+"', ""), l[8], l[9], l[10], l[11],
+        })
+        assert.equals(1, #res.cell_ids)
+        assert.truthy(l[7]:find(res.cell_ids[1], 1, true))
+    end)
+
+    it("после ячейки по id", function()
+        local res = jn.edit_insert({ buf = buf, after_cell = "a3f9", text = "Абзац." })
+        assert.is_true(res.ok, vim.inspect(res))
+        assert.equals("Абзац.", lines_of()[7])
+        assert.same({}, res.cell_ids)
+    end)
+
+    it("в конец документа", function()
+        local res = jn.edit_insert({ buf = buf, at_end = true, text = "Итог." })
+        assert.is_true(res.ok, vim.inspect(res))
+        assert.equals("Итог.", lines_of()[#lines_of()])
+    end)
+
+    it("заголовка нет — not_found, буфер не тронут", function()
+        local res = jn.edit_insert({ buf = buf, before_heading = "## Нет такого", text = "x" })
+        assert.equals("not_found", res.reason)
+        assert.same(DOC, lines_of())
+    end)
+
+    it("незакрытый фенс — отказ", function()
+        local res = jn.edit_insert({ buf = buf, at_end = true, text = "```python\ny = 2" })
+        assert.equals("fences", res.reason)
+        assert.same(DOC, lines_of())
+    end)
+end)

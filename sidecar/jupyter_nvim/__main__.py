@@ -52,6 +52,7 @@ class App:
                 )
             if args.get("history_limit"):
                 session._history_limit = int(args["history_limit"])
+            session._nvim_socket = args.get("nvim_socket") or None
             return session.start(
                 kernel_name=args.get("kernel_name") or "python3",
                 cwd=args.get("cwd"),
@@ -70,6 +71,7 @@ class App:
                 )
             if args.get("history_limit"):
                 session._history_limit = int(args["history_limit"])
+            session._nvim_socket = args.get("nvim_socket") or None
             if not args.get("connection_file"):
                 raise RpcError(ErrCode.BAD_REQUEST, "нужен connection_file")
             return session.attach(

@@ -362,6 +362,27 @@ def test_dataframe_result_becomes_a_table_on_disk(live):
     assert len(record["code_sha"]) == 8
 
 
+def test_print_before_table_is_kept_next_to_it(live):
+    """Сводка `print(...)` над итоговым фреймом — тоже вывод, и на диске она не теряется."""
+    session, sink, outdir = live()
+    session.execute(
+        "5e1d", 1, "import polars as pl\nprint('строк всего: 3')\npl.DataFrame({'a': [1, 2, 3]})"
+    )
+    sink.wait(done_for("5e1d"))
+
+    record = outdir.last("5e1d")
+    assert record["kind"] == "table"
+    assert record["text"] == "5e1d/1.out.txt"
+    assert "строк всего: 3" in (outdir.base / record["text"]).read_text(encoding="utf-8")
+
+
+def test_table_without_print_has_no_text(live):
+    session, sink, outdir = live()
+    session.execute("6f2e", 1, "import polars as pl\npl.DataFrame({'a': [1]})")
+    sink.wait(done_for("6f2e"))
+    assert "text" not in outdir.last("6f2e")
+
+
 def test_named_dataframe_via_result_expr(live):
     """Путь для `%%sql`: имя переменной разбирает Lua и присылает в result_expr."""
     session, sink, outdir = live()
@@ -538,6 +559,8 @@ def test_runtime_file_marks_live_kernel(live):
     assert record["sidecar_pid"] == os.getpid()
     assert record["owner_pid"] == os.getppid()
     assert record["kernel_name"] == "python3"
+    # сокета nvim в тесте нет: поле есть, но пустое
+    assert "socket" in record and record["socket"] is None
     # connection-файл стоит в argv ядра: по нему сироту опознают среди чужих процессов
     assert record["connection_file"] == session.connection_file()
     # pid ядра должен быть настоящим и не нашим

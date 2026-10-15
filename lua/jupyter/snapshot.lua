@@ -47,6 +47,9 @@ local function last_run(store, record)
         status = record.status,
         kind = record.kind,
         path = store and store:path_of(record) or nil,
+        -- напечатанное рядом с таблицей или картинкой: у text-прогона оно уже в path
+        text = store and type(record.text) == "string" and store.base and vim.fs.joinpath(store.base, record.text)
+            or nil,
         rows = record.rows,
         cols = record.cols,
         schema = record.schema,

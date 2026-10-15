@@ -103,6 +103,14 @@ describe("снимок ноутбука", function()
         assert.equals(base, snap.out_dir)
     end)
 
+    it("напечатанное рядом с таблицей — абсолютным путём в text", function()
+        local st, base = make_store({ record({ run_id = 7, text = "a3f9/7.out.txt" }) })
+        local last = snapshot.build(buf, { store = st }).cells[1].last
+        assert.equals(base .. "/a3f9/7.out.txt", last.text)
+        local plain = make_store({ record({ run_id = 7 }) })
+        assert.is_nil(snapshot.build(buf, { store = plain }).cells[1].last.text)
+    end)
+
     it("устаревший вывод помечен, свежий — нет", function()
         local stale_store = make_store({ record({ code_sha = "0000dead" }) })
         local fresh_store = make_store({ record({ code_sha = sha_of(buf, 1) }) })

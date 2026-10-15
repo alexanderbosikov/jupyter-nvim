@@ -2231,6 +2231,74 @@ function M.edit_replace(old, new, opts)
     return res
 end
 
+---Вставить кусок ноутбука в место, названное по смыслу, а не текстом-якорем.
+---
+---Место — одно из: `before_heading` (строка заголовка целиком, например
+---`"## Ручные запросы"`; вне ячеек и ровно одна), `after_cell` (id ячейки), `at_end`.
+---Текст — `text` или `file` (из файла, чтобы не экранировать его внутри `--remote-expr`).
+---@param opts table notebook|buf, text|file, before_heading|after_cell|at_end
+---@return table
+function M.edit_insert(opts)
+    opts = opts or {}
+    local buf = target_buf(opts)
+    if not buf then
+        return { ok = false, reason = "no_buffer", msg = "этот ноутбук не открыт в nvim" }
+    end
+    local text = opts.text
+    if opts.file then
+        local ok, lines = pcall(vim.fn.readfile, vim.fn.expand(opts.file), "b")
+        if not ok then
+            return { ok = false, reason = "no_file", msg = "не читается файл с текстом вставки" }
+        end
+        if lines[#lines] == "" then
+            table.remove(lines) -- перевод строки в конце файла
+        end
+        text = table.concat(lines, "\n")
+    end
+
+    local row
+    if opts.before_heading then
+        local want = vim.trim(opts.before_heading)
+        local spans = cells.list(buf)
+        local found = {}
+        for i, line in ipairs(vim.api.nvim_buf_get_lines(buf, 0, -1, false)) do
+            if vim.trim(line) == want then
+                local in_cell = false
+                for _, cell in ipairs(spans) do
+                    in_cell = in_cell or (i >= cell.span_start and i <= cell.span_end)
+                end
+                if not in_cell then
+                    table.insert(found, i)
+                end
+            end
+        end
+        if #found ~= 1 then
+            return {
+                ok = false,
+                reason = #found == 0 and "not_found" or "ambiguous",
+                msg = ("заголовок «%s» найден %d раз(а), нужен ровно один"):format(want, #found),
+            }
+        end
+        row = found[1]
+    elseif opts.after_cell then
+        local cell = cellid.find(buf, opts.after_cell)
+        if not cell then
+            return { ok = false, reason = "no_cell", msg = "ячейки нет: " .. tostring(opts.after_cell) }
+        end
+        row = cell.span_end + 1
+    elseif opts.at_end then
+        row = vim.api.nvim_buf_line_count(buf) + 1
+    else
+        return { ok = false, reason = "no_place", msg = "куда вставлять: before_heading, after_cell или at_end" }
+    end
+
+    local res = agent.insert(buf, row, text or "")
+    if res.ok then
+        M.repaint(buf)
+    end
+    return res
+end
+
 ---То же, что `edit_replace`, но `old` и `new` — из файлов. Снаружи текст в nvim иначе
 ---передаётся строкой внутри `--remote-expr`, и каждая кавычка и перевод строки в нём —
 ---экранирование, на котором агент ошибается. Последний перевод строки файла не входит в

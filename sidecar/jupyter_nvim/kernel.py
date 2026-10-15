@@ -96,6 +96,8 @@ class KernelSession:
         self._outdir_for = outdir_for or (lambda: None)
         self._poll = poll
         self._history_limit = history_limit
+        # сокет nvim-владельца: по нему агент снаружи находит, куда слать --remote-expr
+        self._nvim_socket: str | None = None
         self._pending: dict[str, dict[str, Any]] = {}
 
         self._km: Any = None
@@ -587,6 +589,7 @@ class KernelSession:
         record = {
             "sidecar_pid": os.getpid(),
             "owner_pid": os.getppid(),  # nvim
+            "socket": self._nvim_socket,
             "kernel_pid": self.kernel_pid(),
             "kernel_name": kernel_name,
             # по нему ядро опознаётся в списке процессов: путь уникален и стоит в его argv
@@ -1028,16 +1031,28 @@ class KernelSession:
             "ename": pending.get("ename"),
         }
 
+        streams = [
+            stdout.text().rstrip("\n") if stdout else "",
+            stderr.text().rstrip("\n") if stderr else "",
+        ]
         if table and pending.get("table_path"):
             record.update(kind="table", path=self._rel(outdir, pending["table_path"]), **table)
         elif pending.get("kind") == "image" and pending.get("path"):
             record.update(kind="image", path=self._rel(outdir, pending["path"]))
+        if record["kind"] in ("table", "image"):
+            # Напечатанное до таблицы или картинки — тоже вывод: сводка `print(...)` над
+            # итоговым фреймом иначе пропадала, и снаружи было не проверить полноту
+            # прогона. Кладём рядом отдельным файлом, основной `path` остаётся за таблицей.
+            blob = "\n".join(part for part in (*streams, "\n".join(pending.get("traceback") or [])) if part)
+            if blob:
+                path = outdir.path_for(ex.cell_id, ex.run_id, "out.txt")
+                path.write_text(blob + "\n", encoding="utf-8")
+                record["text"] = self._rel(outdir, path)
         else:
             blob = "\n".join(
                 part
                 for part in (
-                    stdout.text().rstrip("\n") if stdout else "",
-                    stderr.text().rstrip("\n") if stderr else "",
+                    *streams,
                     pending.get("result_text", ""),
                     "\n".join(pending.get("traceback") or []),
                 )

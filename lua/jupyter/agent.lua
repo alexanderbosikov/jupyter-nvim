@@ -1277,6 +1277,59 @@ function M.replace(buf, old, new)
     return { ok = true, buf = buf, start_row = start_row, end_row = end_row }
 end
 
+---Вставить кусок документа (прозу, ячейки) перед строкой `row`.
+---
+---В отличие от `replace`, место задаётся не текстом-якорем: агенту, который дописывает
+---ячейку в конец раздела, приходилось брать якорем хвост предыдущей ячейки, и при
+---промахе структура съезжала. Пустые строки по краям добавляются сами, если их нет —
+---иначе фенс прилипнет к соседнему абзацу. Проверки те же, что у `replace`.
+---@param buf integer
+---@param row integer 1-based; `#lines + 1` — в конец
+---@param text string
+---@return table { ok, start_row, end_row, cell_ids } | { ok = false, reason, msg }
+function M.insert(buf, row, text)
+    if not vim.api.nvim_buf_is_valid(buf) then
+        return fail("no_buffer", "буфера нет")
+    end
+    if type(text) ~= "string" or not text:match("%S") then
+        return fail("bad_new", "вставлять нечего")
+    end
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    if row < 1 or row > #lines + 1 then
+        return fail("bad_row", ("строки %d в буфере нет"):format(row))
+    end
+
+    local new_lines = vim.split(text, "\n", { plain = true })
+    local lead = row > 1 and lines[row - 1]:match("%S") and 1 or 0
+    if lead == 1 then
+        table.insert(new_lines, 1, "")
+    end
+    if lines[row] and lines[row]:match("%S") then
+        table.insert(new_lines, "")
+    end
+    local after = {}
+    vim.list_extend(after, lines, 1, row - 1)
+    vim.list_extend(after, new_lines)
+    vim.list_extend(after, lines, row, #lines)
+    local bad = check(buf, lines, after)
+    if bad then
+        return bad
+    end
+
+    break_undo(buf)
+    vim.api.nvim_buf_set_lines(buf, row - 1, row - 1, false, new_lines)
+    local start_row, end_row = row + lead, row + #new_lines - 1
+    local ids = {}
+    for _, cell in ipairs(cells.list(buf)) do
+        if cell.span_start >= start_row and cell.span_end <= end_row then
+            table.insert(ids, cellid.of(buf, cell) or cellid.ensure(buf, cell))
+        end
+    end
+    break_undo(buf)
+    flash(buf, start_row, end_row)
+    return { ok = true, buf = buf, start_row = start_row, end_row = end_row, cell_ids = ids }
+end
+
 ---Снять заявку: работа сделана. То же, что `cancel`, но словом, которое не врёт агенту,
 ---закончившему правку.
 ---@param token integer

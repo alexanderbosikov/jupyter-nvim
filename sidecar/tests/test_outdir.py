@@ -117,3 +117,15 @@ def test_custom_dir_name(tmp_path):
     out = OutDir(tmp_path / "n.md", dir_name=".nb-out")
 
     assert out.base == tmp_path / ".nb-out" / "n"
+
+
+def test_prune_removes_printed_text_too(out):
+    for run_id in (1, 2):
+        out.path_for("a3f9", run_id, "parquet").write_bytes(b"x")
+        out.path_for("a3f9", run_id, "out.txt").write_text("сводка")
+        out.append(record(run_id=run_id, text=f"a3f9/{run_id}.out.txt"))
+
+    out.prune("a3f9", 1)
+
+    assert not out.path_for("a3f9", 1, "out.txt").exists()
+    assert out.path_for("a3f9", 2, "out.txt").exists()

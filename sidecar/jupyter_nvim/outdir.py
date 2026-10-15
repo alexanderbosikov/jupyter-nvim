@@ -95,9 +95,9 @@ class OutDir:
         kept: list[dict[str, Any]] = []
         for rec in self.records():
             if rec.get("cell_id") == cell_id and rec.get("run_id") in drop:
-                path = self.resolve(rec)
-                if path is not None and path.exists():
-                    os.unlink(path)
+                for path in (self.resolve(rec), self.base / rec["text"] if rec.get("text") else None):
+                    if path is not None and path.exists():
+                        os.unlink(path)
                 continue
             kept.append(rec)
 

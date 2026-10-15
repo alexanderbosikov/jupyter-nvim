@@ -26,14 +26,16 @@ from the notebook" below before you touch anything.
 NB=~/work/sandbox/.../01_eda.ipynb                      # the notebook
 OUT="$(dirname "$NB")/.jupyter-out/$(basename "$NB" .ipynb)"
 cat "$OUT/runtime.json"   # exists only while the kernel is alive
-# {"sidecar_pid":91263,"owner_pid":90954,"kernel_pid":91264,"kernel_name":"jupyter-utils",
-#  "connection_file":"/var/folders/.../tmpqsjpnp0c.json"}
+# {"sidecar_pid":91263,"owner_pid":90954,"socket":"/var/folders/.../nvim.90954.0",
+#  "kernel_pid":91264,"kernel_name":"jupyter-utils","connection_file":"/var/folders/.../tmpqsjpnp0c.json"}
 
-SOCK=$(lsof -p "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['owner_pid'])" "$OUT/runtime.json")" \
-       | grep -o '/[^ ]*nvim\.[0-9]*\.0' | head -1)
+SOCK=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('socket') or '')" "$OUT/runtime.json")
 ```
 
-`owner_pid` is the pid of nvim. If there is no `runtime.json`, the kernel is not running:
+Read `SOCK` again after the user restarts nvim — the socket is new each time. An empty
+`socket` means an older build of the plugin started that kernel; then the socket is found
+through `owner_pid` (the pid of nvim):
+`lsof -p <owner_pid> | grep -o '/[^ ]*nvim\.[0-9]*\.0' | head -1`. If there is no `runtime.json`, the kernel is not running:
 the buffer still reads fine, and you can ask the user for the socket address
 (`:echo v:servername`). There may be several notebooks and several sockets — match them by
 the `notebook` field in the snapshot.
@@ -76,7 +78,9 @@ it), `lang`,
 `start_row`/`end_row` (the body), `span_start`/`span_end` (with the marker), `runs`,
 `stale`, `running`, `live`, `last`. Inside `last`: `run_id`, `status`, `ename`, `kind`
 (`table`/`text`/`image`/`none`), `rows`, `cols`, `schema`, `duration_ms`,
-`execution_count`, `started_at` and an **absolute** `path`. Inside `live` (present only
+`execution_count`, `started_at`, an **absolute** `path` and, for a `table`/`image` run that
+also printed something, `text` — the absolute path of that printed output (a `print()`
+summary above the final frame lands there, not in the parquet). Inside `live` (present only
 while the cell is busy): `status`, `run_id`, `lines`, `tail`.
 
 - `stale: true` — the output came **not from the current code**, the cell was edited after
@@ -193,6 +197,25 @@ nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\
 # → {"ok":true,"start_row":42,"end_row":42}
 ```
 
+**Adding new cells or text — `edit_insert`, by place, not by an anchor text.** Do not use
+the tail of the previous cell as `old` for an append: that is how the structure slides.
+
+~~~sh
+cat > /tmp/jn-ins <<'TXT'
+```python
+df_dups = run_query("queries/25_dups.sql")
+```
+TXT
+# before a heading (outside cells, must occur once): the end of a section
+nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").edit_insert({notebook = \"$NB\", before_heading = \"## Ручные запросы\", file = \"/tmp/jn-ins\"}))')"
+# → {"ok":true,"start_row":176,"end_row":178,"cell_ids":["13ca"]}
+~~~
+
+Place: `before_heading` (the whole heading line), `after_cell = "<id>"`, or `at_end = true`;
+text: `file` (preferred — no escaping) or `text`. Blank lines around the piece are added
+when missing; the new cells' ids come back in `cell_ids` — run them by those. Refusals:
+`not_found` / `ambiguous` (heading), `no_cell`, plus the checks below.
+
 **The plugin checks the document before writing** and refuses (nothing written) if after the
 edit:
 
@@ -281,9 +304,23 @@ What the user sees is the same as for their own key: the status under the cell (
 → «выполняется» → ✓) and the output window opening with the run, if the notebook is on
 screen (`visible`). The buffer is not saved before the run (their key does `:w`; you do not).
 
-Then poll the snapshot until the cell loses `running` and `last.run_id` grows (in Claude
-Code, wait with Monitor and an until-condition, not with `sleep`). Take the result from
-disk, as above.
+**Then wait with `jn-wait`, in the background** (Bash `run_in_background`): it blocks until
+the runs are on disk and prints one line per cell, so you are woken when it exits — no
+polling loop of your own.
+
+```sh
+PYTHONPATH=~/Projects/jupyter.nvim/sidecar python3 -m jupyter_nvim.wait "$NB" af4b:3 13ca:4
+# af4b #3 ok · text · 1.2s · af4b/3.txt
+# 13ca #4 ok · table 1204×8 · 12.3s · 13ca/4.parquet · print: 13ca/4.out.txt
+```
+
+`cell:run_id` — the pairs `agent_run` returned. Exit code: 0 all ok, 1 some `error`/`aborted`
+(the line carries `ename`), 2 timeout (`--timeout`, default 3600 s), 3 the kernel is gone
+and the run never reached disk. Run numbers restart with every nvim restart; `jn-wait`
+only counts runs started under the current kernel, so an old `af4b #3` from another day
+does not satisfy it. Without `:run_id` it waits for the cell's next new run (the user's own
+run included). Paths are relative to `.jupyter-out/<notebook>/`; take the result from
+there, as above.
 
 The first run of a cell that has no `jncell` yet — one the user typed or pasted by hand —
 **modifies the document**: the plugin writes `jncell="…"` into the marker. That is expected,
