@@ -441,6 +441,11 @@ package is exactly such a reference and, on `kernel.attach`, that package was im
 before us. It is silent about any outcome of its own: cosmetics must not break a kernel.
 
 The toggle is `text_progress` (on by default, `kernel.start`/`kernel.attach` carry it).
+
+The same startup step sends one more hidden cell when `retina` is on (the default):
+`get_ipython().config.InlineBackend.figure_formats = {"retina"}` (`figures.py`). Not
+`%config` — at that moment matplotlib is not imported, `InlineBackend` does not exist yet,
+and the magic fails; the shell's config is read when the first figure creates the backend.
 Turning it off means the kernel is left alone — and the bar then does not move at all.
 
 ## 7. Data on disk

@@ -57,6 +57,10 @@ M.defaults = {
     -- comm-протокол, которого у нас нет, и ячейка с долгим циклом навсегда остаётся на
     -- «0%» (§6.6). false — не трогать ядро, бар тогда не обновляется вовсе.
     text_progress = true,
+    -- Графики matplotlib в retina: image.nvim рисует png пиксель в пиксель, и дефолтные
+    -- 100 dpi на HiDPI-экране — мелкий график с нечитаемыми подписями. Свой %config
+    -- InlineBackend.figure_format в ноутбуке главнее. false — не трогать ядро.
+    retina = true,
     -- картинки рисует image.nvim; false — только путь строкой в выводе
     -- Прыжок по ячейкам центрирует экран. Без этого следующая ячейка встаёт у нижнего
     -- края, и её тело остаётся за кадром — а прыгают именно чтобы его увидеть.
@@ -469,6 +473,7 @@ function M.session(buf)
         kernel_python = kchoice.python,
         env = M.config.env,
         text_progress = M.config.text_progress,
+        retina = M.config.retina,
     })
     -- предпросмотр таблицы — общий для обоих окон вывода
     local function preview(run, limit, cb)

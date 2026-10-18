@@ -674,6 +674,7 @@ opts = {
     current_cell = true,             -- background of the cell under the cursor: JupyterCellCurrent,
                                      -- linked to CursorLine; set your own bg if a whole cell of it is too loud
     text_progress = true,            -- ask the kernel for a text progress bar, not a widget one
+    retina = true,                   -- matplotlib figures at double resolution, for HiDPI screens
     output = {
         position = "bottom",         -- or "right"
         size = 15,                   -- below one it is a fraction of the screen
@@ -701,6 +702,13 @@ queries then shows `0%` from the first second to the last and looks stuck. So on
 plugin asks the kernel for the text bar instead — the one made of `\r`, which the output
 window redraws in place. `false` leaves the kernel alone, and the bar then does not move at
 all.
+
+`retina` is about the size of figures. image.nvim draws a png pixel for pixel, and
+matplotlib's default 100 dpi on a HiDPI screen is a small plot with unreadable axis labels.
+So on startup the plugin sets `InlineBackend.figure_formats = {"retina"}` in the kernel's
+config, and figures come out at twice the resolution — the same size on screen as in
+Jupyter Lab. Your own `%config InlineBackend.figure_format = ...` in the notebook still
+wins. Only matplotlib's inline backend is affected; `false` leaves the kernel alone.
 
 ### The interpreter
 

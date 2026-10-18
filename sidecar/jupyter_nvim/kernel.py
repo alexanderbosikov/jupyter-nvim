@@ -28,7 +28,7 @@ from pathlib import Path
 from queue import Empty
 from typing import Any, Callable
 
-from . import frames, progress
+from . import figures, frames, progress
 from .mime import render as render_mime
 from .outdir import RUNTIME_FILE
 from .protocol import ErrCode, Ev, ExecStatus, KernelState
@@ -124,6 +124,7 @@ class KernelSession:
         self._km: Any = None
         self._attached_pid: int | None = None  # не None — ядро чужое, подключённое
         self._text_progress = True  # см. §6.6: бар виджетом нам не показать
+        self._retina = True  # см. figures.py: png для HiDPI
         self._released = False  # ядро отпущено жить дальше: след трогать нельзя
         self._launch_args: dict[str, Any] = {}
         self._client: Any = None
@@ -185,6 +186,7 @@ class KernelSession:
         log_file: str | None = None,
         text_progress: bool = True,
         kernel_python: str | None = None,
+        retina: bool = True,
     ) -> dict[str, Any]:
         """Поднять своё ядро.
 
@@ -210,6 +212,7 @@ class KernelSession:
         self._attached_pid = None
         self._released = False
         self._text_progress = text_progress
+        self._retina = retina
         self._launch_args = {
             "kernel_name": kernel_name,
             "kernel_python": kernel_python,
@@ -217,6 +220,7 @@ class KernelSession:
             "env": env,
             "log_file": log_file,
             "text_progress": text_progress,
+            "retina": retina,
         }
         launch = {
             "env": self._launch_env(env, kernel_python),
@@ -248,6 +252,7 @@ class KernelSession:
         log_file: str | None = None,
         text_progress: bool = True,
         kernel_python: str | None = None,
+        retina: bool = True,
     ) -> dict[str, Any]:
         """Подключиться к уже живущему ядру по его connection-файлу.
 
@@ -276,6 +281,7 @@ class KernelSession:
         self._km = km
         self._attached_pid = int(pid) if pid else None
         self._text_progress = text_progress
+        self._retina = retina
         self._launch_args = {
             "kernel_name": kernel_name,
             "kernel_python": kernel_python,
@@ -283,6 +289,7 @@ class KernelSession:
             "env": env,
             "log_file": log_file,
             "text_progress": text_progress,
+            "retina": retina,
         }
         self._open_client()
         self._write_runtime(kernel_name, kernel_python)
@@ -566,6 +573,9 @@ class KernelSession:
                 # до первой ячейки пользователя: `from tqdm.auto import tqdm` в его коде
                 # заберёт уже подменённый бар, а не виджетный (§6.6)
                 self._send_hidden(progress.TEXT_TQDM_SOURCE)
+            if self._retina:
+                # тоже до первой ячейки: конфиг читается, когда первый график создаёт бэкенд
+                self._send_hidden(figures.RETINA_SOURCE)
             self._spawn("jn-stdin-settle", self._settle_stdin, self._pump_stop)
             return
 

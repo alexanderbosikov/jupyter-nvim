@@ -55,7 +55,9 @@ def live(tmp_path):
     """Поднимает настоящее ядро и гарантированно гасит его после теста."""
     started = []
 
-    def start(env=None, with_outdir=True, history_limit=5, text_progress=True, kernel_python=None):
+    def start(
+        env=None, with_outdir=True, history_limit=5, text_progress=True, kernel_python=None, retina=True
+    ):
         sink = Sink()
         rpc = Rpc(stdin=io.StringIO(""), stdout=sink)
         outdir = OutDir(tmp_path / "отчёт.md") if with_outdir else None
@@ -63,7 +65,11 @@ def live(tmp_path):
             rpc, Router(), outdir_for=lambda: outdir, poll=0.05, history_limit=history_limit
         )
         session.start(
-            kernel_name="python3", env=env, text_progress=text_progress, kernel_python=kernel_python
+            kernel_name="python3",
+            env=env,
+            text_progress=text_progress,
+            kernel_python=kernel_python,
+            retina=retina,
         )
         started.append(session)
         sink.wait(is_ready, what="kernel.state=ready")
@@ -553,6 +559,27 @@ def test_print_with_a_table_keeps_the_text_without_the_repr(live):
     assert [o["kind"] for o in rec["outputs"]] == ["text", "table"]
     assert rec["kind"] == "table" and rec["rows"] == 2
     assert (outdir.base / rec["outputs"][0]["path"]).read_text(encoding="utf-8") == "shares\n"
+
+
+PLOT_1X1 = "import matplotlib.pyplot as plt\nplt.figure(figsize=(1, 1))\nplt.plot([1, 2])\nplt.show()"
+
+
+def _png_width(outdir, cell_id):
+    import struct
+
+    png = (outdir.base / outdir.last(cell_id)["path"]).read_bytes()
+    return struct.unpack(">I", png[16:20])[0]
+
+
+@pytest.mark.parametrize("retina, wide", [(True, True), (False, False)])
+def test_retina_doubles_matplotlib_png(live, retina, wide):
+    """График 1×1 дюйм: ~117 px шириной по умолчанию и вдвое больше с retina."""
+    pytest.importorskip("matplotlib")
+    session, sink, outdir = live(retina=retina)
+    session.execute("a3f9", 1, PLOT_1X1)
+    sink.wait(done_for("a3f9"))
+
+    assert (_png_width(outdir, "a3f9") > 200) is wide
 
 
 def test_relative_kernelspec_resolves_to_our_interpreter(live):

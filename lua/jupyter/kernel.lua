@@ -19,7 +19,7 @@ local USABLE = { ready = true, busy = true }
 local Kernel = {}
 Kernel.__index = Kernel
 
----@param opts? table sidecar, kernel_name, kernel_python, env, text_progress, on_state, on_event
+---@param opts? table sidecar, kernel_name, kernel_python, env, text_progress, retina, on_state, on_event
 function M.new(opts)
     opts = opts or {}
     local self = setmetatable({
@@ -32,6 +32,8 @@ function M.new(opts)
         env = opts.env or {},
         -- виджетный прогресс-бар нам не нарисовать, поэтому просим ядро о текстовом
         text_progress = opts.text_progress ~= false,
+        -- графики matplotlib вдвое плотнее: image.nvim рисует png пиксель в пиксель
+        retina = opts.retina ~= false,
         on_state = opts.on_state,
         _state = "none",
         _reason = nil,
@@ -135,6 +137,7 @@ function Kernel:start(opts, cb)
         history_limit = opts.history_limit,
         text_progress = self.text_progress,
         nvim_socket = vim.v.servername ~= "" and vim.v.servername or nil,
+        retina = self.retina,
     }, cb)
 end
 
@@ -168,6 +171,7 @@ function Kernel:attach(opts, cb)
         history_limit = opts.history_limit,
         text_progress = self.text_progress,
         nvim_socket = vim.v.servername ~= "" and vim.v.servername or nil,
+        retina = self.retina,
     }, cb)
 end
 
