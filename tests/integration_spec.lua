@@ -513,9 +513,12 @@ describe("клавиши", function()
         jupyter.set_keys(buf)
         local maps = lhs_of(buf)
 
-        assert.equals("jupyter: next_cell", maps["<C-J>"] or maps["<C-j>"])
-        assert.equals("jupyter: next_cell", maps["]n"])
-        assert.equals("jupyter: prev_cell", maps["<C-K>"] or maps["<C-k>"])
+        -- описание берётся из KEY_DESC: тест про привязку клавиш, а не про формулировки
+        local next_desc = "jupyter: " .. jupyter.KEY_DESC.next_cell
+        local prev_desc = "jupyter: " .. jupyter.KEY_DESC.prev_cell
+        assert.equals(next_desc, maps["<C-J>"] or maps["<C-j>"])
+        assert.equals(next_desc, maps["]n"])
+        assert.equals(prev_desc, maps["<C-K>"] or maps["<C-k>"])
     end)
 
     it("неизвестное действие в keys игнорируется, а не падает", function()
