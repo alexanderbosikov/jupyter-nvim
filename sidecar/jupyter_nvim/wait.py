@@ -7,7 +7,7 @@
 На каждую ячейку одна строка, по мере того как они заканчиваются:
 
     af4b #3 ok · text · 1.2s · af4b/3.txt
-    13ca #4 ok · table 1204×8 · 12.3s · 13ca/4.parquet · print: 13ca/4.out.txt
+    13ca #4 ok · table 1204×8 · 12.3s · 13ca/4.parquet · print: 13ca/4.txt
     5e1d #5 error ProgrammingError · 0.4s · 5e1d/5.txt
 
 Код возврата: 0 — все ok; 1 — хоть одна error/aborted; 2 — истёк таймаут; 3 — ядро

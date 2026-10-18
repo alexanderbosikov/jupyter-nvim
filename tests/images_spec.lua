@@ -186,26 +186,47 @@ describe("картинка в окне вывода", function()
             cell_id = "a3f9",
             run_id = 1,
             status = "ok",
-            lines = { "[картинка] " .. path },
-            image = path,
+            lines = { "mape 0.12", "[картинка] " .. path },
+            images = { { path = path, line = 2 } },
         })
 
         assert.equals(1, #api.made, "картинка должна быть отрисована")
         local anchor = api.made[1].opts.y
         local shown = vim.api.nvim_buf_get_lines(out.buf, 0, -1, false)
-        assert.equals(#shown - 1, anchor, "якорь — последняя строка буфера")
-        assert.equals("", shown[#shown], "под картинку добавляется пустая строка")
+        assert.equals(1, anchor, "якорь — строка-маркер, 0-based")
+        assert.equals("[картинка] " .. path, shown[2])
 
         out:close()
         assert.equals(1, api.cleared)
         assert.equals(0, vim.tbl_count(api.state.images), "после закрытия окна ничего не остаётся")
     end)
 
+    it("несколько картинок — каждая под своим маркером, текст сохраняется", function()
+        local api = fake_api()
+        local out = output.new({ size = 8, images = images.new({ api = api }) })
+        local a, b = png(), png()
+
+        out:show({
+            cell_id = "a3f9",
+            run_id = 1,
+            status = "ok",
+            lines = { "mape 0.12", "[картинка] " .. a, "[картинка] " .. b, "[таблица] 15 строк × 4 колонок" },
+            images = { { path = a, line = 2 }, { path = b, line = 3 } },
+        })
+
+        assert.equals(2, #api.made)
+        assert.same({ 1, 2 }, { api.made[1].opts.y, api.made[2].opts.y })
+        assert.equals("mape 0.12", vim.api.nvim_buf_get_lines(out.buf, 0, 1, false)[1])
+
+        out:close()
+        assert.equals(0, vim.tbl_count(api.state.images), "закрытие снимает все")
+    end)
+
     it("смена прогона снимает прошлую картинку", function()
         local api = fake_api()
         local out = output.new({ size = 8, images = images.new({ api = api }) })
         local path = png()
-        out:show({ cell_id = "a3f9", run_id = 1, status = "ok", lines = { "x" }, image = path })
+        out:show({ cell_id = "a3f9", run_id = 1, status = "ok", lines = { "[картинка] x" }, images = { { path = path, line = 1 } } })
 
         out:show({ cell_id = "b7e1", run_id = 1, status = "ok", lines = { "текст" } })
 
@@ -220,7 +241,7 @@ describe("картинка следует за ячейкой", function()
     local function make(api)
         local out = output.new({ size = 8, images = images.new({ api = api }) })
         local path = png()
-        out:show({ cell_id = "a3f9", run_id = 1, status = "ok", lines = { "график" }, image = path })
+        out:show({ cell_id = "a3f9", run_id = 1, status = "ok", lines = { "[картинка] график" }, images = { { path = path, line = 1 } } })
         return out, path
     end
 

@@ -14,8 +14,10 @@ cat "$OUT/index.jsonl"      # one line per run
 
 `index.jsonl` holds one object per run: `cell_id`, `run_id`, `status`, `kind`, `path`
 (relative to the notebook's `.jupyter-out/<name>/`), `rows`, `cols`, `code_sha`,
-`duration_ms`, `ename`, `started_at` and, for a table/image run that also printed,
-`text` (the printed output's path).
+`duration_ms`, `ename`, `started_at`, `outputs` — every output of the run (`kind`, `path`) —
+and, for a table/image run that also printed, `text` (the printed output's path, the same
+file as the `text` entry of `outputs`). Without `--json` the CLI prints all outputs: text as
+content, the rest as paths.
 
 ## The kernel directly — only with permission
 

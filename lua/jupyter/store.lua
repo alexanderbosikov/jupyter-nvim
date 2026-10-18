@@ -136,6 +136,26 @@ function Store:path_of(record)
     return vim.fs.joinpath(self.base, record.path)
 end
 
+---Все выводы прогона: `outputs`, а у записей до него — единственный `kind`/`path`.
+---Порядок — порядок показа: текст, картинки, html, таблица. Таблица у старых записей
+---берёт размеры с самой записи — там они и лежали.
+---@param record table
+---@return table[] { kind, path, rows?, cols?, schema? }
+function M.outputs_of(record)
+    if type(record.outputs) == "table" then
+        return record.outputs
+    end
+    local found = {}
+    -- промежуточный формат: print рядом с таблицей или картинкой — в поле `text`
+    if type(record.text) == "string" then
+        table.insert(found, { kind = "text", path = record.text })
+    end
+    if type(record.path) == "string" then
+        table.insert(found, { kind = record.kind, path = record.path })
+    end
+    return found
+end
+
 ---Собрать из записи объект прогона — такой же, какой рисует drawer.
 ---@param record table
 ---@return jupyter.Run|nil
@@ -143,7 +163,6 @@ function Store:to_run(record)
     if not record then
         return nil
     end
-    local path = self:path_of(record)
     local run = {
         cell_id = record.cell_id,
         run_id = record.run_id,
@@ -157,20 +176,28 @@ function Store:to_run(record)
         at = M.local_time(record.started_at),
     }
 
-    if record.kind == "table" then
-        run.table = {
-            path = path,
-            rows = record.rows,
-            cols = record.cols,
-            schema = record.schema,
-        }
-        run.lines = { ("[таблица] %s строк × %s колонок"):format(record.rows, record.cols) }
-    elseif record.kind == "image" then
-        run.image = path
-        run.lines = { "[картинка] " .. (path or "") }
-    elseif path and vim.fn.filereadable(path) == 1 then
-        run.lines = vim.fn.readfile(path)
-    elseif record.ename then
+    -- выводы группами, в порядке записи (§7): текст, картинки, html, таблица
+    for _, output in ipairs(M.outputs_of(record)) do
+        local file = self:path_of(output)
+        if output.kind == "table" then
+            run.table = {
+                path = file,
+                rows = output.rows or record.rows,
+                cols = output.cols or record.cols,
+                schema = output.schema or record.schema,
+            }
+            table.insert(run.lines, ("[таблица] %s строк × %s колонок"):format(run.table.rows, run.table.cols))
+        elseif output.kind == "image" then
+            table.insert(run.lines, "[картинка] " .. (file or ""))
+            run.images = run.images or {}
+            table.insert(run.images, { path = file, line = #run.lines })
+        elseif output.kind == "html" then
+            table.insert(run.lines, "[html] " .. (file or ""))
+        elseif file and vim.fn.filereadable(file) == 1 then
+            vim.list_extend(run.lines, vim.fn.readfile(file))
+        end
+    end
+    if #run.lines == 0 and record.ename then
         run.lines = { record.ename }
     end
 

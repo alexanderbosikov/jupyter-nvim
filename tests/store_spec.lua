@@ -88,6 +88,53 @@ describe("хранилище", function()
         assert.is_truthy(run.lines[1]:find("1240"))
     end)
 
+    it("несколько выводов: текст, обе картинки под своими маркерами, таблица", function()
+        local s, base = fixture({
+            record({
+                run_id = 3, kind = "table", path = "a3f9/3.parquet", rows = 15, cols = 4,
+                outputs = {
+                    { kind = "text", path = "a3f9/3.txt" },
+                    { kind = "image", path = "a3f9/3.png" },
+                    { kind = "image", path = "a3f9/3-2.png" },
+                    { kind = "table", path = "a3f9/3.parquet", rows = 15, cols = 4 },
+                },
+            }),
+        })
+        vim.fn.mkdir(base .. "/a3f9", "p")
+        vim.fn.writefile({ "mape 0.12" }, base .. "/a3f9/3.txt")
+
+        local run = s:last_run("a3f9")
+
+        assert.equals("mape 0.12", run.lines[1])
+        assert.same({
+            { path = base .. "/a3f9/3.png", line = 2 },
+            { path = base .. "/a3f9/3-2.png", line = 3 },
+        }, run.images)
+        assert.equals(base .. "/a3f9/3.parquet", run.table.path)
+        assert.is_truthy(run.lines[4]:find("15 строк"))
+    end)
+
+    it("запись с полем text: сначала напечатанное, потом таблица", function()
+        local s, base = fixture({
+            record({ run_id = 5, kind = "table", path = "a3f9/5.parquet", rows = 3, cols = 1, text = "a3f9/5.out.txt" }),
+        })
+        vim.fn.mkdir(base .. "/a3f9", "p")
+        vim.fn.writefile({ "строк всего: 3" }, base .. "/a3f9/5.out.txt")
+
+        local run = s:last_run("a3f9")
+
+        assert.equals("строк всего: 3", run.lines[1])
+        assert.equals(base .. "/a3f9/5.parquet", run.table.path)
+    end)
+
+    it("старая запись с картинкой — одна картинка под маркером", function()
+        local s, base = fixture({ record({ run_id = 4, kind = "image", path = "a3f9/4.png" }) })
+
+        local run = s:last_run("a3f9")
+
+        assert.same({ { path = base .. "/a3f9/4.png", line = 1 } }, run.images)
+    end)
+
     it("ошибка сохраняет имя исключения", function()
         local s = fixture({ record({ status = "error", ename = "ZeroDivisionError", path = nil }) })
 

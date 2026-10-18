@@ -42,6 +42,16 @@ local function last_run(store, record)
     if not record then
         return nil
     end
+    -- все выводы прогона, а не только главный: print рядом с графиком тоже результат
+    local outputs = {}
+    for _, o in ipairs(require("jupyter.store").outputs_of(record)) do
+        table.insert(outputs, {
+            kind = o.kind,
+            path = store and store:path_of(o) or nil,
+            rows = o.rows,
+            cols = o.cols,
+        })
+    end
     return {
         run_id = record.run_id,
         status = record.status,
@@ -57,6 +67,7 @@ local function last_run(store, record)
         duration_ms = record.duration_ms,
         execution_count = record.execution_count,
         started_at = record.started_at,
+        outputs = outputs,
     }
 end
 

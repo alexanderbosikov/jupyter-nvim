@@ -451,6 +451,7 @@ Turning it off means the kernel is left alone — and the bar then does not move
   a3f9/12.parquet                 <cell-id>/<run-id>.<ext>
   a3f9/13.txt
   b7e1/3.png
+  b7e1/3-2.png                    the second figure of the same run
   kernel.log
   runtime.json                    while the kernel is alive: pids of the sidecar, kernel and editor
   drafts/9812-1.md                the text of an unsaved buffer, as it is
@@ -469,8 +470,25 @@ process's argv: a pid may have been handed out again, and we do not kill what is
 ```json
 {"cell_id":"a3f9","run_id":12,"started_at":"2026-09-03T10:12:04Z","duration_ms":12300,
  "status":"ok","kind":"table","path":"a3f9/12.parquet","rows":1240,"cols":7,
- "code_sha":"9c1f2a","execution_count":12,"ename":null}
+ "code_sha":"9c1f2a","execution_count":12,"ename":null,
+ "outputs":[{"kind":"text","path":"a3f9/12.txt"},
+            {"kind":"image","path":"a3f9/12.png"},
+            {"kind":"table","path":"a3f9/12.parquet","rows":1240,"cols":7,"schema":[...]}]}
 ```
+
+- `outputs` are **all** of the run's outputs, grouped in display order: all the text
+  (stdout, stderr, a plain result, a traceback) as one file, then the images in the order
+  they came, then html, then the table. "Computed, printed, plotted" is the ordinary shape
+  of a cell, so a print next to a figure is a result too. Grouping rather than strict
+  arrival order is deliberate: one text file per run instead of slicing it between
+  figures. The text repr of a dataframe that became the table is left out — it is the same
+  data. Several files of one kind are `<run>.<ext>`, `<run>-2.<ext>`, …: the first keeps
+  the old name. The live output window shows outputs as they arrive, so there a print after
+  a figure is below it;
+- `kind`/`path` are the run's **main** output — the table, otherwise the first image,
+  otherwise the text — exactly what they were before `outputs`. Records written before it
+  have no `outputs`; readers treat `kind`/`path` as a list of one (`OutDir.outputs_of`,
+  `store.outputs_of`);
 
 - `code_sha` is the hash of the code at the moment of the run: it shows that the output is
   stale relative to the cell's text;

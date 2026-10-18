@@ -223,6 +223,27 @@ describe("repr и таблица", function()
         assert.is_falsy(run.has_text_result, "предпросмотр больше не подавляется")
     end)
 
+    it("картинки копятся списком, маркеры съезжают вместе с вырезанным repr", function()
+        local k = stub_kernel()
+        local ex = exec.new({ kernel = k }):attach()
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", "df" })
+        vim.bo[buf].filetype = "python"
+
+        local run = ex:run_at(buf, 2)
+        local function emit(ev, data)
+            k.emit({ ev = ev, cell_id = run.cell_id, run_id = run.run_id, data = data })
+        end
+        emit("result", { kind = "text", text = "┌──┐\n└──┘" })
+        emit("display", { kind = "image", path = "/tmp/1.png" })
+        emit("display", { kind = "image", path = "/tmp/1-2.png" })
+        emit("result", { kind = "table", path = "/tmp/a.parquet", rows = 2, cols = 1 })
+
+        assert.same({ { path = "/tmp/1.png", line = 1 }, { path = "/tmp/1-2.png", line = 2 } }, run.images)
+        assert.equals("[картинка] /tmp/1.png", run.lines[1])
+        assert.equals("[картинка] /tmp/1-2.png", run.lines[2])
+    end)
+
     it("текст без таблицы остаётся как есть", function()
         local k = stub_kernel()
         local ex = exec.new({ kernel = k }):attach()

@@ -374,7 +374,7 @@ def test_print_before_table_is_kept_next_to_it(live):
 
     record = outdir.last("5e1d")
     assert record["kind"] == "table"
-    assert record["text"] == "5e1d/1.out.txt"
+    assert record["text"] == "5e1d/1.txt"  # тот же файл, что текстовый вывод в outputs
     assert "строк всего: 3" in (outdir.base / record["text"]).read_text(encoding="utf-8")
 
 
@@ -517,6 +517,42 @@ def test_huge_result_is_paged_not_rendered(live):
 
     beyond = session.table_page(table["data"]["path"], offset=10**9, limit=50)
     assert beyond["rows"] == [] and beyond["offset"] == 100_000
+
+
+def test_print_and_two_images_are_all_persisted(live):
+    """«Посчитал, напечатал, нарисовал»: на диске и текст, и обе картинки, по порядку."""
+    session, sink, outdir = live()
+    session.execute(
+        "a3f9",
+        1,
+        "from IPython.display import publish_display_data\n"
+        "print('mape 0.12')\n"
+        f"publish_display_data({{'image/png': '{PNG_1X1}'}})\n"
+        f"publish_display_data({{'image/png': '{PNG_1X1}'}})",
+    )
+    sink.wait(done_for("a3f9"))
+
+    rec = outdir.last("a3f9")
+
+    assert [o["kind"] for o in rec["outputs"]] == ["text", "image", "image"]
+    assert (rec["kind"], rec["path"]) == ("image", "a3f9/1.png")
+    assert rec["outputs"][2]["path"] == "a3f9/1-2.png"
+    assert (outdir.base / "a3f9" / "1.txt").read_text(encoding="utf-8") == "mape 0.12\n"
+    for o in rec["outputs"][1:]:
+        assert (outdir.base / o["path"]).read_bytes().startswith(b"\x89PNG")
+
+
+def test_print_with_a_table_keeps_the_text_without_the_repr(live):
+    """Таблица — главный вывод, print рядом; repr того же датафрейма в текст не идёт."""
+    session, sink, outdir = live()
+    session.execute("a3f9", 1, "import polars as pl\nprint('shares')\npl.DataFrame({'a': [1, 2]})")
+    sink.wait(done_for("a3f9"))
+
+    rec = outdir.last("a3f9")
+
+    assert [o["kind"] for o in rec["outputs"]] == ["text", "table"]
+    assert rec["kind"] == "table" and rec["rows"] == 2
+    assert (outdir.base / rec["outputs"][0]["path"]).read_text(encoding="utf-8") == "shares\n"
 
 
 def test_relative_kernelspec_resolves_to_our_interpreter(live):

@@ -51,6 +51,24 @@ class OutDir:
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
+    def free_path(self, cell_id: str, run_id: int, ext: str) -> Path:
+        """Свободное имя под ещё один файл прогона: `3.png`, затем `3-2.png`, `3-3.png`…
+
+        Нужно для нескольких картинок за прогон — раньше вторая фигура молча затирала первую.
+        Первый файл называется как раньше, поэтому старые читатели находят его по тому же пути.
+        Номер — по диску, а не по счётчику: так не пересекаются и опоздавшие выводы, пришедшие
+        после закрытия прогона, когда счётчика уже нет.
+        """
+        first = self.path_for(cell_id, run_id, ext)
+        if not first.exists():
+            return first
+        seq = 2
+        while True:
+            p = first.with_name(f"{int(run_id)}-{seq}.{ext.lstrip('.')}")
+            if not p.exists():
+                return p
+            seq += 1
+
     def append(self, record: dict[str, Any]) -> dict[str, Any]:
         check_cell_id(record["cell_id"])
         self.base.mkdir(parents=True, exist_ok=True)
@@ -81,8 +99,32 @@ class OutDir:
         return found
 
     def resolve(self, record: dict[str, Any]) -> Path | None:
+        """Путь к главному выводу прогона (`path`): таблица, иначе картинка, иначе текст."""
         rel = record.get("path")
         return self.base / rel if rel else None
+
+    @staticmethod
+    def outputs_of(record: dict[str, Any]) -> list[dict[str, Any]]:
+        """Все выводы прогона по порядку показа: текст, картинки, html, таблица (§7).
+
+        У записей до появления `outputs` вывод был один — он и возвращается списком из одного,
+        плюс напечатанное из поля `text`, если оно было.
+        """
+        outputs = record.get("outputs")
+        if isinstance(outputs, list):
+            return [o for o in outputs if isinstance(o, dict)]
+        found = []
+        # между ними был промежуточный формат: print рядом с таблицей/картинкой — в `text`
+        if record.get("text"):
+            found.append({"kind": "text", "path": record["text"]})
+        if record.get("path"):
+            found.append({"kind": record.get("kind"), "path": record["path"]})
+        return found
+
+    def files_of(self, record: dict[str, Any]) -> list[Path]:
+        """Файлы прогона на диске — все, а не только главный: их удаляет prune."""
+        rels = {o.get("path") for o in self.outputs_of(record)} | {record.get("path"), record.get("text")}
+        return [self.base / rel for rel in sorted(r for r in rels if r)]
 
     def prune(self, cell_id: str, keep: int) -> list[int]:
         """Оставить последние `keep` прогонов ячейки, остальные удалить вместе с файлами."""
@@ -95,8 +137,8 @@ class OutDir:
         kept: list[dict[str, Any]] = []
         for rec in self.records():
             if rec.get("cell_id") == cell_id and rec.get("run_id") in drop:
-                for path in (self.resolve(rec), self.base / rec["text"] if rec.get("text") else None):
-                    if path is not None and path.exists():
+                for path in self.files_of(rec):
+                    if path.exists():
                         os.unlink(path)
                 continue
             kept.append(rec)

@@ -46,6 +46,8 @@ end
 ---@field execution_count integer|nil счётчик ядра, тот самый In [12]
 ---@field error table|nil
 ---@field table table|nil результат-датафрейм: path, rows, cols, schema
+---@field images { path: string, line: integer }[]|nil картинки прогона; line — строка-маркер
+---  `[картинка] …` в lines (1-based), под ней окно вывода рисует саму картинку
 ---@field duration_ms integer|nil
 ---@field input_prompt string|nil ячейка ждёт `input()`; ответить из nvim пока нечем, но видно это надо
 
@@ -242,6 +244,7 @@ function Exec:on_event(msg)
         run.execution_count = data.execution_count
     elseif msg.ev == "clear_output" then
         run.lines = {}
+        run.images = nil
         self._stream_tail[cell_id] = {}
     else
         return
@@ -271,14 +274,23 @@ function Exec:_apply_result(run, data)
             for _ = run.text_range.from, run.text_range.to do
                 table.remove(run.lines, run.text_range.from)
             end
+            -- маркеры картинок ниже вырезанного куска съезжают вверх вместе со строками
+            local removed = run.text_range.to - run.text_range.from + 1
+            for _, image in ipairs(run.images or {}) do
+                if image.line > run.text_range.to then
+                    image.line = image.line - removed
+                end
+            end
             run.text_range = nil
             run.has_text_result = false
         end
         run.table = data
         table.insert(run.lines, ("[таблица] %s строк × %s колонок"):format(data.rows, data.cols))
     elseif data.kind == "image" then
-        run.image = data.path
+        -- картинок за прогон бывает несколько: каждая встаёт под свой маркер
         table.insert(run.lines, "[картинка] " .. (data.path or ""))
+        run.images = run.images or {}
+        table.insert(run.images, { path = data.path, line = #run.lines })
     elseif data.kind == "html" then
         table.insert(run.lines, "[html] " .. (data.path or ""))
     elseif data.text then

@@ -106,9 +106,8 @@ it), `lang`,
 `start_row`/`end_row` (the body), `span_start`/`span_end` (with the marker), `runs`,
 `stale`, `running`, `live`, `last`. Inside `last`: `run_id`, `status`, `ename`, `kind`
 (`table`/`text`/`image`/`none`), `rows`, `cols`, `schema`, `duration_ms`,
-`execution_count`, `started_at`, an **absolute** `path` and, for a `table`/`image` run that
-also printed something, `text` — the absolute path of that printed output (a `print()`
-summary above the final frame lands there, not in the parquet). Inside `live` (present only
+`execution_count`, `started_at`, an **absolute** `path`, `outputs` and, for a `table`/`image`
+run that also printed something, `text` — the absolute path of that printed output. Inside `live` (present only
 while the cell is busy): `status`, `run_id`, `lines`, `tail`.
 
 - `stale: true` — the output came **not from the current code**, the cell was edited after
@@ -134,10 +133,17 @@ df = pl.read_parquet(path)     # kind == "table" — the whole frame, not a slic
 Read parquet with **`~/work/jupyter-utils/.venv/bin/python`** — the system `python3` has no
 polars. `jn-wait` and `jn-nvim` need nothing beyond the stdlib and run on any `python3`.
 
+`last.kind`/`last.path` is the run's **main** output (table, else the first image, else
+text). **All** of them are in `last.outputs` — `[{kind, path, rows?, cols?}]`, absolute
+paths, grouped: the text file first (every `print()`, stderr, traceback), then each figure
+(`12.png`, `12-2.png`, …), then html, then the table. A cell that prints a metric and draws
+a plot has both on disk.
+
 Keep in mind:
 
-1. **`print()` next to a table or an image** lands in a separate file, `last.text`
-   (`<cell>/<run>.out.txt`); the parquet / png holds only the final value.
+1. **`print()` next to a table or an image** is the `text` entry of `last.outputs`, also given
+   as `last.text`; the parquet / png holds only the final value. Runs recorded before
+   either existed lost it — re-run the cell if you need it.
 2. **History depth is 5 runs** per cell; older ones are trimmed.
 3. **No reason to read the output window (`jupyter://output`)**: it holds a rendering made
    for the screen (a table in pages of 100 rows, columns cut at 40 cells), not the data.
@@ -340,7 +346,7 @@ polling loop of your own.
 ```sh
 PYTHONPATH=~/Projects/jupyter.nvim/sidecar python3 -m jupyter_nvim.wait "$NB" af4b:3 13ca:4
 # af4b #3 ok · text · 1.2s · af4b/3.txt
-# 13ca #4 ok · table 1204×8 · 12.3s · 13ca/4.parquet · print: 13ca/4.out.txt
+# 13ca #4 ok · table 1204×8 · 12.3s · 13ca/4.parquet · print: 13ca/4.txt
 ```
 
 `cell:run_id` — the pairs `agent_run` returned. Exit code: 0 all ok, 1 some `error`/`aborted`

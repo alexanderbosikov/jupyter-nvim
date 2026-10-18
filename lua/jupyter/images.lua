@@ -78,9 +78,11 @@ function Images:clear(buf, force)
             end
         end
     elseif self.current then
-        pcall(function()
-            self.current:clear()
-        end)
+        for _, image in ipairs(self.current) do
+            pcall(function()
+                image:clear()
+            end)
+        end
     end
 
     -- И добиваем напрямую: удаление в kitty-протоколе — одна последовательность, а вот
@@ -132,38 +134,55 @@ end
 ---@param row integer строка-якорь, 0-based
 ---@return boolean показали
 function Images:show(path, win, buf, row)
+    return self:show_all({ { path = path, row = row } }, win, buf)
+end
+
+---Показать несколько картинок одного прогона, каждую под своей строкой-якорем.
+---
+---Снимается всё разом и рисуется заново: снимать по одной image.nvim не умеет надёжно
+---(см. clear), а картинки одного прогона всегда показываются вместе.
+---@param list { path: string, row: integer }[] row — 0-based
+---@param win integer
+---@param buf integer
+---@return boolean показали хотя бы одну
+function Images:show_all(list, win, buf)
     self:clear(buf)
-    if not self.enabled or not path then
+    if not self.enabled or #list == 0 then
         return false
     end
     local api = self:_api()
     if not api then
         return false
     end
-    if vim.fn.filereadable(path) == 0 then
-        return false
-    end
 
-    -- id уникальный на показ: from_file с уже занятым id возвращает СТАРУЮ картинку,
-    -- и в окне осталась бы предыдущая
-    self._seq = self._seq + 1
-    local ok, image = pcall(api.from_file, path, {
-        id = ("jupyter:%d:%d"):format(buf, self._seq),
-        window = win,
-        buffer = buf,
-        x = 0,
-        y = row,
-        with_virtual_padding = true,
-        inline = true,
-    })
-    if not ok or not image then
-        return false
+    local shown = false
+    self.current = {}
+    for _, item in ipairs(list) do
+        if item.path and vim.fn.filereadable(item.path) == 1 then
+            -- id уникальный на показ: from_file с уже занятым id возвращает СТАРУЮ картинку,
+            -- и в окне осталась бы предыдущая
+            self._seq = self._seq + 1
+            local ok, image = pcall(api.from_file, item.path, {
+                id = ("jupyter:%d:%d"):format(buf, self._seq),
+                window = win,
+                buffer = buf,
+                x = 0,
+                y = item.row,
+                with_virtual_padding = true,
+                inline = true,
+            })
+            if ok and image then
+                table.insert(self.current, image)
+                shown = pcall(function()
+                    image:render()
+                end) or shown
+            end
+        end
     end
-
-    self.current = image
-    return pcall(function()
-        image:render()
-    end)
+    if #self.current == 0 then
+        self.current = nil
+    end
+    return shown
 end
 
 return M

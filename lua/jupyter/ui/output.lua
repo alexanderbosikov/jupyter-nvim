@@ -190,7 +190,7 @@ end
 ---рисуется снова.
 ---@param cell_id string|nil ячейка под курсором
 function Output:focus_cell(cell_id)
-    if not self.images or not self.run or not self.run.image then
+    if not self.images or not self.run or not self.run.images then
         return
     end
     local mine = cell_id ~= nil and cell_id == self.run.cell_id
@@ -254,16 +254,12 @@ function Output:render()
         vim.list_extend(lines, self.run._preview)
     end
 
-    local image_path = self.run and self.run.image
+    -- Картинка встаёт под свою строку-маркер `[картинка] путь`: так их за прогон может быть
+    -- несколько, и порядок в окне — порядок прогона. Окну без своих картинок (закреплённое:
+    -- Images:clear снимает все разом) маркер с путём и остаётся
+    local run_images = self.run and self.run.images or nil
     if self.images then
-        self.images:clear(buf) -- перерисовка не должна оставлять прошлую картинку
-        if image_path then
-            table.insert(lines, "") -- строка-якорь под картинку
-        end
-    elseif image_path then
-        -- картинок на экране одна на всех (Images:clear снимает все разом), поэтому
-        -- окну без своих картинок остаётся сказать, где она лежит
-        table.insert(lines, "🖼 " .. image_path)
+        self.images:clear(buf) -- перерисовка не должна оставлять прошлые картинки
     end
 
     if #lines == 0 then
@@ -273,12 +269,16 @@ function Output:render()
     self:_render_winbar()
 
     self._image_shown = false
-    if self.images and image_path and self:is_open() then
-        self._image_shown = self.images:show(image_path, self.win, buf, #lines - 1)
+    if self.images and run_images and self:is_open() then
+        local anchors = {}
+        for _, image in ipairs(run_images) do
+            table.insert(anchors, { path = image.path, row = image.line - 1 })
+        end
+        self._image_shown = self.images:show_all(anchors, self.win, buf)
     end
 
     -- к концу прокручиваем только текст: у таблицы и картинки интереснее начало
-    if self.follow and self:is_open() and not (self.run and (self.run._preview or self.run.image)) then
+    if self.follow and self:is_open() and not (self.run and (self.run._preview or self.run.images)) then
         local count = vim.api.nvim_buf_line_count(buf)
         pcall(vim.api.nvim_win_set_cursor, self.win, { count, 0 })
     end

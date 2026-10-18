@@ -443,6 +443,9 @@ nvim --server "$SOCK" --remote-expr 'luaeval("require(\"jupyter\").snapshot_json
 `kernel.kernel_python` is there when the kernel runs on the project's environment (see "The
 kernel"): imports and package versions are that environment's, not the sidecar's.
 
+`last.outputs` lists every output of the run with absolute paths — text, images, html,
+table, in that order; `last.kind`/`last.path` is the main one of them.
+
 A cell that has never been run has no `runs`, no `last` and no `stale`. It has an `id` if the
 plugin made it (the insert commands, a split, prose turned into code, an agent's insert —
 the id is written together with the marker); one typed or pasted by hand has **no `id` field

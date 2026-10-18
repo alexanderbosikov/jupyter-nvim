@@ -891,7 +891,7 @@ function M.on_focus(gained)
         })
         if not gained then
             session.output.images:clear(session.output.buf)
-        elseif session.output:is_open() and session.output.run and session.output.run.image then
+        elseif session.output:is_open() and session.output.run and session.output.run.images then
             local drawer = session.output
             vim.schedule(function()
                 drawer:render()

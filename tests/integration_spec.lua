@@ -1195,7 +1195,7 @@ describe("картинки и фокус окна", function()
         local cleared, rendered = 0, 0
         session.output.images.clear = function() cleared = cleared + 1 end
         session.output:open()
-        session.output.run = { cell_id = "a3f9", run_id = 1, status = "ok", lines = { "x" }, image = "/tmp/x.png" }
+        session.output.run = { cell_id = "a3f9", run_id = 1, status = "ok", lines = { "x" }, images = { { path = "/tmp/x.png", line = 1 } } }
         session.output.render = function() rendered = rendered + 1 end
 
         jupyter.on_focus(false)

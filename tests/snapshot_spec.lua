@@ -111,6 +111,31 @@ describe("снимок ноутбука", function()
         assert.is_nil(snapshot.build(buf, { store = plain }).cells[1].last.text)
     end)
 
+    it("отдаёт все выводы прогона с абсолютными путями", function()
+        local st, base = make_store({ record({
+            kind = "image", path = "a3f9/7.png", rows = nil, cols = nil,
+            outputs = {
+                { kind = "text", path = "a3f9/7.txt" },
+                { kind = "image", path = "a3f9/7.png" },
+                { kind = "image", path = "a3f9/7-2.png" },
+            },
+        }) })
+
+        local last = snapshot.build(buf, { store = st }).cells[1].last
+
+        assert.equals(base .. "/a3f9/7.png", last.path, "главный вывод — как раньше")
+        assert.same({ "text", "image", "image" }, vim.tbl_map(function(o) return o.kind end, last.outputs))
+        assert.equals(base .. "/a3f9/7-2.png", last.outputs[3].path)
+    end)
+
+    it("у старой записи outputs — её единственный вывод", function()
+        local st, base = make_store({ record() })
+
+        local last = snapshot.build(buf, { store = st }).cells[1].last
+
+        assert.same({ { kind = "table", path = base .. "/a3f9/7.parquet" } }, last.outputs)
+    end)
+
     it("устаревший вывод помечен, свежий — нет", function()
         local stale_store = make_store({ record({ code_sha = "0000dead" }) })
         local fresh_store = make_store({ record({ code_sha = sha_of(buf, 1) }) })

@@ -25,12 +25,12 @@ def render(
     can_write = outdir is not None and cell_id is not None and run_id is not None
 
     if PNG in data and can_write:
-        path = outdir.path_for(cell_id, run_id, "png")
+        path = outdir.free_path(cell_id, run_id, "png")
         path.write_bytes(base64.b64decode(data[PNG]))
         return {"kind": "image", "mime": PNG, "path": str(path)}
 
     if SVG in data and can_write:
-        path = outdir.path_for(cell_id, run_id, "svg")
+        path = outdir.free_path(cell_id, run_id, "svg")
         path.write_text(data[SVG], encoding="utf-8")
         return {"kind": "image", "mime": SVG, "path": str(path)}
 
@@ -42,7 +42,7 @@ def render(
 
     if HTML in data:
         if can_write:
-            path = outdir.path_for(cell_id, run_id, "html")
+            path = outdir.free_path(cell_id, run_id, "html")
             path.write_text(data[HTML], encoding="utf-8")
             return {"kind": "html", "path": str(path)}
         return {"kind": "html", "text": data[HTML]}

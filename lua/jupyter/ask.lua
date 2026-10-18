@@ -218,6 +218,7 @@ function M.address(buf, opts)
                 entry.output = {
                     path = store:path_of(record),
                     kind = record.kind,
+                    outputs = require("jupyter.store").outputs_of(record),
                     rows = record.rows,
                     cols = record.cols,
                     status = record.status,
@@ -368,6 +369,16 @@ local function describe_output(addr, o)
     end
     if o.rows and o.cols then
         table.insert(parts, ("%d×%d"):format(o.rows, o.cols))
+    end
+    -- главный вывод назван выше; остальные — только счётом, пути к ним есть в снимке
+    local others = {}
+    for _, other in ipairs(o.outputs or {}) do
+        if other.path ~= nil and not (o.path and o.path:sub(-#other.path) == other.path) then
+            table.insert(others, other.kind)
+        end
+    end
+    if #others > 0 then
+        table.insert(parts, "ещё: " .. table.concat(others, ", ") .. " (в снимке)")
     end
     if o.stale then
         table.insert(parts, "устарел: код правили после прогона")

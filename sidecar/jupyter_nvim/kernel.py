@@ -928,8 +928,11 @@ class KernelSession:
             )
             if not late:
                 pending = self._pending.setdefault(ex.msg_id, {})
-                if payload.get("kind") == "image":
-                    pending["kind"], pending["path"] = "image", payload.get("path")
+                # картинок и html за прогон бывает несколько — копим все, по порядку
+                if payload.get("kind") == "image" and payload.get("path"):
+                    pending.setdefault("images", []).append(payload["path"])
+                elif payload.get("kind") == "html" and payload.get("path"):
+                    pending.setdefault("html", []).append(payload["path"])
                 elif payload.get("kind") in ("text", "html") and payload.get("text"):
                     pending["result_text"] = payload["text"]
             ev = Ev.RESULT if mtype == "execute_result" else Ev.DISPLAY
@@ -1060,7 +1063,14 @@ class KernelSession:
         stdout: StreamBuffer | None,
         stderr: StreamBuffer | None,
     ) -> None:
-        """Запись прогона в `.jupyter-out/`. Пути в индексе — относительные (§7), в событиях — полные."""
+        """Запись прогона в `.jupyter-out/`. Пути в индексе — относительные (§7), в событиях — полные.
+
+        Выводов за прогон бывает несколько — «посчитал, напечатал, нарисовал» — и все они
+        попадают в `outputs` группами: весь текст одним файлом, потом картинки по порядку,
+        потом html, потом таблица. `kind`/`path` остаются главным выводом (таблица, иначе
+        первая картинка, иначе текст) — так их читали до `outputs`, и так читают сейчас
+        `jupyter out --path` и снимок для агента.
+        """
         outdir = self._outdir_for()
         if outdir is None:
             return
@@ -1078,37 +1088,43 @@ class KernelSession:
             "ename": pending.get("ename"),
         }
 
-        streams = [
-            stdout.text().rstrip("\n") if stdout else "",
-            stderr.text().rstrip("\n") if stderr else "",
-        ]
-        if table and pending.get("table_path"):
-            record.update(kind="table", path=self._rel(outdir, pending["table_path"]), **table)
-        elif pending.get("kind") == "image" and pending.get("path"):
-            record.update(kind="image", path=self._rel(outdir, pending["path"]))
-        if record["kind"] in ("table", "image"):
-            # Напечатанное до таблицы или картинки — тоже вывод: сводка `print(...)` над
-            # итоговым фреймом иначе пропадала, и снаружи было не проверить полноту
-            # прогона. Кладём рядом отдельным файлом, основной `path` остаётся за таблицей.
-            blob = "\n".join(part for part in (*streams, "\n".join(pending.get("traceback") or [])) if part)
-            if blob:
-                path = outdir.path_for(ex.cell_id, ex.run_id, "out.txt")
-                path.write_text(blob + "\n", encoding="utf-8")
-                record["text"] = self._rel(outdir, path)
-        else:
-            blob = "\n".join(
-                part
-                for part in (
-                    *streams,
-                    pending.get("result_text", ""),
-                    "\n".join(pending.get("traceback") or []),
-                )
-                if part
+        has_table = bool(table and pending.get("table_path"))
+        outputs: list[dict[str, Any]] = []
+
+        blob = "\n".join(
+            part
+            for part in (
+                stdout.text().rstrip("\n") if stdout else "",
+                stderr.text().rstrip("\n") if stderr else "",
+                # repr датафрейма, который лёг таблицей, — дубль: таблица и так будет
+                "" if has_table else pending.get("result_text", ""),
+                "\n".join(pending.get("traceback") or []),
             )
-            if blob:
-                path = outdir.path_for(ex.cell_id, ex.run_id, "txt")
-                path.write_text(blob + "\n", encoding="utf-8")
-                record.update(kind="text", path=self._rel(outdir, path))
+            if part
+        )
+        if blob:
+            path = outdir.path_for(ex.cell_id, ex.run_id, "txt")
+            path.write_text(blob + "\n", encoding="utf-8")
+            outputs.append({"kind": "text", "path": self._rel(outdir, path)})
+        for path in pending.get("images") or []:
+            outputs.append({"kind": "image", "path": self._rel(outdir, path)})
+        for path in pending.get("html") or []:
+            outputs.append({"kind": "html", "path": self._rel(outdir, path)})
+        if has_table:
+            outputs.append({"kind": "table", "path": self._rel(outdir, pending["table_path"]), **table})
+
+        main = next(
+            (o for kind in ("table", "image", "text") for o in outputs if o["kind"] == kind), None
+        )
+        if main is not None:
+            record.update(main)
+        record["outputs"] = outputs
+        text = next((o for o in outputs if o["kind"] == "text"), None)
+        if text is not None and main is not text:
+            # `text` — то же, что текстовый вывод из `outputs`, отдельным полем: так его
+            # читают jn-wait (`print: …` в строке итога) и `last.text` снимка, появившиеся
+            # раньше `outputs`. Только когда главный вывод — не текст, как и было
+            record["text"] = text["path"]
 
         try:
             outdir.append(record)

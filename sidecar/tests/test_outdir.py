@@ -129,3 +129,48 @@ def test_prune_removes_printed_text_too(out):
 
     assert not out.path_for("a3f9", 1, "out.txt").exists()
     assert out.path_for("a3f9", 2, "out.txt").exists()
+
+
+def test_outputs_of_intermediate_record_includes_printed_text(out):
+    """Записи с полем `text` (print рядом с таблицей до `outputs`) — текст, потом главный вывод."""
+    rec = record(text="a3f9/1.out.txt")
+
+    assert out.outputs_of(rec) == [
+        {"kind": "text", "path": "a3f9/1.out.txt"},
+        {"kind": "table", "path": "a3f9/1.parquet"},
+    ]
+
+
+def test_free_path_numbers_extra_files_of_one_run(out):
+    """Вторая фигура за прогон не затирает первую; первая лежит там же, где раньше."""
+    first = out.free_path("a3f9", 3, "png")
+    first.write_bytes(b"1")
+    second = out.free_path("a3f9", 3, "png")
+    second.write_bytes(b"2")
+
+    assert first == out.path_for("a3f9", 3, "png")
+    assert second.name == "3-2.png"
+    assert out.free_path("a3f9", 3, "png").name == "3-3.png"
+
+
+def test_outputs_of_old_record_is_its_single_output(out):
+    """Записи до `outputs` — один вывод; читаются тем же кодом, что и новые."""
+    assert out.outputs_of(record()) == [{"kind": "table", "path": "a3f9/1.parquet"}]
+    assert out.outputs_of(record(kind="none", path=None)) == []
+
+
+def test_prune_deletes_every_output_of_a_run(out):
+    for run in (1, 2):
+        files = [out.path_for("a3f9", run, "txt"), out.path_for("a3f9", run, "png")]
+        files.append(files[1].with_name(f"{run}-2.png"))
+        for f in files:
+            f.write_text("x")
+        out.append(record(run_id=run, kind="image", path=f"a3f9/{run}.png", outputs=[
+            {"kind": "text", "path": f"a3f9/{run}.txt"},
+            {"kind": "image", "path": f"a3f9/{run}.png"},
+            {"kind": "image", "path": f"a3f9/{run}-2.png"},
+        ]))
+
+    out.prune("a3f9", keep=1)
+
+    assert sorted(p.name for p in (out.base / "a3f9").iterdir()) == ["2-2.png", "2.png", "2.txt"]

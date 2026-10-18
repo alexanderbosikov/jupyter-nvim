@@ -38,12 +38,17 @@ def main(argv: list[str] | None = None) -> int:
         print(path if path else "", end="\n" if path else "")
         return 0 if path else 1
 
-    if path is None:
+    outputs = out.outputs_of(rec)
+    if not outputs:
         print(rec.get("text", ""), end="")
-    elif path.suffix == ".txt":
-        sys.stdout.write(path.read_text(encoding="utf-8"))
-    else:
-        print(path)
+        return 0
+    # все выводы прогона по порядку: текст — содержимым, остальное — путём к файлу
+    for o in outputs:
+        file = out.base / o["path"]
+        if file.suffix == ".txt":
+            sys.stdout.write(file.read_text(encoding="utf-8"))
+        else:
+            print(file)
     return 0
 
 
