@@ -38,7 +38,13 @@ describe("картинки во всю вкладку", function()
         assert.equals(tabs_before + 1, #vim.api.nvim_list_tabpages())
         assert.equals("/a.png", img.shown[1].path)
         assert.equals(view.win, img.shown[1].win)
-        assert.same({ max_width_window_percentage = 100, max_height_window_percentage = 100 }, img.shown[1].extra)
+        -- вписывается в окно: ширина — всё окно, высота — без строки-якоря
+        assert.same({
+            width = vim.api.nvim_win_get_width(view.win),
+            height = vim.api.nvim_win_get_height(view.win) - 1,
+            max_width_window_percentage = 100,
+            max_height_window_percentage = 100,
+        }, img.shown[1].extra)
         assert.matches("^1/2", view:status())
     end)
 

@@ -1,8 +1,9 @@
 -- Картинки прогона во всю вкладку — пара к постраничной таблице (ui/table.lua).
 --
 -- В окне вывода картинка делит место с текстом, а image.nvim ещё и режет её по своему
--- max_height_window_percentage. Здесь вкладка отдана одной картинке целиком: лимиты
--- размера передаются свои, на 100% окна. <Tab>/<S-Tab> листают картинки ячейки, а за
+-- max_height_window_percentage. Здесь вкладка отдана одной картинке целиком: она
+-- вписывается в окно — во всю ширину или во всю высоту, смотря что упрётся раньше, и
+-- видна целиком (см. View:geometry). <Tab>/<S-Tab> листают картинки ячейки, а за
 -- последней — ячейки с картинками дальше по ноутбуку, как <Tab> в таблице.
 --
 -- Рисует тот же экземпляр jupyter.images, что и окно вывода: снятие картинок у
@@ -87,6 +88,16 @@ function View:open(list, label, cell_id, index)
         vim.wo[self.win].signcolumn = "no"
         vim.wo[self.win].cursorline = false
         self._open = true
+        -- размер вписан в окно в ячейках: окно поменялось — вписать заново
+        vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+            group = vim.api.nvim_create_augroup("jupyter.image_view", { clear = true }),
+            callback = function()
+                if not self:is_open() then
+                    return true -- вкладки нет — и подписка больше не нужна
+                end
+                vim.schedule(function() self:render() end)
+            end,
+        })
     end
     self:render()
 end
@@ -100,11 +111,26 @@ function View:render()
     common.set_lines(self.buf, { "" })
     self:_render_winbar()
     if self.images and path then
-        self.images:show_all({ { path = path, row = 0 } }, self.win, self.buf, {
-            max_width_window_percentage = 100,
-            max_height_window_percentage = 100,
-        })
+        self.images:show_all({ { path = path, row = 0 } }, self.win, self.buf, self:geometry())
     end
+end
+
+---Размер картинки для image.nvim: всё окно под строкой-якорем.
+---
+---Сам image.nvim картинку не увеличивает — без размера она рисуется в родных пикселях,
+---и график на 1100 px занимает треть экрана. Заданные же ширину и высоту он подгоняет
+---под пропорции картинки, оставляя меньший из двух масштабов (adjust_to_aspect_ratio):
+---картинка упирается в ширину или в высоту окна и не вылезает за другую. Свои лимиты
+---в процентах окна снимаем — иначе глобальные 50% высоты урезали бы и здесь.
+---@return table опции поверх jupyter.images
+function View:geometry()
+    return {
+        width = vim.api.nvim_win_get_width(self.win),
+        -- первая строка — якорь, картинка встаёт под ней
+        height = math.max(1, vim.api.nvim_win_get_height(self.win) - 1),
+        max_width_window_percentage = 100,
+        max_height_window_percentage = 100,
+    }
 end
 
 ---Шаг по картинкам: внутри ячейки, а за краем — к соседней ячейке с картинками.

@@ -173,9 +173,10 @@ sorting for the session: compare two results back and forth, and neither has to 
 again.
 
 **Images in a tab of their own.** `<leader>jf` (`:JupyterImage`, `f` in the output window)
-opens the cell's images in a separate tab, one at a time and as large as the window allows —
-the tab's own size limits replace image.nvim's `max_*_window_percentage`, which in the
-output window often halve a figure. `<Tab>`/`<S-Tab>` go through the cell's images and,
+opens the cell's images in a separate tab, one at a time, fitted to the window: full width or
+full height, whichever is reached first, and always whole. Small figures are scaled up;
+image.nvim's `max_*_window_percentage`, which in the output window often halves a figure,
+does not apply here. Resizing the window fits the image again. `<Tab>`/`<S-Tab>` go through the cell's images and,
 past the last one, on to the nearest cell below (or above) that has images, the same way as
 with tables; stepping back opens that cell at its last image. The notebook's cursor
 follows; `q` closes the tab and the output window gets its images back.
