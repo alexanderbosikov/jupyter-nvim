@@ -25,6 +25,7 @@ local sidebar = require("jupyter.sidebar")
 local snapshot = require("jupyter.snapshot")
 local toc = require("jupyter.toc")
 local table_view = require("jupyter.ui.table")
+local image_view = require("jupyter.ui.image_view")
 
 local M = {}
 
@@ -134,6 +135,7 @@ M.defaults = {
         pin_output = "<leader>jp", -- закрепить вывод ячейки в окне над основным; повтор снимает
         show_toc = "<leader>jT",
         open_table = "<leader>jt",
+        open_image = "<leader>jf", -- f как «figure»: картинки ячейки во всю вкладку
         edit_cell_args = "<leader>jg", -- g как «аргументы»: jа/jb/jc уже заняты
         -- перестройка ячеек. m и y — как в командном режиме Jupyter, остальное свободно
         split_cell = "<leader>js",
@@ -331,6 +333,7 @@ M.KEY_DESC = {
     pin_output = "закрепить вывод ячейки",
     show_toc = "оглавление ноутбука",
     open_table = "таблица постранично",
+    open_image = "картинки ячейки во всю вкладку",
     edit_cell_args = "параметры %%sql ячейки",
     split_cell = "разрезать ячейку по курсору",
     merge_cell = "склеить со следующей",
@@ -527,6 +530,9 @@ function M.session(buf)
         on_open_table = function()
             M.open_table()
         end,
+        on_open_image = function()
+            M.open_image()
+        end,
         images = images.new({ enabled = M.config.images ~= false }),
     }))
     -- Закреплённый вывод: одна ячейка, которая не уходит из вида, пока курсор ходит по
@@ -549,6 +555,9 @@ function M.session(buf)
         preview_rows = M.config.output.preview_rows,
         on_open_table = function(run)
             M.open_table(run)
+        end,
+        on_open_image = function(run)
+            M.open_image(run)
         end,
     }))
     -- Ячейку, которую прямо сейчас переписывает агент, не запускаем: её код через
@@ -618,6 +627,16 @@ function M.session(buf)
         max_col = M.config.table.max_col,
         on_step = function(dir) M.step_table(buf, dir) end,
     })
+    -- тот же экземпляр картинок, что у окна вывода: снятие у image.nvim глобальное
+    local imgv = image_view.new({
+        images = drawer.images,
+        on_step = function(dir) return M.step_image(buf, dir) end,
+        on_close = function()
+            if drawer:is_open() then
+                drawer:render()
+            end
+        end,
+    })
 
     local name = vim.api.nvim_buf_get_name(buf)
     found = {
@@ -629,6 +648,7 @@ function M.session(buf)
         pinned = pinned,
         pin_cell = nil, -- cell_id закреплённой ячейки
         table = tbl,
+        image_view = imgv,
         status = status_ui.new(M.config.status),
         store = store.new({ notebook = name ~= "" and name or nil, out_dir = M.config.out_dir }),
         stale_cache = { value = {}, dirty = nil }, -- dirty: диапазон строк, правленных после расчёта
@@ -896,6 +916,12 @@ function M.on_focus(gained)
         })
         if not gained then
             session.output.images:clear(session.output.buf)
+        elseif session.image_view:is_open() then
+            -- картинка во всю вкладку на экране — вернуть её, а не окно вывода из-под неё
+            local view = session.image_view
+            vim.schedule(function()
+                view:render()
+            end)
         elseif session.output:is_open() and session.output.run and session.output.run.images then
             local drawer = session.output
             vim.schedule(function()
@@ -1480,10 +1506,58 @@ function M.open_table(run)
     show_table(s, run)
 end
 
+---Соседняя ячейка с подходящим прогоном: выше или ниже `from_id`, первая, у чьего
+---прогона `fits(run)`. Прогон — тот же, что открыл бы просмотр на этой ячейке: идущий или
+---последний из истории. Курсор ноутбука переезжает к ней, чтобы `q` вернул к ячейке,
+---которую смотрел последней, а не к той, с которой начал.
+---@param s table сессия
+---@param from_id string|nil ячейка, от которой ищем
+---@param dir integer 1 — вниз, -1 — вверх
+---@param fits fun(run: jupyter.Run): boolean
+---@return jupyter.Run|nil
+local function neighbour_run(s, from_id, dir, fits)
+    local list = cells.list(s.buf)
+    local from
+    for i, cell in ipairs(list) do
+        if from_id and exec.cell_id(s.buf, cell) == from_id then
+            from = i
+            break
+        end
+    end
+    if not from then
+        vim.notify(
+            ("jupyter.nvim: ячейки %s в ноутбуке больше нет — соседнюю не от чего искать")
+                :format(from_id or "?"),
+            vim.log.levels.WARN
+        )
+        return nil
+    end
+    local i = from + dir
+    while list[i] do
+        local cell = list[i]
+        local id = exec.cell_id(s.buf, cell)
+        local run = id and (s.exec:run_for(id) or s.store:last_run(id)) or nil
+        if run and fits(run) then
+            for _, win in ipairs(vim.fn.win_findbuf(s.buf)) do
+                pcall(vim.api.nvim_win_set_cursor, win, { cell.start_row, 0 })
+            end
+            return run
+        end
+        i = i + dir
+    end
+    return nil
+end
+
+local function has_table(run)
+    return run.table ~= nil and run.table.path ~= nil
+end
+
+local function has_images(run)
+    return run.images ~= nil and #run.images > 0
+end
+
 ---Таблица соседней ячейки — той, что выше или ниже на экране, с результатом-таблицей.
----Ячейки без таблицы пропускаются. Прогон берётся тот же, что открыл бы `open_table` на
----этой ячейке: идущий или последний из истории. Курсор ноутбука переезжает туда же, чтобы
----`q` вернул к ячейке, которую смотрел последней, а не к той, с которой начал.
+---Ячейки без таблицы пропускаются.
 ---@param buf integer буфер ноутбука
 ---@param dir integer 1 — вниз, -1 — вверх
 ---@return boolean
@@ -1492,40 +1566,70 @@ function M.step_table(buf, dir)
     if not s then
         return false
     end
-    local list = cells.list(buf)
-    local from
-    for i, cell in ipairs(list) do
-        if s.table.cell_id and exec.cell_id(buf, cell) == s.table.cell_id then
-            from = i
-            break
-        end
-    end
-    if not from then
-        vim.notify(
-            ("jupyter.nvim: ячейки %s в ноутбуке больше нет — соседнюю не от чего искать")
-                :format(s.table.cell_id or "?"),
-            vim.log.levels.WARN
-        )
-        return false
-    end
-    local i = from + dir
-    while list[i] do
-        local cell = list[i]
-        local id = exec.cell_id(buf, cell)
-        local run = id and (s.exec:run_for(id) or s.store:last_run(id)) or nil
-        if run and run.table and run.table.path then
-            for _, win in ipairs(vim.fn.win_findbuf(buf)) do
-                pcall(vim.api.nvim_win_set_cursor, win, { cell.start_row, 0 })
-            end
-            show_table(s, run)
-            return true
-        end
-        i = i + dir
+    local run = neighbour_run(s, s.table.cell_id, dir, has_table)
+    if run then
+        show_table(s, run)
+        return true
     end
     vim.notify(("jupyter.nvim: %s таблиц нет"):format(dir > 0 and "ниже" or "выше"))
     return false
 end
 
+---@param s table сессия
+---@param run jupyter.Run прогон с картинками
+---@param index? integer с какой начать; -1 — с последней
+local function show_images(s, run, index)
+    local paths = {}
+    for _, image in ipairs(run.images) do
+        table.insert(paths, image.path)
+    end
+    local label = ("ячейка %s · прогон %d"):format(run.cell_id, run.run_id)
+    s.image_view:open(paths, label, run.cell_id, index)
+end
+
+---Картинки ячейки во всю вкладку: пара к `open_table`.
+---@param run? jupyter.Run какой прогон открыть; без него — по курсору
+function M.open_image(run)
+    local s = M.session()
+    -- как у таблицы: позиция курсора значит что-то только в самом ноутбуке
+    if not run and vim.api.nvim_get_current_buf() == s.buf then
+        local cell = cells.at(s.buf, vim.api.nvim_win_get_cursor(0)[1])
+        if cell then
+            local cell_id = exec.cell_id(s.buf, cell)
+            run = s.exec:run_for(cell_id) or s.store:last_run(cell_id)
+        end
+    end
+    run = run or s.output.run
+
+    if not run then
+        vim.notify("jupyter.nvim: ячейка ещё не выполнялась", vim.log.levels.WARN)
+        return
+    end
+    if not has_images(run) then
+        vim.notify(("jupyter.nvim: у ячейки %s нет картинок"):format(run.cell_id), vim.log.levels.WARN)
+        return
+    end
+    show_images(s, run)
+end
+
+---Картинки соседней ячейки — когда в своей листать уже некуда. Шаг назад открывает
+---соседку с её последней картинки: листание идёт сплошной лентой в обе стороны.
+---Не нашлась — окно само скажет, что дальше картинок нет.
+---@param buf integer буфер ноутбука
+---@param dir integer 1 — вниз, -1 — вверх
+---@return boolean
+function M.step_image(buf, dir)
+    local s = sessions[buf]
+    if not s then
+        return false
+    end
+    local run = neighbour_run(s, s.image_view.cell_id, dir, has_images)
+    if not run then
+        return false
+    end
+    show_images(s, run, dir < 0 and -1 or 1)
+    return true
+end
 
 ---Ядра без хозяина в каталоге текущего файла: показать или снять.
 ---@param kill? boolean

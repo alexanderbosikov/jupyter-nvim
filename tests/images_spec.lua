@@ -222,6 +222,25 @@ describe("картинка в окне вывода", function()
         assert.equals(0, vim.tbl_count(api.state.images), "закрытие снимает все")
     end)
 
+    it("из невидимой вкладки не снимает и не рисует: снятие у image.nvim глобальное", function()
+        local api = fake_api()
+        local out = output.new({ size = 8, images = images.new({ api = api }) })
+        local path = png()
+        local run = { cell_id = "a3f9", run_id = 1, status = "ok", lines = { "[картинка] x" },
+                      images = { { path = path, line = 1 } } }
+        out:show(run)
+        assert.equals(1, #api.made)
+
+        vim.cmd("tabnew") -- как вкладка картинки во всю ширину поверх ноутбука
+        local cleared = api.cleared
+        out:update(run) -- прогон доехал, пока смотрим другую вкладку
+
+        assert.equals(cleared, api.cleared, "чужую картинку в текущей вкладке не трогаем")
+        assert.equals(1, #api.made, "в скрытое окно не рисуем")
+        vim.cmd("tabclose")
+        out:close()
+    end)
+
     it("смена прогона снимает прошлую картинку", function()
         local api = fake_api()
         local out = output.new({ size = 8, images = images.new({ api = api }) })

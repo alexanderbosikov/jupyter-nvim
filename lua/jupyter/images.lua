@@ -144,8 +144,9 @@ end
 ---@param list { path: string, row: integer }[] row — 0-based
 ---@param win integer
 ---@param buf integer
+---@param extra? table опции image.nvim поверх наших — например, свои лимиты размера
 ---@return boolean показали хотя бы одну
-function Images:show_all(list, win, buf)
+function Images:show_all(list, win, buf, extra)
     self:clear(buf)
     if not self.enabled or #list == 0 then
         return false
@@ -162,7 +163,7 @@ function Images:show_all(list, win, buf)
             -- id уникальный на показ: from_file с уже занятым id возвращает СТАРУЮ картинку,
             -- и в окне осталась бы предыдущая
             self._seq = self._seq + 1
-            local ok, image = pcall(api.from_file, item.path, {
+            local ok, image = pcall(api.from_file, item.path, vim.tbl_extend("force", {
                 id = ("jupyter:%d:%d"):format(buf, self._seq),
                 window = win,
                 buffer = buf,
@@ -170,7 +171,7 @@ function Images:show_all(list, win, buf)
                 y = item.row,
                 with_virtual_padding = true,
                 inline = true,
-            })
+            }, extra or {}))
             if ok and image then
                 table.insert(self.current, image)
                 shown = pcall(function()

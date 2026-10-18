@@ -197,6 +197,7 @@ Messages outside that table fall into three cases, and they must not be mixed:
 | `ui/common.lua` | scratch buffer, window options, **actions → keys** | not a single hard-coded key |
 | `ui/output.lua` | the drawer: output, table preview, status in the winbar | — |
 | `ui/table.lua` | paged viewing of parquet, column alignment, the sorting stack, a cell's whole value | does not read parquet itself and does not sort |
+| `ui/image_view.lua` | a run's images in a tab of their own, one at a time, stepping on to neighbouring cells | does not know which cell is a neighbour (`on_step`); shares the `jupyter.images` instance with the output window, because image.nvim clears globally |
 | `ui/status.lua` | the status line under a cell | stores no positions |
 | `images.lua` | the path and the anchor in image.nvim, removing images | has no renderer of its own |
 | `edit.lua` | restructuring cells: split, join, move, change the type | does not look for boundaries — it takes them from `cells` |

@@ -20,6 +20,7 @@ function M.setup(api)
     cmd("JupyterUnpin", function() api.unpin_output() end, { desc = "снять закреплённый вывод" })
     cmd("JupyterStop", function() api.detach(vim.api.nvim_get_current_buf()) end, { desc = "погасить ядро" })
     cmd("JupyterTable", function() api.open_table() end, { desc = "постраничный просмотр таблицы" })
+    cmd("JupyterImage", function() api.open_image() end, { desc = "картинки ячейки во всю вкладку" })
     cmd("JupyterLog", function() api.show_log() end, { desc = "журнал сайдкара и состояний ядра" })
     cmd("JupyterClearImages", function()
         if not api.clear_images() then

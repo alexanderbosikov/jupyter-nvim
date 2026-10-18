@@ -91,6 +91,7 @@ value may be a string or a list of keys); `keys = false` turns them off entirely
 | output window | `<leader>jo` |
 | pin this cell's output (again — unpin) | `<leader>jp` |
 | table, page by page | `<leader>jt` |
+| the cell's images, full tab | `<leader>jf` |
 | previous / next run of this cell | `[r` / `]r` |
 | notebook outline | `<leader>jT` |
 | interrupt / restart the kernel | `<leader>ji` / `<leader>jR` |
@@ -111,7 +112,7 @@ other modes: `textobjects = { inner = "ic", around = "ac" }`.
 
 Commands: `:JupyterRun`, `:JupyterRunAll`, `:JupyterRunBelow`, `:JupyterOutput`,
 `:JupyterPin`, `:JupyterUnpin`,
-`:JupyterTable`, `:JupyterRunPrev`, `:JupyterRunNext`, `:JupyterInterrupt`,
+`:JupyterTable`, `:JupyterImage`, `:JupyterRunPrev`, `:JupyterRunNext`, `:JupyterInterrupt`,
 `:JupyterRestart`, `:JupyterHistory`, `:JupyterToc`, `:JupyterRepaint`,
 `:JupyterClearImages`, `:JupyterLog`, `:JupyterStatus`, `:JupyterStop`,
 `:JupyterOrphans` (with `!` — clear them), `:JupyterAttach`, `:JupyterRelease`,
@@ -170,6 +171,14 @@ open on that cell — the running one or the last in the history. The notebook's
 follows, so `q` brings you back to the cell you looked at last. Each table keeps its own
 sorting for the session: compare two results back and forth, and neither has to be sorted
 again.
+
+**Images in a tab of their own.** `<leader>jf` (`:JupyterImage`, `f` in the output window)
+opens the cell's images in a separate tab, one at a time and as large as the window allows —
+the tab's own size limits replace image.nvim's `max_*_window_percentage`, which in the
+output window often halve a figure. `<Tab>`/`<S-Tab>` go through the cell's images and,
+past the last one, on to the nearest cell below (or above) that has images, the same way as
+with tables; stepping back opens that cell at its last image. The notebook's cursor
+follows; `q` closes the tab and the output window gets its images back.
 
 ## Cells
 

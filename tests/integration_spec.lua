@@ -595,6 +595,54 @@ describe("таблица", function()
         assert.is_false(session.table:is_open())
     end)
 
+    it("картинки во всю вкладку: <Tab> листает ячейку, потом соседку через ячейку без картинок", function()
+        local png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
+        local show = ("publish_display_data({'image/png': '%s'})"):format(png)
+        local _, b = notebook({
+            "# %%",
+            "from IPython.display import publish_display_data",
+            show .. "; " .. show,
+            "# %%",
+            'print("между ними")',
+            "# %%",
+            show,
+        })
+        buf, session = b, nil
+        local nb_win = vim.api.nvim_get_current_win()
+        for _, row in ipairs({ 2, 5, 7 }) do
+            vim.api.nvim_win_set_cursor(0, { row, 0 })
+            jupyter.run_cell()
+        end
+        session = jupyter.session(buf)
+        local first, last = cid(buf, 2), cid(buf, 7)
+        wait(function()
+            local r = session.exec:run_for(last)
+            return r and r.status == "ok" and r.images ~= nil
+        end, 60000, "три прогона")
+
+        vim.api.nvim_win_set_cursor(nb_win, { 2, 0 })
+        jupyter.open_image()
+        local view = session.image_view
+        assert.is_true(view:is_open())
+        assert.equals(first, view.cell_id)
+        assert.matches("^1/2", view:status())
+
+        view:get_actions().image_next()
+        assert.matches("^2/2", view:status())
+
+        view:get_actions().image_next()
+        assert.equals(last, view.cell_id, "ячейку без картинок пропустили")
+        assert.matches("^1/1", view:status())
+        assert.equals(7, vim.api.nvim_win_get_cursor(nb_win)[1], "курсор ноутбука поехал следом")
+
+        view:get_actions().image_prev()
+        assert.equals(first, view.cell_id)
+        assert.matches("^2/2", view:status(), "назад — с последней картинки соседки")
+
+        view:get_actions().close()
+        assert.is_false(view:is_open())
+    end)
+
     it("у ячейки без таблицы предупреждает, а не открывает пустое окно", function()
         local _, b = notebook({ "# %%", 'print("просто текст")' })
         buf, session = b, nil

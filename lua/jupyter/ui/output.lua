@@ -17,6 +17,7 @@ M.DEFAULT_KEYS = {
     { mode = "n", key = "c", action = "clear" },
     { mode = "n", key = "y", action = "yank" },
     { mode = "n", key = "t", action = "open_table" },
+    { mode = "n", key = "f", action = "open_image" },
     { mode = "n", key = "gg", action = "top" },
     { mode = "n", key = "G", action = "bottom" },
 }
@@ -56,6 +57,8 @@ function M.new(opts)
         preview_rows = opts.preview_rows or 30,
         -- чем открыть таблицу: drawer сам про вкладку с parquet знать не должен
         on_open_table = opts.on_open_table,
+        -- чем открыть картинки во всю вкладку — та же развязка, что у таблицы
+        on_open_image = opts.on_open_image,
         -- объект с show/clear: картинки рисует image.nvim, мы отдаём путь и якорь
         images = opts.images,
         position = opts.position or "bottom",
@@ -258,7 +261,12 @@ function Output:render()
     -- несколько, и порядок в окне — порядок прогона. Окну без своих картинок (закреплённое:
     -- Images:clear снимает все разом) маркер с путём и остаётся
     local run_images = self.run and self.run.images or nil
-    if self.images then
+    -- Картинки трогаем, только когда окно во вкладке на экране. Снятие у image.nvim
+    -- глобальное: перерисовка окна из соседней вкладки (прогон доехал, пока смотришь
+    -- картинку во всю вкладку) сняла бы чужую картинку. Вернёмся — перерисуют заново
+    local visible = self:is_open()
+        and vim.api.nvim_win_get_tabpage(self.win) == vim.api.nvim_get_current_tabpage()
+    if self.images and visible then
         self.images:clear(buf) -- перерисовка не должна оставлять прошлые картинки
     end
 
@@ -269,7 +277,7 @@ function Output:render()
     self:_render_winbar()
 
     self._image_shown = false
-    if self.images and run_images and self:is_open() then
+    if self.images and run_images and visible then
         local anchors = {}
         for _, image in ipairs(run_images) do
             table.insert(anchors, { path = image.path, row = image.line - 1 })
@@ -366,6 +374,13 @@ function Output:get_actions()
                 self.on_open_table(self.run)
             else
                 vim.notify("jupyter.nvim: открывать таблицу нечем", vim.log.levels.WARN)
+            end
+        end,
+        open_image = function()
+            if self.on_open_image then
+                self.on_open_image(self.run)
+            else
+                vim.notify("jupyter.nvim: открывать картинки нечем", vim.log.levels.WARN)
             end
         end,
         close = function()
