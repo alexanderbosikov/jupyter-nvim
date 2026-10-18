@@ -87,6 +87,30 @@ local function probe(python)
     return (result and result.code == 0 and decode(result.stdout)) or {}, result
 end
 
+---ipykernel до 7.4 изредка перестаёт читать shell-сокет: ядро `ready`, а ячейки не
+---выполняются. Читает он сокет в одном потоке, а ответы пишет в него из другого (в 7.4
+---это исправлено: «sends go through the stream»). На стенде 120 стартов: 7.3.0 — 9 зависаний,
+---7.4.0 — ни одного. Лечится только обновлением, поэтому говорим об этом здесь.
+---@param version string|nil версия ipykernel в интерпретаторе ядра
+---@param where string чей интерпретатор, для сообщения
+---@return string|nil level, string|nil msg
+function M.ipykernel_verdict(version, where)
+    if not version then
+        return nil
+    end
+    local major, minor = version:match("^(%d+)%.(%d+)")
+    major, minor = tonumber(major), tonumber(minor)
+    if not major then
+        return nil
+    end
+    if major < 7 or (major == 7 and minor < 4) then
+        return "warn", ("ipykernel %s в %s: известная ошибка, ядро изредка (~2%% стартов) "
+            .. "зависает с виду готовым. Обнови до 7.4+: uv lock --upgrade-package ipykernel && uv sync")
+            :format(version, where)
+    end
+    return "ok", ("ipykernel %s в %s"):format(version, where)
+end
+
 function M.collect(config)
     config = config or require("jupyter").config
     local report = {}
@@ -153,6 +177,10 @@ function M.collect(config)
         -- ядро из .venv проекта: kernelspec'и не участвуют, спрашиваем сам интерпретатор.
         -- polars ему нужен не для работы, а чтобы таблицы-результаты попадали в parquet (§7.1)
         local theirs = probe(kchoice.python)
+        local level, msg = M.ipykernel_verdict(theirs.ipykernel, "ядре проекта")
+        if level then
+            add(level, msg)
+        end
         if not theirs.python then
             add("error", ("ядро из окружения проекта (%s), но опросить %s не удалось")
                 :format(kchoice.source, kchoice.python))
@@ -209,6 +237,10 @@ function M.collect(config)
                 -- а пишет его ядро — хелпером у себя в памяти (§7.1). Другой интерпретатор сам по
                 -- себе не беда, беда — если в нём нет polars; поэтому спрашиваем его, а не гадаем
                 local theirs = probe(info.argv0)
+                local level, msg = M.ipykernel_verdict(theirs.ipykernel, "ядре kernelspec " .. wanted)
+                if level then
+                    add(level, msg)
+                end
                 if theirs.polars then
                     add("ok", ("kernelspec %s запускает другой интерпретатор (%s), polars в нём есть: %s")
                         :format(wanted, info.argv0, theirs.polars))
@@ -221,10 +253,18 @@ function M.collect(config)
                         .. "Ядро и сайдкар должны быть из одного окружения, иначе в ядре может не быть polars")
                         :format(wanted, info.argv0))
                 end
-            elseif info.relative then
-                add("ok", ("argv kernelspec относительный (%s): ядро возьмётся из окружения сайдкара"):format(info.argv0))
             else
-                add("ok", "kernelspec запускает тот же интерпретатор, что и сайдкар")
+                if info.relative then
+                    add("ok", ("argv kernelspec относительный (%s): ядро возьмётся из окружения сайдкара")
+                        :format(info.argv0))
+                else
+                    add("ok", "kernelspec запускает тот же интерпретатор, что и сайдкар")
+                end
+                -- ядро на питоне сайдкара: его версии уже опрошены в разделе 2
+                local level, msg = M.ipykernel_verdict(versions.ipykernel, "ядре (окружение сайдкара)")
+                if level then
+                    add(level, msg)
+                end
             end
         end
     end

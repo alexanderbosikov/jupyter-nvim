@@ -350,11 +350,32 @@ drops the queue on `stuck` with `kernel_stuck` and says what to do next, because
 point the symptom read as "nothing is happening".
 
 The observed cause of such silence is [ipython/ipykernel#1529](https://github.com/ipython/ipykernel/pull/1529):
-the shell ROUTER stopped re-arming its read edge and the kernel went quiet. Reported at ~2%
-of starts on Linux; not reproduced here in 400 starts (median readiness 0.37 s — the window
-barely opens when the kernel comes up that fast). Merged upstream 13.08.2026 and in no
-release as of 7.3.0, so there is nothing to pin to. The deadline is ours regardless: it
-bounds *any* reason for silence, not that one.
+the shell ROUTER stopped re-arming its read edge and the kernel went quiet. In 7.3.0 the
+shell socket is read by a `ZMQStream` in one thread while replies are written to it raw from
+another; 7.4.0 sends everything through the stream ("the only user of the shell socket").
+
+Reproduced on 18.10.2026 with a stand of six processes starting kernels in parallel, a
+`print` cell after each start: **7.3.0 — 9 hangs in 120 starts, 7.4.0 — none in 120**. The
+shape is exact: `kernel_info` is answered, the hidden cells and the stdin probe go out, and
+then nothing — no `busy` for the probe, the user's cell never starts, the probe reports
+`stuck` and the kernel is declared `ready` anyway. Our messages are not lost: they lie unread
+in the kernel's socket, and when a second, fresh client connects to the same kernel, the
+kernel answers it in 10 ms and processes everything that was pending at once. Another
+`kernel_info` over our existing connection does not wake it (tried: ~800 such nudges, the
+same hang rate) — so there is no cheap workaround on our side. Under the test suite this
+was the "flaky" live test, one to three per full run.
+
+So the fix is the version: `:checkhealth jupyter` warns when the kernel's interpreter has
+ipykernel older than 7.4. The deadline stays ours regardless: it bounds *any* reason for
+silence, not that one.
+
+A note on our own side of the socket, because it was the first suspect. Our shell socket is
+also read by one thread (the `jn-shell` pump) and written from others (RPC, the stdin probe,
+the readiness prober) under a lock that orders writes only among themselves — strictly
+speaking against zmq's rules. Making one thread own the socket (a send queue plus a pipe to
+wake the pump) was tried and measured: it did not cure the hang, and on 7.3.0 it made it
+four times more frequent (the pump flushes queued requests in a burst). It was rolled back;
+nothing observed so far is caused by our concurrent sends.
 
 **The stages of readiness are sequential.** First the kernel proves that its main loop is
 alive, and only then do we have the right to send it hidden cells, let alone an

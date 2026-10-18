@@ -270,3 +270,23 @@ describe("история прогонов", function()
         assert.same({}, health.history({ out_dir = ".jupyter-out" }, vim.api.nvim_get_current_buf()))
     end)
 end)
+
+describe("ipykernel с известным зависанием", function()
+    local health = require("jupyter.health")
+
+    it("до 7.4 — предупреждение с командой обновления", function()
+        local level, msg = health.ipykernel_verdict("7.3.0", "ядре проекта")
+
+        assert.equals("warn", level)
+        assert.matches("7%.4", msg)
+        assert.matches("upgrade%-package ipykernel", msg)
+        assert.equals("warn", (health.ipykernel_verdict("6.29.5", "x")))
+    end)
+
+    it("7.4 и новее — ok; неизвестная версия — молчим", function()
+        assert.equals("ok", (health.ipykernel_verdict("7.4.0", "x")))
+        assert.equals("ok", (health.ipykernel_verdict("8.0.1", "x")))
+        assert.is_nil(health.ipykernel_verdict(nil, "x"))
+        assert.is_nil(health.ipykernel_verdict("dev", "x"))
+    end)
+end)
