@@ -147,66 +147,85 @@ function M.collect(config)
         end
     end
 
-    -- 4. kernelspec: не только есть ли, но и какой интерпретатор он запускает.
-    -- Абсолютный argv на чужой python — самый частый способ получить ядро без polars (§6.3);
-    -- относительный безопасен: сайдкар кладёт свой каталог первым в PATH ядра
-    local wanted = config.kernel_name or "python3"
-    if type(wanted) == "function" then
-        wanted = wanted(ctx)
-    end
-    local spec_probe = table.concat({
-        "import json,os,sys",
-        "from jupyter_client.kernelspec import KernelSpecManager, NoSuchKernel",
-        "ksm=KernelSpecManager()",
-        "out={'names':sorted(ksm.find_kernel_specs())}",
-        "try:",
-        "    spec=ksm.get_kernel_spec(sys.argv[1])",
-        "    argv0=spec.argv[0] if spec.argv else ''",
-        "    out['dir']=spec.resource_dir",
-        "    out['argv0']=argv0",
-        "    out['relative']=not os.path.isabs(argv0)",
-        "    out['same']=out['relative'] or os.path.realpath(argv0)==os.path.realpath(sys.executable)",
-        "except NoSuchKernel:",
-        "    pass",
-        "print(json.dumps(out))",
-    }, "\n")
-    local specs = run({ python, "-c", spec_probe, wanted })
-    local info
-    if specs and specs.code == 0 then
-        -- decode(), а не vim.json.decode: там уже стоит luanil, без которого JSON null
-        -- стал бы vim.NIL и прошёл проверку «поле задано»
-        local parsed = decode(specs.stdout)
-        if type(parsed) == "table" and type(parsed.names) == "table" then
-            info = parsed
-        end
-    end
-    if not info then
-        add("warn", "не удалось перечислить kernelspec'и")
-    elseif not info.dir then
-        add("error", ("kernelspec %s не найден. Доступны: %s"):format(wanted, table.concat(info.names, ", ")))
-    else
-        add("ok", ("kernelspec %s найден: %s"):format(wanted, info.dir))
-        if info.same == false then
-            -- polars нужен в ДВУХ питонах, и роли у них разные: сайдкар parquet читает (§2),
-            -- а пишет его ядро — хелпером у себя в памяти (§7.1). Другой интерпретатор сам по
-            -- себе не беда, беда — если в нём нет polars; поэтому спрашиваем его, а не гадаем
-            local theirs = probe(info.argv0)
-            if theirs.polars then
-                add("ok", ("kernelspec %s запускает другой интерпретатор (%s), polars в нём есть: %s")
-                    :format(wanted, info.argv0, theirs.polars))
-            elseif theirs.python then
-                add("warn", ("kernelspec %s запускает другой интерпретатор: %s, и polars в нём нет. "
-                    .. "Таблицы не будут сохраняться в parquet — пишет их ядро, а не сайдкар")
-                    :format(wanted, info.argv0))
-            else
-                add("warn", ("kernelspec %s запускает другой интерпретатор: %s, и опросить его не удалось. "
-                    .. "Ядро и сайдкар должны быть из одного окружения, иначе в ядре может не быть polars")
-                    :format(wanted, info.argv0))
-            end
-        elseif info.relative then
-            add("ok", ("argv kernelspec относительный (%s): ядро возьмётся из окружения сайдкара"):format(info.argv0))
+    -- 4. ядро: из окружения проекта или по kernelspec (python.resolve_kernel)
+    local kchoice = python_mod.resolve_kernel(config, ctx)
+    if kchoice.python then
+        -- ядро из .venv проекта: kernelspec'и не участвуют, спрашиваем сам интерпретатор.
+        -- polars ему нужен не для работы, а чтобы таблицы-результаты попадали в parquet (§7.1)
+        local theirs = probe(kchoice.python)
+        if not theirs.python then
+            add("error", ("ядро из окружения проекта (%s), но опросить %s не удалось")
+                :format(kchoice.source, kchoice.python))
+        elseif theirs.polars then
+            add("ok", ("ядро из окружения проекта (%s): %s, polars %s")
+                :format(kchoice.source, kchoice.python, theirs.polars))
         else
-            add("ok", "kernelspec запускает тот же интерпретатор, что и сайдкар")
+            add("warn", ("ядро из окружения проекта (%s): %s, но polars в нём нет. "
+                .. "Таблицы не будут сохраняться в parquet — пишет их ядро, а не сайдкар")
+                :format(kchoice.source, kchoice.python))
+        end
+    else
+        if kchoice.note then
+            add("warn", kchoice.note)
+        end
+        local wanted = kchoice.name
+        -- kernelspec: не только есть ли, но и какой интерпретатор он запускает.
+        -- Абсолютный argv на чужой python — самый частый способ получить ядро без polars (§6.3);
+        -- относительный безопасен: сайдкар кладёт свой каталог первым в PATH ядра
+        local spec_probe = table.concat({
+            "import json,os,sys",
+            "from jupyter_client.kernelspec import KernelSpecManager, NoSuchKernel",
+            "ksm=KernelSpecManager()",
+            "out={'names':sorted(ksm.find_kernel_specs())}",
+            "try:",
+            "    spec=ksm.get_kernel_spec(sys.argv[1])",
+            "    argv0=spec.argv[0] if spec.argv else ''",
+            "    out['dir']=spec.resource_dir",
+            "    out['argv0']=argv0",
+            "    out['relative']=not os.path.isabs(argv0)",
+            "    out['same']=out['relative'] or os.path.realpath(argv0)==os.path.realpath(sys.executable)",
+            "except NoSuchKernel:",
+            "    pass",
+            "print(json.dumps(out))",
+        }, "\n")
+        local specs = run({ python, "-c", spec_probe, wanted })
+        local info
+        if specs and specs.code == 0 then
+            -- decode(), а не vim.json.decode: там уже стоит luanil, без которого JSON null
+            -- стал бы vim.NIL и прошёл проверку «поле задано»
+            local parsed = decode(specs.stdout)
+            if type(parsed) == "table" and type(parsed.names) == "table" then
+                info = parsed
+            end
+        end
+        if not info then
+            add("warn", "не удалось перечислить kernelspec'и")
+        elseif not info.dir then
+            add("error", ("kernelspec %s не найден. Доступны: %s"):format(wanted, table.concat(info.names, ", ")))
+        else
+            add("ok", ("kernelspec %s найден: %s"):format(wanted, info.dir))
+            if info.same == false then
+                -- polars нужен в ДВУХ питонах, и роли у них разные: сайдкар parquet читает (§2),
+                -- а пишет его ядро — хелпером у себя в памяти (§7.1). Другой интерпретатор сам по
+                -- себе не беда, беда — если в нём нет polars; поэтому спрашиваем его, а не гадаем
+                local theirs = probe(info.argv0)
+                if theirs.polars then
+                    add("ok", ("kernelspec %s запускает другой интерпретатор (%s), polars в нём есть: %s")
+                        :format(wanted, info.argv0, theirs.polars))
+                elseif theirs.python then
+                    add("warn", ("kernelspec %s запускает другой интерпретатор: %s, и polars в нём нет. "
+                        .. "Таблицы не будут сохраняться в parquet — пишет их ядро, а не сайдкар")
+                        :format(wanted, info.argv0))
+                else
+                    add("warn", ("kernelspec %s запускает другой интерпретатор: %s, и опросить его не удалось. "
+                        .. "Ядро и сайдкар должны быть из одного окружения, иначе в ядре может не быть polars")
+                        :format(wanted, info.argv0))
+                end
+            elseif info.relative then
+                add("ok", ("argv kernelspec относительный (%s): ядро возьмётся из окружения сайдкара"):format(info.argv0))
+            else
+                add("ok", "kernelspec запускает тот же интерпретатор, что и сайдкар")
+            end
         end
     end
 

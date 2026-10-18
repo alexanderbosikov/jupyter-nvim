@@ -41,6 +41,7 @@ end
 ---@field kernel_pid integer
 ---@field sidecar_pid integer
 ---@field kernel_name string|nil
+---@field kernel_python string|nil интерпретатор ядра, если оно из окружения проекта
 ---@field started_at string|nil
 ---@field connection_file string|nil по нему к ядру можно подключиться (см. jupyter.attach)
 ---@field stale boolean след остался, а ядра уже нет — можно просто убрать файл
@@ -85,6 +86,7 @@ function M.check(path, opts)
         kernel_pid = record.kernel_pid,
         sidecar_pid = record.sidecar_pid,
         kernel_name = record.kernel_name,
+        kernel_python = record.kernel_python,
         started_at = record.started_at,
         connection_file = record.connection_file,
         stale = true,

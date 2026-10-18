@@ -19,12 +19,14 @@ local USABLE = { ready = true, busy = true }
 local Kernel = {}
 Kernel.__index = Kernel
 
----@param opts? table sidecar, kernel_name, env, text_progress, on_state, on_event
+---@param opts? table sidecar, kernel_name, kernel_python, env, text_progress, on_state, on_event
 function M.new(opts)
     opts = opts or {}
     local self = setmetatable({
         sidecar = opts.sidecar or sidecar.new(),
         kernel_name = opts.kernel_name or "python3",
+        -- интерпретатор ядра из окружения проекта (python.resolve_kernel); nil — по kernelspec
+        kernel_python = opts.kernel_python,
         -- переменные окружения ядра: сюда удобно класть флаги, которые библиотеки
         -- на стороне ядра читают при импорте
         env = opts.env or {},
@@ -125,6 +127,7 @@ function Kernel:start(opts, cb)
     opts = opts or {}
     self:_boot("kernel.start", {
         kernel_name = opts.kernel_name or self.kernel_name,
+        kernel_python = opts.kernel_python or self.kernel_python,
         cwd = opts.cwd,
         env = self.env,
         notebook = opts.notebook,
@@ -157,6 +160,7 @@ function Kernel:attach(opts, cb)
         connection_file = opts.connection_file,
         pid = opts.pid,
         kernel_name = opts.kernel_name or self.kernel_name,
+        kernel_python = opts.kernel_python or self.kernel_python,
         cwd = opts.cwd,
         env = self.env,
         notebook = opts.notebook,

@@ -33,6 +33,10 @@ M.defaults = {
     -- имя kernelspec; строка или функция от контекста ноутбука (см. python ниже).
     -- Если в окружении сайдкара стоит ipykernel, kernelspec python3 там уже есть
     kernel_name = "python3",
+    -- ядро из окружения проекта: если рядом с ноутбуком ($VIRTUAL_ENV, .venv вверх по
+    -- дереву) есть окружение с ipykernel, ядро запускается на его python, а kernel_name
+    -- берётся только для ноутбуков без такого окружения. Сайдкар остаётся на opts.python.
+    kernel_venv = true,
     -- интерпретатор сайдкара: строка, список кандидатов (берётся первый существующий)
     -- или функция от контекста { buf, dir, venv }. nil — vim.g.jupyter_python,
     -- потом $JUPYTER_NVIM_PYTHON, потом автопоиск: $VIRTUAL_ENV, .venv вверх от каталога
@@ -457,14 +461,12 @@ function M.session(buf)
     -- могут быть разные окружения. Что выбрано и почему — в журнале сессии (:JupyterLog)
     local ctx = python.context(buf)
     local py, py_source, py_tried = python.resolve(M.config.python, ctx)
-    local kernel_name = M.config.kernel_name
-    if type(kernel_name) == "function" then
-        kernel_name = kernel_name(ctx)
-    end
+    local kchoice = python.resolve_kernel(M.config, ctx)
     local sc = require("jupyter.sidecar").new({ python = py or py_tried[1] or "python3" })
     local k = kernel.new({
         sidecar = sc,
-        kernel_name = kernel_name,
+        kernel_name = kchoice.name,
+        kernel_python = kchoice.python,
         env = M.config.env,
         text_progress = M.config.text_progress,
     })
@@ -630,6 +632,7 @@ function M.session(buf)
         python = py, -- nil, если ни один кандидат не существует
         python_source = py_source,
         python_tried = py_tried,
+        kernel_choice = kchoice,
         log = {},
     }
     sessions[buf] = found
@@ -654,9 +657,17 @@ function M.session(buf)
     table.insert(found.log, {
         at = os.date("%H:%M:%S"),
         level = py and "info" or "error",
-        msg = py and ("python: %s (%s) · kernelspec: %s"):format(py, py_source, tostring(kernel_name))
+        msg = py and ("python: %s (%s) · ядро: %s (%s)"):format(
+            py, py_source, kchoice.python or ("kernelspec " .. tostring(kchoice.name)), kchoice.source
+        )
             or ("python не найден (%s), проверены: %s"):format(py_source, table.concat(py_tried, ", ")),
     })
+    -- окружение проекта есть, а ядро не из него: версии пакетов разъедутся молча, поэтому
+    -- говорим сразу, а не когда упадёт импорт
+    if kchoice.note then
+        table.insert(found.log, { at = os.date("%H:%M:%S"), level = "warn", msg = kchoice.note })
+        vim.notify("jupyter.nvim: " .. kchoice.note, vim.log.levels.WARN)
+    end
 
     -- Диагностика. Без этого любая поломка сайдкара была бы невидимой: события log
     -- приходят, но подписчика нет, и они просто теряются.
@@ -1595,6 +1606,8 @@ function M.attach(buf)
         connection_file = found.connection_file,
         pid = found.kernel_pid,
         kernel_name = found.kernel_name,
+        -- рестарт подключённого ядра поднимет своё — на том же интерпретаторе, что и было
+        kernel_python = found.kernel_python,
         notebook = name,
         cwd = vim.fn.fnamemodify(name, ":h"),
     }, function(err)

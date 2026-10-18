@@ -27,8 +27,8 @@ disk stays json, and `jupytext` converts through pipes in both directions — no
 written next to the notebook. Outputs that Jupyter Lab sees survive `:w` (`--update`). If
 the conversion fails, the buffer shows the raw json with `ft=json` instead of an empty
 buffer, and `:w` writes it back as it is; a failed save leaves the file untouched and the
-buffer modified, so `:wq` does not quit. A new `.ipynb` gets the kernelspec named in
-`kernel_name` on its first write. The details are in §7.8 of ARCHITECTURE.md.
+buffer modified, so `:wq` does not quit. A new `.ipynb` gets the kernelspec of its kernel
+(see "The kernel" below) on its first write. The details are in §7.8 of ARCHITECTURE.md.
 
 The autocommands live in `ftdetect/jupyter.lua`, because they have to be there before the
 first notebook is opened while the plugin itself loads lazily. Built-in packages read
@@ -440,6 +440,9 @@ nvim --server "$SOCK" --remote-expr 'luaeval("require(\"jupyter\").snapshot_json
                         ["events_number", "Int64"]]}}]}
 ```
 
+`kernel.kernel_python` is there when the kernel runs on the project's environment (see "The
+kernel"): imports and package versions are that environment's, not the sidecar's.
+
 A cell that has never been run has no `runs`, no `last` and no `stale`. It has an `id` if the
 plugin made it (the insert commands, a split, prose turned into code, an agent's insert —
 the id is written together with the marker); one typed or pasted by hand has **no `id` field
@@ -655,6 +658,7 @@ different processes, and the kernel's laziness still holds.
 ```lua
 opts = {
     kernel_name = "python3",         -- kernelspec name; may be a function of the context
+    kernel_venv = true,              -- the project's .venv with ipykernel beats kernel_name
     python = nil,                    -- see "The interpreter" below
     env = {},                        -- environment variables for the kernel
     filetypes = { "python", "markdown" },
@@ -718,7 +722,24 @@ different projects may have different environments. What was picked and where fr
 visible in `:JupyterLog` and `:checkhealth jupyter`; the same report warns when the
 kernelspec starts an interpreter other than the sidecar's.
 
-`kernel_name` may be a function of the same context.
+### The kernel
+
+The sidecar and the kernel are different processes, and they may come from different
+environments: the sidecar needs `jupyter_client` and polars, your code needs whatever the
+project needs. So the kernel is chosen separately:
+
+- if the notebook's environment — the active `$VIRTUAL_ENV`, otherwise a `.venv` up the
+  tree — has `ipykernel`, the kernel runs on its python. The kernelspecs are not looked at,
+  and `kernel_name` is ignored for this notebook. A `uv` project gets there with
+  `uv add --dev ipykernel`;
+- otherwise the kernelspec named in `kernel_name` is started. `kernel_name` may be a
+  function of the same context.
+
+If a project environment is found but has no `ipykernel`, the plugin says so when the
+notebook is opened — otherwise the notebook would quietly compute on other package versions.
+`kernel_venv = false` turns the first rule off. Tables reach parquet only if the kernel's
+environment has polars: it is the kernel that writes them; `:checkhealth jupyter` tells which
+kernel was picked and whether polars is in it.
 
 ## Kernels and leaving the editor
 

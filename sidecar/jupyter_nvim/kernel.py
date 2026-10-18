@@ -81,6 +81,27 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _python_spec_manager(python: str) -> Any:
+    """Менеджер kernelspec'ов, который на любое имя отдаёт ipykernel на `python`.
+
+    Подменяется менеджер, а не `KernelManager._kernel_spec`: это публичный трейт, и
+    `restart_kernel` берёт spec через него же — рестарт останется на том же интерпретаторе.
+    """
+    from jupyter_client.kernelspec import KernelSpec, KernelSpecManager
+
+    spec = KernelSpec(
+        argv=[python, "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+        display_name=f"Python ({python})",
+        language="python",
+    )
+
+    class _Pinned(KernelSpecManager):
+        def get_kernel_spec(self, kernel_name: str) -> KernelSpec:
+            return spec
+
+    return _Pinned()
+
+
 class KernelSession:
     def __init__(
         self,
@@ -163,36 +184,56 @@ class KernelSession:
         env: dict | None = None,
         log_file: str | None = None,
         text_progress: bool = True,
+        kernel_python: str | None = None,
     ) -> dict[str, Any]:
+        """Поднять своё ядро.
+
+        `kernel_python` — интерпретатор ядра напрямую, мимо kernelspec'ов: так ядро берётся из
+        `.venv` проекта, а сайдкар остаётся в своём окружении (ARCHITECTURE.md §7.8).
+        kernelspec, лежащий внутри проектного venv, отсюда не виден — `KernelSpecManager`
+        ищет в окружении сайдкара, а `python3` и вовсе подменяет своим нативным.
+        """
         from jupyter_client.manager import KernelManager
 
         if self._km is not None:
             raise RpcError(ErrCode.BAD_REQUEST, "ядро уже запущено; нужен kernel.restart")
+        if kernel_python and not os.access(kernel_python, os.X_OK):
+            raise RpcError(ErrCode.BAD_REQUEST, f"нет интерпретатора ядра {kernel_python}")
 
         self._set_state(KernelState.STARTING)
-        self._km = KernelManager(kernel_name=kernel_name)
+        if kernel_python:
+            self._km = KernelManager(
+                kernel_name=kernel_name, kernel_spec_manager=_python_spec_manager(kernel_python)
+            )
+        else:
+            self._km = KernelManager(kernel_name=kernel_name)
         self._attached_pid = None
         self._released = False
         self._text_progress = text_progress
         self._launch_args = {
             "kernel_name": kernel_name,
+            "kernel_python": kernel_python,
             "cwd": cwd,
             "env": env,
             "log_file": log_file,
             "text_progress": text_progress,
         }
-        launch = {"env": self._launch_env(env), "stderr": self._open_kernel_log(log_file)}
+        launch = {
+            "env": self._launch_env(env, kernel_python),
+            "stderr": self._open_kernel_log(log_file),
+        }
         if cwd:
             launch["cwd"] = cwd
         self._km.start_kernel(**launch)
         self._open_client()
 
-        self._write_runtime(kernel_name)
+        self._write_runtime(kernel_name, kernel_python)
 
         return {
             "kernel_id": os.path.basename(self._km.connection_file),
             "connection_file": self._km.connection_file,
             "kernel_name": kernel_name,
+            "kernel_python": kernel_python,
             "kernel_log": str(self._kernel_log),
             "attached": False,
         }
@@ -206,6 +247,7 @@ class KernelSession:
         env: dict | None = None,
         log_file: str | None = None,
         text_progress: bool = True,
+        kernel_python: str | None = None,
     ) -> dict[str, Any]:
         """Подключиться к уже живущему ядру по его connection-файлу.
 
@@ -236,13 +278,14 @@ class KernelSession:
         self._text_progress = text_progress
         self._launch_args = {
             "kernel_name": kernel_name,
+            "kernel_python": kernel_python,
             "cwd": cwd,
             "env": env,
             "log_file": log_file,
             "text_progress": text_progress,
         }
         self._open_client()
-        self._write_runtime(kernel_name)
+        self._write_runtime(kernel_name, kernel_python)
 
         return {
             "kernel_id": os.path.basename(connection_file),
@@ -303,8 +346,8 @@ class KernelSession:
         else:
             self._km.interrupt_kernel()
 
-    def _launch_env(self, env: dict | None) -> dict[str, str]:
-        """Окружение ядра: свой bin впереди PATH.
+    def _launch_env(self, env: dict | None, kernel_python: str | None = None) -> dict[str, str]:
+        """Окружение ядра: bin его интерпретатора впереди PATH.
 
         kernelspec может задавать интерпретатор относительно — у venv'ного `python3` в argv
         стоит просто "python". Тогда ядро берётся из PATH, а он у nvim, запущенного из GUI,
@@ -312,9 +355,12 @@ class KernelSession:
         с ModuleNotFoundError на первом же импорте. Мы уже знаем нужный интерпретатор — тот,
         которым запущен сам сайдкар, — поэтому кладём его каталог первым. Абсолютные argv
         в kernelspec это никак не затрагивает.
+
+        Ядро из проектного venv (`kernel_python`) получает впереди свой bin, а не наш:
+        `!python`, `subprocess` и `uv` из ячейки должны видеть окружение проекта.
         """
         merged = {**os.environ, **(env or {})}
-        bin_dir = os.path.dirname(sys.executable)
+        bin_dir = os.path.dirname(kernel_python or sys.executable)
         merged["PATH"] = os.pathsep.join([bin_dir, merged.get("PATH", "")]).rstrip(os.pathsep)
         return merged
 
@@ -574,7 +620,7 @@ class KernelSession:
     def connection_file(self) -> str | None:
         return self._km.connection_file if self._km is not None else None
 
-    def _write_runtime(self, kernel_name: str) -> None:
+    def _write_runtime(self, kernel_name: str, kernel_python: str | None = None) -> None:
         """Оставить след: кто держит ядро и какой у него pid.
 
         Нужно, чтобы осиротевшее ядро можно было опознать. nvim не ждёт нашего
@@ -592,6 +638,7 @@ class KernelSession:
             "socket": self._nvim_socket,
             "kernel_pid": self.kernel_pid(),
             "kernel_name": kernel_name,
+            "kernel_python": kernel_python,
             # по нему ядро опознаётся в списке процессов: путь уникален и стоит в его argv
             "connection_file": self._km.connection_file,
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),

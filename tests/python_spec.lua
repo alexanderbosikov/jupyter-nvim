@@ -163,3 +163,81 @@ describe("выбор python", function()
         assert.equals(in_path, vim.fn.exepath(found))
     end)
 end)
+
+describe("выбор ядра", function()
+    local root
+    local saved_venv
+
+    before_each(function()
+        root = vim.fn.tempname()
+        vim.fn.mkdir(root, "p")
+        saved_venv = vim.env.VIRTUAL_ENV
+        vim.env.VIRTUAL_ENV = nil
+    end)
+
+    after_each(function()
+        vim.env.VIRTUAL_ENV = saved_venv
+        vim.fn.delete(root, "rf")
+    end)
+
+    local function ctx_in(dir)
+        return { buf = 0, dir = dir, venv = (python.find_venv(dir)) }
+    end
+
+    ---Поддельное окружение; with_kernel — с каталогом пакета ipykernel внутри.
+    local function venv(dir, with_kernel)
+        local p = fake_env(dir)
+        if with_kernel then
+            vim.fn.mkdir(dir .. "/lib/python3.13/site-packages/ipykernel", "p")
+        end
+        return p
+    end
+
+    it(".venv проекта с ipykernel важнее kernel_name", function()
+        local p = venv(root .. "/proj/.venv", true)
+        vim.fn.mkdir(root .. "/proj/notebooks", "p")
+
+        local choice = python.resolve_kernel({ kernel_name = "jupyter-utils" }, ctx_in(root .. "/proj/notebooks"))
+
+        assert.equals(p, choice.python)
+        assert.equals("python3", choice.name)
+        assert.matches("%.venv", choice.source)
+        assert.is_nil(choice.note)
+    end)
+
+    it(".venv без ipykernel — kernel_name и предупреждение", function()
+        venv(root .. "/proj/.venv", false)
+
+        local choice = python.resolve_kernel({ kernel_name = "jupyter-utils" }, ctx_in(root .. "/proj"))
+
+        assert.is_nil(choice.python)
+        assert.equals("jupyter-utils", choice.name)
+        assert.matches("ipykernel", choice.note)
+    end)
+
+    it("без окружения — kernel_name молча", function()
+        local choice = python.resolve_kernel({ kernel_name = "jupyter-utils" }, ctx_in(root))
+
+        assert.is_nil(choice.python)
+        assert.equals("jupyter-utils", choice.name)
+        assert.is_nil(choice.note)
+    end)
+
+    it("kernel_venv = false — окружение проекта не смотрим", function()
+        venv(root .. "/proj/.venv", true)
+
+        local choice = python.resolve_kernel({ kernel_name = "x", kernel_venv = false }, ctx_in(root .. "/proj"))
+
+        assert.is_nil(choice.python)
+        assert.equals("x", choice.name)
+        assert.is_nil(choice.note)
+    end)
+
+    it("kernel_name-функция получает контекст", function()
+        local choice = python.resolve_kernel({
+            kernel_name = function(ctx) return "k-" .. vim.fn.fnamemodify(ctx.dir, ":t") end,
+        }, ctx_in(root))
+
+        assert.equals("k-" .. vim.fn.fnamemodify(root, ":t"), choice.name)
+    end)
+end)

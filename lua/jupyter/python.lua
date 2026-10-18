@@ -151,4 +151,58 @@ function M.resolve(spec, ctx)
     return found, "PATH", tried
 end
 
+---Стоит ли в окружении ipykernel. Смотрим на каталог пакета, а не спрашиваем интерпретатор:
+---решение принимается на каждом открытии ноутбука, и процесс на это — лишняя задержка.
+---@param python string путь к интерпретатору окружения (<root>/bin/python)
+---@return boolean
+function M.has_ipykernel(python)
+    local root = vim.fn.fnamemodify(python, ":h:h")
+    local patterns = { "/lib/python*/site-packages/ipykernel", "/Lib/site-packages/ipykernel" }
+    for _, pattern in ipairs(patterns) do
+        if #vim.fn.glob(root .. pattern, true, true) > 0 then
+            return true
+        end
+    end
+    return false
+end
+
+---@class jupyter.KernelChoice
+---@field name string имя kernelspec; для ядра из venv — "python3", им же помечается .ipynb
+---@field python string|nil интерпретатор ядра напрямую, мимо kernelspec'ов
+---@field source string откуда взято, для журнала и :checkhealth
+---@field note string|nil окружение проекта есть, но ядро не из него — почему
+
+---Выбрать ядро для ноутбука.
+---
+---Окружение проекта важнее `kernel_name`: ноутбук должен считаться теми же версиями
+---пакетов, что и код проекта. Поэтому если рядом с ноутбуком (`$VIRTUAL_ENV`, затем `.venv`
+---вверх по дереву) есть окружение с ipykernel, ядро запускается на его python. Иначе —
+---kernelspec из `kernel_name`, как раньше. `kernel_venv = false` отключает первое.
+---
+---Сайдкар при этом остаётся в своём окружении (`resolve`): ему нужны jupyter_client и
+---polars, а проекту — только ipykernel.
+---@param config table opts плагина: kernel_name, kernel_venv
+---@param ctx jupyter.PythonCtx
+---@return jupyter.KernelChoice
+function M.resolve_kernel(config, ctx)
+    local note
+    if config.kernel_venv ~= false then
+        local venv, venv_source = M.find_venv(ctx.dir)
+        if venv and M.has_ipykernel(venv) then
+            return { name = "python3", python = venv, source = venv_source }
+        end
+        if venv then
+            -- окружение рядом есть, но считать в нём нечем: ноутбук молча уехал бы на чужие
+            -- версии пакетов. Это и есть случай, о котором надо сказать вслух
+            note = ("в окружении проекта (%s) нет ipykernel — ядро не оттуда. "
+                .. "Поставь его: uv add --dev ipykernel"):format(venv_source)
+        end
+    end
+    local name = config.kernel_name or "python3"
+    if type(name) == "function" then
+        name = name(ctx)
+    end
+    return { name = name or "python3", python = nil, source = "opts.kernel_name", note = note }
+end
+
 return M

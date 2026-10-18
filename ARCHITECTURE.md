@@ -20,6 +20,7 @@ already taken by the metapackage), and the CLI is a `jupyter-out` binary that
 | cell id | **a short hash in the document's text** | output is found outside the editor, without starting nvim | a cell's first run edits the buffer (one undo-able edit) |
 | reading `.ipynb` | **our own `BufReadCmd`/`BufWriteCmd`, jupytext through pipes** | jupytext.nvim went through `<name>.md` on disk, a second source of truth that showed yesterday's notebook and wrote it back (§7.8) | the jupytext CLI is a dependency; registration has to live in `ftdetect/` to beat lazy loading |
 | interpreter | **an explicit path from the config; otherwise a search: `$VIRTUAL_ENV`, a `.venv` next to the notebook, PATH** | the kernel and the sidecar have to come from the same environment; one nvim config lives on several machines, and the path to the environment differs on each | a guessed environment may turn out to have no `jupyter_client` — the sidecar then does not start, and the session journal and `:checkhealth` say which python was taken and where from |
+| the kernel's interpreter | **the project's environment (`$VIRTUAL_ENV`, a `.venv` up the tree) if it has ipykernel; otherwise the kernelspec from `kernel_name`** | a notebook has to compute with the same package versions as the project's code; the sidecar needs `jupyter_client` and polars, the project only ipykernel — so they are allowed to live in different environments | a kernelspec inside the project's venv is invisible to the sidecar's `KernelSpecManager`, so the kernel is started from an argv built on the venv's python, not by name (§6.3); a project venv without ipykernel falls back to `kernel_name` with a warning at open |
 
 ## 2. Processes and data flows
 
@@ -90,7 +91,7 @@ on `hello` instead of quietly at runtime.
 | op | args | ok.data |
 |---|---|---|
 | `hello` | `{v}` | `{v, version, python, caps[], kernel}` |
-| `kernel.start` | `{kernel_name, cwd, env{}, notebook?, out_dir?, history_limit?}` | `{kernel_id, connection_file, kernel_log, attached: false}` |
+| `kernel.start` | `{kernel_name, kernel_python?, cwd, env{}, notebook?, out_dir?, history_limit?}` | `{kernel_id, connection_file, kernel_log, attached: false}` |
 | `kernel.attach` | the same plus `{connection_file, pid?}` | `{kernel_id, connection_file, kernel_log, attached: true}` |
 | `kernel.release` | `{}` | `{released, kernel_pid?}` |
 | `kernel.state` | — | `{state, since_ms, ...}` |
@@ -186,7 +187,7 @@ Messages outside that table fall into three cases, and they must not be mixed:
 | `cells.lua` | cell boundaries behind a detector interface: percent and fences; collecting, jumping, inserting | knows nothing about output or about the kernel |
 | `cellid.lua` | generating, parsing and inserting an id in the text, checking for collisions | — |
 | `sidecar.lua` | the process, the JSON-lines codec, correlating `id`↔reply, dispatching events | does not know what the events mean |
-| `python.lua` | choosing the sidecar's interpreter: a string, a list, a function of the notebook's context, a search across environments | starts nothing; never substitutes what was set explicitly |
+| `python.lua` | choosing the sidecar's interpreter (a string, a list, a function of the notebook's context, a search across environments) and the kernel's (`resolve_kernel`: the project's environment with ipykernel, otherwise `kernel_name`) | starts nothing; never substitutes what was set explicitly |
 | `kernel.lua` | the state machine, a queue of runs until readiness | — |
 | `exec.lua` | runs, `run_id`, rejecting stale events, `result_expr` | does not draw |
 | `store.lua` | reading `index.jsonl` back, assembling a run for drawing; where a notebook's directory is | does not write |
@@ -366,6 +367,15 @@ point where there is no `python` binary in it at all, and the cell dies with a
 `ModuleNotFoundError` on its first import. We already know the right interpreter — the one
 the sidecar runs on — so we put its directory first in the kernel's PATH. Absolute argv is
 untouched by this.
+
+A kernel from the project's environment (`kernel_python` in `kernel.start`) bypasses
+kernelspecs altogether: the sidecar builds the argv `[python, -m, ipykernel_launcher, -f,
+{connection_file}]` and hands `KernelManager` a spec manager that returns it for any name.
+A kernelspec inside the project's venv would not do — `KernelSpecManager` searches the
+sidecar's environment, and for `python3` substitutes its own native kernel. Restart goes
+through the same manager, so it stays on the same interpreter. The directory put first in
+PATH is then the venv's `bin`, not ours: `!python` and `uv` from a cell must see the
+project.
 
 ### 6.4. The kernel's stderr
 

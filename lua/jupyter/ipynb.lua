@@ -255,7 +255,12 @@ function M.kernelspec(name)
 end
 
 local function seed(path)
-    local spec = M.kernelspec(config().kernel_name or "python3")
+    -- тем же правилом, что и ядро сессии: ноутбук в проекте с .venv помечается python3,
+    -- и Jupyter Lab в этом проекте откроет его ядром из того же окружения
+    local python = require("jupyter.python")
+    local dir = vim.fn.fnamemodify(path, ":p:h")
+    local choice = python.resolve_kernel(config(), { buf = 0, dir = dir, venv = (python.find_venv(dir)) })
+    local spec = M.kernelspec(choice.name)
     local text = ('{"cells": [], "metadata": {"kernelspec": %s, "language_info": {"name": %s}}, '
         .. '"nbformat": 4, "nbformat_minor": 5}'):format(vim.json.encode(spec), vim.json.encode(spec.language))
     return vim.fn.writefile({ text }, path) == 0

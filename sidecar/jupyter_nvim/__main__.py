@@ -55,6 +55,7 @@ class App:
             session._nvim_socket = args.get("nvim_socket") or None
             return session.start(
                 kernel_name=args.get("kernel_name") or "python3",
+                kernel_python=args.get("kernel_python") or None,
                 cwd=args.get("cwd"),
                 env=args.get("env"),
                 # лог ядра рядом с выводами, если ноутбук известен
@@ -77,6 +78,7 @@ class App:
             return session.attach(
                 connection_file=str(args["connection_file"]),
                 kernel_name=args.get("kernel_name") or "python3",
+                kernel_python=args.get("kernel_python") or None,
                 pid=args.get("pid"),
                 cwd=args.get("cwd"),
                 env=args.get("env"),

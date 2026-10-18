@@ -134,6 +134,8 @@ function M.build(buf, opts)
             state = opts.kernel:state(),
             queued = opts.kernel:queued(),
             kernel_name = info and info.kernel_name or nil,
+            -- ядро из окружения проекта: агенту важно, чьи версии пакетов в ходу
+            kernel_python = opts.kernel.kernel_python,
             connection_file = info and info.connection_file or nil,
             attached = info and info.attached or nil,
         } or nil,

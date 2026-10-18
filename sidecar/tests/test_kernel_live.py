@@ -55,14 +55,16 @@ def live(tmp_path):
     """Поднимает настоящее ядро и гарантированно гасит его после теста."""
     started = []
 
-    def start(env=None, with_outdir=True, history_limit=5, text_progress=True):
+    def start(env=None, with_outdir=True, history_limit=5, text_progress=True, kernel_python=None):
         sink = Sink()
         rpc = Rpc(stdin=io.StringIO(""), stdout=sink)
         outdir = OutDir(tmp_path / "отчёт.md") if with_outdir else None
         session = KernelSession(
             rpc, Router(), outdir_for=lambda: outdir, poll=0.05, history_limit=history_limit
         )
-        session.start(kernel_name="python3", env=env, text_progress=text_progress)
+        session.start(
+            kernel_name="python3", env=env, text_progress=text_progress, kernel_python=kernel_python
+        )
         started.append(session)
         sink.wait(is_ready, what="kernel.state=ready")
         return session, sink, outdir
@@ -532,6 +534,55 @@ def test_relative_kernelspec_resolves_to_our_interpreter(live):
     msgs = sink.wait(done_for("a3f9"))
 
     assert stream_text(msgs, "a3f9") == _sys.executable
+
+
+def test_kernel_python_runs_the_kernel_on_that_interpreter(live, tmp_path):
+    """Ядро из проектного venv: argv строится из `kernel_python`, kernelspec'и не участвуют.
+
+    Второго окружения с ipykernel в тестах нет, поэтому «чужой» интерпретатор — обёртка
+    над нашим: она метит окружение, и метка видна в ядре только если запущена именно она.
+    Её каталог должен стоять первым в PATH ядра — `!python` в ячейке берёт python проекта.
+    """
+    import os as _os
+    import sys as _sys
+
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    wrapper = venv_bin / "python"
+    wrapper.write_text(f'#!/bin/sh\nJN_WRAPPED=1 exec "{_sys.executable}" "$@"\n')
+    wrapper.chmod(0o755)
+
+    session, sink, outdir = live(kernel_python=str(wrapper))
+    session.execute(
+        "a3f9", 1, "import os\nprint(os.environ.get('JN_WRAPPED'), os.environ['PATH'].split(os.pathsep)[0])"
+    )
+
+    msgs = sink.wait(done_for("a3f9"))
+
+    assert stream_text(msgs, "a3f9") == f"1 {venv_bin}"
+    runtime = (outdir.base / "runtime.json").read_text(encoding="utf-8")
+    assert str(wrapper) in runtime
+    assert _os.path.exists(wrapper)
+
+
+def test_kernel_python_survives_restart(live, tmp_path):
+    """Рестарт берёт spec через тот же менеджер — ядро не съезжает в окружение сайдкара."""
+    import sys as _sys
+
+    wrapper = tmp_path / "python"
+    wrapper.write_text(f'#!/bin/sh\nJN_WRAPPED=1 exec "{_sys.executable}" "$@"\n')
+    wrapper.chmod(0o755)
+
+    session, sink, _ = live(kernel_python=str(wrapper))
+    session.restart()
+    wait_until(
+        lambda: session.state()["state"] == KernelState.READY, what="ready после рестарта"
+    )
+    session.execute("b001", 1, "import os\nprint(os.environ.get('JN_WRAPPED'))")
+
+    msgs = sink.wait(done_for("b001"))
+
+    assert stream_text(msgs, "b001") == "1"
 
 
 def test_polars_is_importable_in_the_kernel(live):
