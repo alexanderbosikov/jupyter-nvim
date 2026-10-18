@@ -118,4 +118,38 @@ describe("картинки во всю вкладку", function()
         assert.equals(tabs_before + 1, #vim.api.nvim_list_tabpages())
         assert.equals("b7e1", view.cell_id)
     end)
+
+    it("напрямую по kitty: размещает сам, листание меняет картинку, закрытие удаляет", function()
+        local png = vim.base64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==")
+        local a, b = vim.fn.tempname() .. ".png", vim.fn.tempname() .. ".png"
+        for _, path in ipairs({ a, b }) do
+            local f = assert(io.open(path, "wb"))
+            f:write(png)
+            f:close()
+        end
+        local img, sent = fake_images(), {}
+        local view = image_view.new({ images = img, direct = true, send = function(s) table.insert(sent, s) end })
+
+        view:open({ a, b }, nil, "a3f9")
+        assert.equals(0, #img.shown, "image.nvim не участвует")
+        assert.truthy(sent[1]:find(vim.base64.encode(a), 1, true))
+        local first = view.direct_id
+
+        view:get_actions().image_next()
+        assert.equals(("\27_Ga=d,d=I,i=%d,q=2\27\\"):format(first), sent[2], "прошлую удалили")
+        assert.truthy(sent[3]:find(vim.base64.encode(b), 1, true))
+
+        view:get_actions().close()
+        assert.truthy(sent[#sent]:find("a=d,d=I", 1, true))
+        assert.is_nil(view.direct_id)
+    end)
+
+    it("напрямую не png — рисует image.nvim", function()
+        local img = fake_images()
+        local view = image_view.new({ images = img, direct = true, send = function() end })
+
+        view:open({ "/нет/такого.svg" }, nil, "a3f9")
+
+        assert.equals("/нет/такого.svg", img.shown[1].path)
+    end)
 end)

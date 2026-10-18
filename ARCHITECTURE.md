@@ -197,9 +197,10 @@ Messages outside that table fall into three cases, and they must not be mixed:
 | `ui/common.lua` | scratch buffer, window options, **actions → keys** | not a single hard-coded key |
 | `ui/output.lua` | the drawer: output, table preview, status in the winbar | — |
 | `ui/table.lua` | paged viewing of parquet, column alignment, the sorting stack, a cell's whole value | does not read parquet itself and does not sort |
-| `ui/image_view.lua` | a run's images in a tab of their own, one at a time, stepping on to neighbouring cells | does not know which cell is a neighbour (`on_step`); shares the `jupyter.images` instance with the output window, because image.nvim clears globally |
+| `ui/image_view.lua` | a run's images in a tab of their own, one at a time, stepping on to neighbouring cells | does not know which cell is a neighbour (`on_step`); draws through `kitty.lua` where it can, otherwise shares the `jupyter.images` instance with the output window, because image.nvim clears globally |
 | `ui/status.lua` | the status line under a cell | stores no positions |
 | `images.lua` | the path and the anchor in image.nvim, removing images | has no renderer of its own |
+| `kitty.lua` | the one exception: an image drawn straight over the kitty protocol, scaled by the terminal (`c=`/`r=`) — for the image tab only | used only where it is reliable: a kitty-protocol terminal (kitty, Ghostty, WezTerm) without tmux; elsewhere the tab goes through image.nvim. Why: image.nvim fits a png to the window with ImageMagick, ~200 ms of re-encoding plus decoding a big file — half a second per image; the terminal scales the original for free. The price is our own geometry: the window's place on screen, the cell size from `TIOCGWINSZ`, the contain fit, and removing the image on `TabLeave` — the terminal, not nvim, holds it |
 | `edit.lua` | restructuring cells: split, join, move, change the type | does not look for boundaries — it takes them from `cells` |
 | `pane.lua` | the multiplexer pane the agent lives in: choosing the backend, the search ladder, liveness | knows nothing about notebooks or claims |
 | `pane/tmux.lua`, `pane/herdr.lua` | one multiplexer each: the list of panes and putting a prompt into one | know nothing about the ladder |

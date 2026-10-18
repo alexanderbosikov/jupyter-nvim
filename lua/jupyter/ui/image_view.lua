@@ -6,12 +6,17 @@
 -- видна целиком (см. View:geometry). <Tab>/<S-Tab> листают картинки ячейки, а за
 -- последней — ячейки с картинками дальше по ноутбуку, как <Tab> в таблице.
 --
--- Рисует тот же экземпляр jupyter.images, что и окно вывода: снятие картинок у
--- image.nvim глобальное, и два владельца снимали бы друг у друга. Поэтому после закрытия
--- окно вывода надо перерисовать — это делает on_close.
+-- Рисует двумя путями. Где можно — напрямую по протоколу kitty (jupyter.kitty): масштаб
+-- считает терминал, и показ мгновенный. Иначе — тем же экземпляром jupyter.images, что и
+-- окно вывода: снятие картинок у image.nvim глобальное, и два владельца снимали бы друг у
+-- друга. В обоих случаях после закрытия окно вывода перерисовывается — это делает on_close.
 
 local common = require("jupyter.ui.common")
 local hl = require("jupyter.highlight")
+local kitty = require("jupyter.kitty")
+
+-- id картинок в терминале: свой диапазон, чтобы не задеть картинки image.nvim
+local direct_seq = 0x4A4E0000
 
 local M = {}
 
@@ -25,10 +30,18 @@ M.DEFAULT_KEYS = {
 local View = {}
 View.__index = View
 
----@param opts table images (jupyter.Images), keys, on_step, on_close
+---@param opts table images (jupyter.Images), keys, on_step, on_close,
+---  direct (рисовать по kitty напрямую; nil — где терминал позволяет), send (для тестов)
 function M.new(opts)
+    local direct = opts.direct
+    if direct == nil then
+        direct = kitty.available()
+    end
     return setmetatable({
         images = opts.images,
+        direct = direct,
+        send = opts.send or kitty.send,
+        direct_id = nil, -- id картинки, нарисованной напрямую и ещё не удалённой
         keys = opts.keys or M.DEFAULT_KEYS,
         -- переход к соседней ячейке с картинками: какая соседняя, знает ноутбук, не окно.
         -- fun(dir: 1|-1): boolean — нашлась ли
@@ -88,14 +101,39 @@ function View:open(list, label, cell_id, index)
         vim.wo[self.win].signcolumn = "no"
         vim.wo[self.win].cursorline = false
         self._open = true
+        local group = vim.api.nvim_create_augroup("jupyter.image_view", { clear = true })
         -- размер вписан в окно в ячейках: окно поменялось — вписать заново
         vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
-            group = vim.api.nvim_create_augroup("jupyter.image_view", { clear = true }),
+            group = group,
             callback = function()
                 if not self:is_open() then
                     return true -- вкладки нет — и подписка больше не нужна
                 end
                 vim.schedule(function() self:render() end)
+            end,
+        })
+        -- картинка, нарисованная напрямую, — это терминал, а не nvim: при уходе с вкладки
+        -- она осталась бы висеть поверх чужого окна. Снимаем и возвращаем сами
+        vim.api.nvim_create_autocmd("TabLeave", {
+            group = group,
+            callback = function()
+                if not self:is_open() then
+                    return true
+                end
+                if vim.api.nvim_win_get_tabpage(self.win) == vim.api.nvim_get_current_tabpage() then
+                    self:_direct_clear()
+                end
+            end,
+        })
+        vim.api.nvim_create_autocmd("TabEnter", {
+            group = group,
+            callback = function()
+                if not self:is_open() then
+                    return true
+                end
+                if vim.api.nvim_win_get_tabpage(self.win) == vim.api.nvim_get_current_tabpage() then
+                    vim.schedule(function() self:render() end)
+                end
             end,
         })
     end
@@ -110,8 +148,48 @@ function View:render()
     -- одна пустая строка-якорь: картинка рисуется под ней и занимает всё окно
     common.set_lines(self.buf, { "" })
     self:_render_winbar()
-    if self.images and path then
+    if not path then
+        return
+    end
+    if self.direct and self:_direct_show(path) then
+        return
+    end
+    if self.images then
         self.images:show_all({ { path = path, row = 0 } }, self.win, self.buf, self:geometry())
+    end
+end
+
+---Нарисовать напрямую по kitty: исходный png, масштаб — на стороне терминала.
+---@param path string
+---@return boolean получилось; нет — рисует image.nvim
+function View:_direct_show(path)
+    self:_direct_clear()
+    local w, h = kitty.png_size(path)
+    if not w then
+        return false -- не png (svg, битый файл): это image.nvim умеет, мы нет
+    end
+    local cw, ch = kitty.cell_size()
+    local fit = kitty.fit(
+        { w = w, h = h },
+        { cols = vim.api.nvim_win_get_width(self.win), rows = vim.api.nvim_win_get_height(self.win) },
+        cw and { w = cw, h = ch } or nil
+    )
+    -- экран nvim должен быть уже нарисован: TUI, дорисовывая вкладку после нас, мог бы
+    -- очистить экран, а с ним и наше размещение
+    vim.cmd("redraw")
+    local pos = vim.api.nvim_win_get_position(self.win) -- 0-based, вместе с winbar
+    local winbar = vim.wo[self.win].winbar ~= "" and 1 or 0
+    direct_seq = direct_seq + 1
+    self.direct_id = direct_seq
+    self.send(kitty.place_sequence(self.direct_id, path, { row = pos[1] + winbar + 1, col = pos[2] + 1 }, fit))
+    return true
+end
+
+---Удалить картинку, нарисованную напрямую.
+function View:_direct_clear()
+    if self.direct_id then
+        self.send(kitty.delete_sequence(self.direct_id))
+        self.direct_id = nil
     end
 end
 
@@ -172,6 +250,7 @@ function View:_render_winbar()
 end
 
 function View:close()
+    self:_direct_clear()
     if self:is_open() then
         local win = self.win
         self.win = nil
@@ -188,6 +267,7 @@ function View:_closed()
         return
     end
     self._open = false
+    self:_direct_clear()
     if self.images then
         self.images:clear(self.buf)
     end
