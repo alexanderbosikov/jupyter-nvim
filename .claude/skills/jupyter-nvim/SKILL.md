@@ -1,6 +1,6 @@
 ---
 name: jupyter-nvim
-description: Read and edit a .ipynb the user has open in nvim via the jupyter.nvim plugin: snapshot of cells and runs, results from .jupyter-out (parquet/txt/png), safe edits to the live buffer, running cells. Also any prompt that starts with `[jupyter.nvim]` — it was sent from that notebook. Do NOT use mcp__jupyter__* for these — it needs a Jupyter Server.
+description: Work with a .ipynb through the user's nvim (jupyter.nvim plugin) — one they have open, or one you created and need to run: open it there yourself and start the kernel, snapshot of cells and runs, results from .jupyter-out (parquet/txt/png), safe edits to the live buffer, running cells and waiting for them. Also any prompt that starts with `[jupyter.nvim]` — it was sent from that notebook. Do NOT use mcp__jupyter__* for these — it needs a Jupyter Server.
 ---
 
 # A notebook open in nvim (jupyter.nvim)
@@ -22,57 +22,63 @@ matters — the number of a claim that is **already open and already visible to 
 The notebook's full path and the nvim socket are in your pane's file. Read "A prompt sent
 from the notebook" below before you touch anything.
 
-```sh
-NB=~/work/sandbox/.../01_eda.ipynb                      # the notebook
-OUT="$(dirname "$NB")/.jupyter-out/$(basename "$NB" .ipynb)"
-cat "$OUT/runtime.json"   # exists only while the kernel is alive
-# {"sidecar_pid":91263,"owner_pid":90954,"socket":"/var/folders/.../nvim.90954.0",
-#  "kernel_pid":91264,"kernel_name":"jupyter-utils","connection_file":"/var/folders/.../tmpqsjpnp0c.json"}
+**Never rely on nvim's current buffer or the user's cursor.** Over `--remote-expr` the
+current buffer is wherever the user happens to be — the output window, a picker, a file
+tree. Every call below takes the notebook's path (`notebook = "$NB"`); calls without one
+(`snapshot_json()`, buffer `0`, `ensure_started()`, `s.exec:run_at(...)`) act on the wrong
+buffer and can fail silently.
 
-SOCK=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('socket') or '')" "$OUT/runtime.json")
-```
-
-Read `SOCK` again after the user restarts nvim — the socket is new each time. An empty
-`socket` means an older build of the plugin started that kernel; then the socket is found
-through `owner_pid` (the pid of nvim):
-`lsof -p <owner_pid> | grep -o '/[^ ]*nvim\.[0-9]*\.0' | head -1`. If there is no `runtime.json`, the kernel is not running —
-see "Not open yet" below: you open the notebook and start the kernel yourself, do not wait
-for the user. There may be several notebooks and several sockets — match them by the
-`notebook` field in the snapshot.
-
-### Not open yet (you just created the notebook, or the kernel is down)
-
-Do not wait for the user to open it, and do not start your own nvim: buffers live per
-process, the user would not see yours in `:ls`, and opening it themselves would make a
-second copy. Open it in **the user's** nvim as a hidden buffer — no window, cursor or
-current buffer changes; the notebook just appears in their buffer list — and the kernel
-starts with it:
+Two steps, the same whether the notebook is already open or not:
 
 ```sh
-# the user's nvim for this task: where the notebook is already open, else the one in the
-# same herdr tab / tmux window as your pane, else by cwd. Exit 1 = none or a tie (the
-# candidates are on stderr) — ask the user, do not pick at random.
+NB=~/work/analysis/.../01_eda.ipynb          # absolute path
+
+# 1. the user's nvim for this notebook: where it is already open (on screen first), else
+#    the one in the same herdr tab / tmux window as your pane, else by cwd.
+#    Exit 1 = none or a tie (candidates on stderr) — ask the user, do not pick at random.
 SOCK=$(PYTHONPATH=~/Projects/jupyter.nvim/sidecar python3 -m jupyter_nvim.find_nvim "$NB")
+
+# 2. make sure it is open there and the kernel is up — idempotent, call it every time
 nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").agent_open({notebook = \"$NB\"}))')"
 # → {"ok":true,"buf":7,"opened":true,"kernel":true}
 ```
 
-Already open in that nvim → `opened: false`, same buffer, harmless to call again.
-`reason: "other_instance"` → it is open in another nvim; `others[1].socket` is where to work.
-`kernel: true` means the kernel is starting; the first `agent_run` + `jn-wait` waits for it.
-Then tell the user in one line that the notebook is in their buffer list.
+`agent_open` loads the notebook as a **hidden** buffer in the user's nvim: no window, cursor
+or current buffer changes; it just appears in their buffer list (`:ls`). Do not wait for the
+user to open it, and never start your own nvim: buffers are per process, the user would not
+see yours, and opening it themselves would make a second copy.
 
-`owner_pid` is the nvim that holds the **kernel**, not necessarily the one the user is looking
-at: the same notebook can be open in two nvims. Check two fields of the snapshot before you
+- `opened: false` — it was already open there; nothing changed.
+- `opened: true` — you opened it: tell the user in one line that it is in their buffer list.
+- `kernel: true` — the kernel is up or starting; the first `agent_run` + `jn-wait` waits for it.
+- `reason: "other_instance"` — open in another nvim: `others[1].socket` is where to work.
+- `attempt to call field 'agent_open'` (or `snapshot_json`, `agent_run`) `(a nil value)` —
+  that nvim runs an older build of the plugin: ask the user to restart nvim. Do not work around it (parsing fences by hand,
+  sending keys).
+
+Read `SOCK` again after the user restarts nvim — the socket is new each time. While the
+kernel is alive, `.jupyter-out/<name>/runtime.json` also carries it (`socket`, plus
+`owner_pid`, `kernel_pid`, `connection_file`, `started_at`).
+
+### A new notebook
+
+1. Create the `.ipynb` on disk (it is not open anywhere yet, so writing it is allowed) — e.g.
+   write it as jupytext markdown and `jupytext --to ipynb`, or write the json directly.
+   Do not `agent_open` a path that does not exist: you get an unsaved template buffer
+   instead of your file.
+2. `jn-nvim` + `agent_open` as above.
+3. Run by **row**: cells you wrote outside the plugin have no `jncell` yet. The first run
+   assigns one and returns it in `agent_run`'s answer (`cell_id`) — use it from then on.
+   Take the rows from the snapshot (`start_row` of each cell). After a run that assigned an
+   id the buffer is modified (the fence line changed); that is expected.
+
+**Two copies.** The same notebook can be open in two nvims (the kernel lives in the one
+named by `owner_pid`), and `jn-nvim` prefers the one where it is on screen, but check anyway. Check two fields of the snapshot before you
 edit: `visible` (is the buffer shown in a window of this nvim) and `other_instances`
 (`[{pid, socket, at}]` — other live nvims with this notebook open). If `visible` is false and
 `other_instances` is not empty, the user is most likely looking at the other one: take the
 snapshot from that socket, and if it is `visible` there, work there. Unsure — ask; an edit
 made in the hidden copy is invisible to the user and can overwrite the file on `:wa`.
-
-If you get back `attempt to call field 'snapshot_json' (a nil value)` — this nvim session
-has a build of the plugin without snapshot and editing. Do not work around it by parsing
-fences by hand: ask for a restart of nvim (or a reload of the plugin) and carry on.
 
 ## Reading
 
@@ -91,7 +97,7 @@ nvim --server "$SOCK" --remote-expr "luaeval('table.concat(vim.api.nvim_buf_get_
 `snapshot_json()` without an argument, buffer `0`, `ensure_started()`. Over `--remote-expr`
 the current buffer is wherever the user's cursor happens to be: the output window, a
 picker, a file tree. A snapshot by path answers `{"ok":false,"reason":"no_buffer"}` when
-the notebook is not open in that nvim.
+the notebook is not open in that nvim — `agent_open` it (Step 0).
 
 Per cell the snapshot gives: `id` (the `jncell` from the fence — a cell made by the plugin's
 insert/split/to-code commands or by your `edit_replace` has one from the start; one the user
@@ -125,11 +131,13 @@ df = pl.read_parquet(path)     # kind == "table" — the whole frame, not a slic
 `kind == "text"` — a plain file with stdout/stderr/traceback, read it as text.
 `kind == "image"` — a png.
 
-Three things to keep in mind:
+Read parquet with **`~/work/jupyter-utils/.venv/bin/python`** — the system `python3` has no
+polars. `jn-wait` and `jn-nvim` need nothing beyond the stdlib and run on any `python3`.
 
-1. **One artifact per run.** If the result is a table or an image, `print()` from that same
-   run **does not reach** the disk. If you need the text, either re-run the cell without
-   the table, or ask the kernel directly.
+Keep in mind:
+
+1. **`print()` next to a table or an image** lands in a separate file, `last.text`
+   (`<cell>/<run>.out.txt`); the parquet / png holds only the final value.
 2. **History depth is 5 runs** per cell; older ones are trimmed.
 3. **No reason to read the output window (`jupyter://output`)**: it holds a rendering made
    for the screen (a table in pages of 100 rows, columns cut at 40 cells), not the data.
@@ -317,10 +325,9 @@ queue in the kernel and run in order, no need to wait between them.
 this nvim — `agent_open` it, see Step 0), `no_cell`, `empty`, `claimed` (a claim holds the cell: `edit_done(token)` first),
 `no_python`. Do not report a run you did not get `ok: true` for.
 
-**Never `ensure_started()` / `s.exec:run_at(...)`** without a buffer. They take nvim's
-*current* buffer, and over `--remote-expr` that can be the output window, a picker, a file
-tree: the run goes to a wrong session, finds no cell, and returns nothing, while a wrapper's
-`return "sent"` tells you it went fine.
+**Only `agent_run`.** Never `ensure_started()` / `s.exec:run_at(...)` from outside: they take
+nvim's *current* buffer (Step 0), the run goes to a wrong session, finds no cell, and returns
+nothing, while a wrapper's `return "sent"` tells you it went fine.
 
 What the user sees is the same as for their own key: the status under the cell («в очереди»
 → «выполняется» → ✓) and the output window opening with the run, if the notebook is on
@@ -355,8 +362,7 @@ The commands in full (for a human, not for you): `:JupyterRun`, `:JupyterRunAll`
 
 ## The kernel directly
 
-Needed when the output is not on disk (eaten by a table) or you want a slice of a variable
-already in memory. It is the **user's working kernel**, so ask for permission first; the
+Needed when you want a slice of a variable already in memory that no cell outputs. It is the **user's working kernel**, so ask for permission first; the
 client code and the rules are in `reference.md`.
 
 ## What not to do

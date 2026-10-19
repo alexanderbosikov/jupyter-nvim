@@ -14,12 +14,12 @@ cat "$OUT/index.jsonl"      # one line per run
 
 `index.jsonl` holds one object per run: `cell_id`, `run_id`, `status`, `kind`, `path`
 (relative to the notebook's `.jupyter-out/<name>/`), `rows`, `cols`, `code_sha`,
-`duration_ms`, `ename`.
+`duration_ms`, `ename`, `started_at` and, for a table/image run that also printed,
+`text` (the printed output's path).
 
 ## The kernel directly — only with permission
 
-When the output you need is not on disk (eaten by a table), or you need a slice of a
-variable that is already in memory:
+When you need a slice of a variable that is already in memory and no cell outputs it:
 
 ```python
 from jupyter_client import BlockingKernelClient
