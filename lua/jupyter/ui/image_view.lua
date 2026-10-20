@@ -60,6 +60,17 @@ function View:is_open()
     return self.win ~= nil and vim.api.nvim_win_is_valid(self.win)
 end
 
+---Вкладка не просто открыта, а на экране. Картинка, нарисованная напрямую, — это терминал:
+---нарисованная из фоновой вкладки, она легла бы поверх текущей.
+function View:is_visible()
+    return self:is_open() and vim.api.nvim_win_get_tabpage(self.win) == vim.api.nvim_get_current_tabpage()
+end
+
+---Снять картинку с экрана, не закрывая вкладку: ушёл фокус. Вернёт её render.
+function View:hide()
+    self:_direct_clear()
+end
+
 function View:_ensure_buf()
     if self.buf and vim.api.nvim_buf_is_valid(self.buf) then
         return self.buf
@@ -101,7 +112,8 @@ function View:open(list, label, cell_id, index)
         vim.wo[self.win].signcolumn = "no"
         vim.wo[self.win].cursorline = false
         self._open = true
-        local group = vim.api.nvim_create_augroup("jupyter.image_view", { clear = true })
+        -- своя группа на каждый вид: у двух ноутбуков две вкладки картинок
+        local group = vim.api.nvim_create_augroup("jupyter.image_view." .. buf, { clear = true })
         -- размер вписан в окно в ячейках: окно поменялось — вписать заново
         vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
             group = group,
@@ -136,12 +148,16 @@ function View:open(list, label, cell_id, index)
                 end
             end,
         })
+    elseif not self:is_visible() then
+        -- вкладка открыта в фоне: перейти в неё, а не рисовать в спрятанное окно
+        vim.api.nvim_set_current_win(self.win)
     end
     self:render()
 end
 
+---Нарисовать текущую картинку. Только на экране: фоновую вкладку дорисует TabEnter.
 function View:render()
-    if not self:is_open() then
+    if not self:is_visible() then
         return
     end
     local path = self.list[self.index]

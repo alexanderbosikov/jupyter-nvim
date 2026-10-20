@@ -14,14 +14,18 @@
 
 local M = {}
 
----Можно ли рисовать напрямую. Терминал узнаём по окружению: под herdr оно наследуется от
----Ghostty, а запросить терминал из nvim синхронно нечем.
+---Можно ли рисовать напрямую. Терминал узнаём по окружению: запросить его из nvim
+---синхронно нечем. herdr (0.9.5) подменяет TERM_PROGRAM на свой, но переменные Ghostty
+---остаются — по ним и узнаём Ghostty под herdr.
 ---@return boolean
 function M.available()
     if #vim.api.nvim_list_uis() == 0 or vim.env.TMUX then
         return false
     end
     local program = vim.env.TERM_PROGRAM or ""
+    if program == "herdr" then
+        return vim.env.GHOSTTY_RESOURCES_DIR ~= nil
+    end
     return vim.env.KITTY_WINDOW_ID ~= nil or program == "ghostty" or program == "WezTerm"
 end
 

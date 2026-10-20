@@ -3,6 +3,16 @@
 
 local image_view = require("jupyter.ui.image_view")
 
+local PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
+
+local function png_file()
+    local path = vim.fn.tempname() .. ".png"
+    local f = assert(io.open(path, "wb"))
+    f:write(vim.base64.decode(PNG_1X1))
+    f:close()
+    return path
+end
+
 local function fake_images()
     local rec = { shown = {}, cleared = 0 }
     function rec:show_all(list, win, buf, extra)
@@ -142,6 +152,64 @@ describe("картинки во всю вкладку", function()
         view:get_actions().close()
         assert.truthy(sent[#sent]:find("a=d,d=I", 1, true))
         assert.is_nil(view.direct_id)
+    end)
+
+    it("в фоновой вкладке не рисует: картинка легла бы поверх текущей", function()
+        local sent = {}
+        local view = image_view.new({ images = fake_images(), direct = true, send = function(s) table.insert(sent, s) end })
+        view:open({ png_file() }, nil, "a3f9")
+
+        vim.cmd("tabprevious")
+        assert.truthy(sent[#sent]:find("a=d,d=I", 1, true), "уход с вкладки снимает картинку")
+        local before = #sent
+        view:render() -- то же, что делают WinResized и возврат фокуса
+        vim.wait(50)
+
+        assert.is_true(view:is_open())
+        assert.is_false(view:is_visible())
+        assert.equals(before, #sent, "в терминал ничего не ушло")
+    end)
+
+    it("открытие при вкладке в фоне переходит в неё", function()
+        local sent = {}
+        local view = image_view.new({ images = fake_images(), direct = true, send = function(s) table.insert(sent, s) end })
+        local b = png_file()
+        view:open({ png_file() }, nil, "a3f9")
+        vim.cmd("tabprevious")
+
+        view:open({ b }, nil, "b7e1")
+
+        assert.equals(view.win, vim.api.nvim_get_current_win())
+        assert.equals(tabs_before + 1, #vim.api.nvim_list_tabpages())
+        assert.truthy(sent[#sent]:find(vim.base64.encode(b), 1, true))
+    end)
+
+    it("hide снимает картинку, вкладка остаётся", function()
+        local sent = {}
+        local view = image_view.new({ images = fake_images(), direct = true, send = function(s) table.insert(sent, s) end })
+        view:open({ png_file() }, nil, "a3f9")
+
+        view:hide()
+
+        assert.truthy(sent[#sent]:find("a=d,d=I", 1, true))
+        assert.is_nil(view.direct_id)
+        assert.is_true(view:is_visible())
+    end)
+
+    it("у двух ноутбуков свои подписки: вторая вкладка не отключает первую", function()
+        local sent1, sent2 = {}, {}
+        local v1 = image_view.new({ images = fake_images(), direct = true, send = function(s) table.insert(sent1, s) end })
+        local v2 = image_view.new({ images = fake_images(), direct = true, send = function(s) table.insert(sent2, s) end })
+        v1:open({ png_file() }, nil, "a3f9")
+        local tab1 = vim.api.nvim_get_current_tabpage()
+        v2:open({ png_file() }, nil, "b7e1")
+        vim.api.nvim_set_current_tabpage(tab1)
+        vim.wait(200, function() return v1.direct_id ~= nil end) -- TabEnter рисует через schedule
+        local before = #sent1
+
+        vim.cmd("tabprevious") -- уходим с вкладки первого
+
+        assert.truthy(#sent1 > before and sent1[#sent1]:find("a=d,d=I", 1, true), "первый снял свою картинку")
     end)
 
     it("напрямую не png — рисует image.nvim", function()

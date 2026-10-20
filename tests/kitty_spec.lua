@@ -58,4 +58,41 @@ describe("kitty: последовательности", function()
     it("в headless недоступно: терминала нет", function()
         assert.is_false(kitty.available())
     end)
+
+    describe("терминал по окружению", function()
+        local list_uis, saved = vim.api.nvim_list_uis, {}
+        local NAMES = { "TERM_PROGRAM", "TMUX", "KITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR" }
+
+        before_each(function()
+            vim.api.nvim_list_uis = function() return { {} } end
+            for _, name in ipairs(NAMES) do
+                saved[name] = vim.env[name]
+                vim.env[name] = nil
+            end
+        end)
+
+        after_each(function()
+            vim.api.nvim_list_uis = list_uis
+            for _, name in ipairs(NAMES) do
+                vim.env[name] = saved[name]
+            end
+        end)
+
+        it("Ghostty под herdr: TERM_PROGRAM подменён, переменные Ghostty остались", function()
+            vim.env.TERM_PROGRAM = "herdr"
+            vim.env.GHOSTTY_RESOURCES_DIR = "/Applications/Ghostty.app/Contents/Resources/ghostty"
+            assert.is_true(kitty.available())
+        end)
+
+        it("herdr не в Ghostty — через image.nvim", function()
+            vim.env.TERM_PROGRAM = "herdr"
+            assert.is_false(kitty.available())
+        end)
+
+        it("под tmux — через image.nvim, даже в Ghostty", function()
+            vim.env.TERM_PROGRAM = "ghostty"
+            vim.env.TMUX = "/tmp/tmux-1/default,1,0"
+            assert.is_false(kitty.available())
+        end)
+    end)
 end)

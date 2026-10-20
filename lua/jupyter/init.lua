@@ -916,7 +916,8 @@ function M.on_focus(gained)
         })
         if not gained then
             session.output.images:clear(session.output.buf)
-        elseif session.image_view:is_open() then
+            session.image_view:hide()
+        elseif session.image_view:is_visible() then
             -- картинка во всю вкладку на экране — вернуть её, а не окно вывода из-под неё
             local view = session.image_view
             vim.schedule(function()
