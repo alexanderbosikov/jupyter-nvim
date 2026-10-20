@@ -89,14 +89,10 @@ end
 ---раньше, и целиком. Чистая функция — геометрия проверяется тестом без терминала.
 ---@param img { w: number, h: number } пиксели картинки
 ---@param area { cols: integer, rows: integer } ячейки области
----@param cell { w: number, h: number }|nil пиксели ячейки; nil — неизвестны
+---@param cell { w: number, h: number } пиксели ячейки; без них вписать нельзя — рисует image.nvim
 ---@return { cols: integer|nil, rows: integer|nil, col_offset: integer }
 ---  задаётся одна сторона, вторую терминал выводит из пропорций
 function M.fit(img, area, cell)
-    if not cell then
-        -- без размера ячейки высоту не проверить: во всю ширину, и пусть терминал решает
-        return { cols = area.cols, col_offset = 0 }
-    end
     local by_width = (area.cols * cell.w) / img.w
     local by_height = (area.rows * cell.h) / img.h
     if by_width <= by_height then

@@ -548,6 +548,26 @@ def test_print_and_two_images_are_all_persisted(live):
         assert (outdir.base / o["path"]).read_bytes().startswith(b"\x89PNG")
 
 
+def test_animation_keeps_only_the_last_frame(live):
+    """`clear_output(wait=True)` в цикле: на диске и в outputs — последний кадр, а не все."""
+    session, sink, outdir = live()
+    session.execute(
+        "a3f9",
+        1,
+        "from IPython.display import clear_output, publish_display_data\n"
+        "for _ in range(5):\n"
+        "    clear_output(wait=True)\n"
+        f"    publish_display_data({{'image/png': '{PNG_1X1}'}})",
+    )
+    sink.wait(done_for("a3f9"))
+
+    rec = outdir.last("a3f9")
+
+    assert [o["kind"] for o in rec["outputs"]] == ["image"]
+    assert (outdir.base / rec["path"]).exists()
+    assert sorted(p.name for p in (outdir.base / "a3f9").glob("1*.png")) == [rec["path"].split("/")[-1]]
+
+
 def test_print_with_a_table_keeps_the_text_without_the_repr(live):
     """Таблица — главный вывод, print рядом; repr того же датафрейма в текст не идёт."""
     session, sink, outdir = live()

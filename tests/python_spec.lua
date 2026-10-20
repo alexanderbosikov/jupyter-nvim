@@ -17,8 +17,10 @@ describe("выбор python", function()
     local saved
 
     before_each(function()
+        -- resolve: на macOS /var — симлинк на /private/var, а имя буфера nvim разворачивает
         root = vim.fn.tempname()
         vim.fn.mkdir(root, "p")
+        root = vim.fn.resolve(root)
         -- харнесс кладёт JUPYTER_NVIM_PYTHON в vim.g; на время теста все внешние источники снимаем
         saved = { g = vim.g.jupyter_python, env = vim.env.JUPYTER_NVIM_PYTHON, venv = vim.env.VIRTUAL_ENV }
         vim.g.jupyter_python = nil

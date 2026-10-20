@@ -24,10 +24,6 @@ describe("kitty: вписать картинку", function()
         -- 800 px × (1760/1600) = 880 px = 63 колонки; (193 - 63) / 2
         assert.equals(65, fit.col_offset)
     end)
-
-    it("без размера ячейки — во всю ширину", function()
-        assert.same({ cols = 80, col_offset = 0 }, kitty.fit({ w = 10, h = 1000 }, { cols = 80, rows = 20 }, nil))
-    end)
 end)
 
 describe("kitty: последовательности", function()

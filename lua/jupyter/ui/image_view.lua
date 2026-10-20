@@ -31,7 +31,7 @@ local View = {}
 View.__index = View
 
 ---@param opts table images (jupyter.Images), keys, on_step, on_close,
----  direct (рисовать по kitty напрямую; nil — где терминал позволяет), send (для тестов)
+---  direct (рисовать по kitty напрямую; nil — где терминал позволяет), send и cell_size (для тестов)
 function M.new(opts)
     local direct = opts.direct
     if direct == nil then
@@ -41,7 +41,9 @@ function M.new(opts)
         images = opts.images,
         direct = direct,
         send = opts.send or kitty.send,
+        cell_size = opts.cell_size or kitty.cell_size,
         direct_id = nil, -- id картинки, нарисованной напрямую и ещё не удалённой
+        nvim_shown = false, -- на экране картинка от image.nvim (svg, или терминал не дал размер ячейки)
         keys = opts.keys or M.DEFAULT_KEYS,
         -- переход к соседней ячейке с картинками: какая соседняя, знает ноутбук, не окно.
         -- fun(dir: 1|-1): boolean — нашлась ли
@@ -172,6 +174,7 @@ function View:render()
     end
     if self.images then
         self.images:show_all({ { path = path, row = 0 } }, self.win, self.buf, self:geometry())
+        self.nvim_shown = true
     end
 end
 
@@ -184,11 +187,22 @@ function View:_direct_show(path)
     if not w then
         return false -- не png (svg, битый файл): это image.nvim умеет, мы нет
     end
-    local cw, ch = kitty.cell_size()
+    local cw, ch = self.cell_size()
+    if not cw then
+        -- терминал не сообщает пиксели ячейки: высоту не проверить, и высокая картинка
+        -- вылезла бы на statusline. image.nvim вписывает сам
+        return false
+    end
+    -- до этого на экране могла быть картинка image.nvim (svg той же ячейки): снять её,
+    -- пока своей ещё нет — снятие у image.nvim может задеть все картинки терминала
+    if self.nvim_shown and self.images then
+        self.images:clear(self.buf)
+        self.nvim_shown = false
+    end
     local fit = kitty.fit(
         { w = w, h = h },
         { cols = vim.api.nvim_win_get_width(self.win), rows = vim.api.nvim_win_get_height(self.win) },
-        cw and { w = cw, h = ch } or nil
+        { w = cw, h = ch }
     )
     -- экран nvim должен быть уже нарисован: TUI, дорисовывая вкладку после нас, мог бы
     -- очистить экран, а с ним и наше размещение
@@ -286,6 +300,7 @@ function View:_closed()
     self:_direct_clear()
     if self.images then
         self.images:clear(self.buf)
+        self.nvim_shown = false
     end
     if self.on_close then
         self.on_close()

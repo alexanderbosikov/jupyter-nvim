@@ -244,6 +244,26 @@ describe("repr и таблица", function()
         assert.equals("[картинка] /tmp/1-2.png", run.lines[2])
     end)
 
+    it("\\r после вырезанного repr переписывает свою строку, а не чужую", function()
+        local k = stub_kernel()
+        local ex = exec.new({ kernel = k }):attach()
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", "df" })
+        vim.bo[buf].filetype = "python"
+
+        local run = ex:run_at(buf, 2)
+        local function emit(ev, data)
+            k.emit({ ev = ev, cell_id = run.cell_id, run_id = run.run_id, data = data })
+        end
+        emit("result", { kind = "text", text = "┌──┐\n│n │\n└──┘" })
+        emit("stream", { name = "stdout", ops = { { op = "append", text = "10%" } } })
+        emit("display", { kind = "image", path = "/tmp/1.png" })
+        emit("result", { kind = "table", path = "/tmp/a.parquet", rows = 2, cols = 1 })
+        emit("stream", { name = "stdout", ops = { { op = "replace_last", text = "100%" } } })
+
+        assert.same({ "100%", "[картинка] /tmp/1.png", "[таблица] 2 строк × 1 колонок" }, run.lines)
+    end)
+
     it("текст без таблицы остаётся как есть", function()
         local k = stub_kernel()
         local ex = exec.new({ kernel = k }):attach()

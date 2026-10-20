@@ -952,6 +952,14 @@ class KernelSession:
         if mtype == "clear_output":
             self._streams.pop((ex.msg_id, "stdout"), None)
             self._streams.pop((ex.msg_id, "stderr"), None)
+            pending = self._pending.get(ex.msg_id)
+            if pending is not None and not late:
+                # анимация (`clear_output(wait=True); display(fig)` в цикле): стёртые кадры —
+                # не выводы прогона. Файлы удаляются при закрытии прогона, не сейчас: окно
+                # вывода до следующего кадра ещё может их перечитать
+                superseded = pending.setdefault("superseded", [])
+                superseded += pending.pop("images", []) + pending.pop("html", [])
+                pending.pop("result_text", None)
             self._emit(Ev.CLEAR_OUTPUT, ex, late, wait=content.get("wait", False))
             return
 
@@ -1055,6 +1063,8 @@ class KernelSession:
         stdout = self._streams.pop((ex.msg_id, "stdout"), None)
         stderr = self._streams.pop((ex.msg_id, "stderr"), None)
         pending = self._pending.pop(ex.msg_id, {})
+        for path in pending.get("superseded") or []:
+            Path(path).unlink(missing_ok=True)
 
         table = frames.parse_dump((closed.user_expressions or {}).get("__jn"))
         if table and pending.get("table_path"):

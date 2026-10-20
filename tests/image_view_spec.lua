@@ -13,6 +13,11 @@ local function png_file()
     return path
 end
 
+-- терминала в тестах нет: размер ячейки — как у Ghostty на retina
+local function CELL()
+    return 14, 32
+end
+
 local function fake_images()
     local rec = { shown = {}, cleared = 0 }
     function rec:show_all(list, win, buf, extra)
@@ -138,7 +143,7 @@ describe("картинки во всю вкладку", function()
             f:close()
         end
         local img, sent = fake_images(), {}
-        local view = image_view.new({ images = img, direct = true, send = function(s) table.insert(sent, s) end })
+        local view = image_view.new({ images = img, direct = true, cell_size = CELL, send = function(s) table.insert(sent, s) end })
 
         view:open({ a, b }, nil, "a3f9")
         assert.equals(0, #img.shown, "image.nvim не участвует")
@@ -156,7 +161,7 @@ describe("картинки во всю вкладку", function()
 
     it("в фоновой вкладке не рисует: картинка легла бы поверх текущей", function()
         local sent = {}
-        local view = image_view.new({ images = fake_images(), direct = true, send = function(s) table.insert(sent, s) end })
+        local view = image_view.new({ images = fake_images(), direct = true, cell_size = CELL, send = function(s) table.insert(sent, s) end })
         view:open({ png_file() }, nil, "a3f9")
 
         vim.cmd("tabprevious")
@@ -172,7 +177,7 @@ describe("картинки во всю вкладку", function()
 
     it("открытие при вкладке в фоне переходит в неё", function()
         local sent = {}
-        local view = image_view.new({ images = fake_images(), direct = true, send = function(s) table.insert(sent, s) end })
+        local view = image_view.new({ images = fake_images(), direct = true, cell_size = CELL, send = function(s) table.insert(sent, s) end })
         local b = png_file()
         view:open({ png_file() }, nil, "a3f9")
         vim.cmd("tabprevious")
@@ -186,7 +191,7 @@ describe("картинки во всю вкладку", function()
 
     it("hide снимает картинку, вкладка остаётся", function()
         local sent = {}
-        local view = image_view.new({ images = fake_images(), direct = true, send = function(s) table.insert(sent, s) end })
+        local view = image_view.new({ images = fake_images(), direct = true, cell_size = CELL, send = function(s) table.insert(sent, s) end })
         view:open({ png_file() }, nil, "a3f9")
 
         view:hide()
@@ -198,8 +203,8 @@ describe("картинки во всю вкладку", function()
 
     it("у двух ноутбуков свои подписки: вторая вкладка не отключает первую", function()
         local sent1, sent2 = {}, {}
-        local v1 = image_view.new({ images = fake_images(), direct = true, send = function(s) table.insert(sent1, s) end })
-        local v2 = image_view.new({ images = fake_images(), direct = true, send = function(s) table.insert(sent2, s) end })
+        local v1 = image_view.new({ images = fake_images(), direct = true, cell_size = CELL, send = function(s) table.insert(sent1, s) end })
+        local v2 = image_view.new({ images = fake_images(), direct = true, cell_size = CELL, send = function(s) table.insert(sent2, s) end })
         v1:open({ png_file() }, nil, "a3f9")
         local tab1 = vim.api.nvim_get_current_tabpage()
         v2:open({ png_file() }, nil, "b7e1")
@@ -212,9 +217,37 @@ describe("картинки во всю вкладку", function()
         assert.truthy(#sent1 > before and sent1[#sent1]:find("a=d,d=I", 1, true), "первый снял свою картинку")
     end)
 
+    it("svg → png: картинка image.nvim снимается, прежде чем рисовать напрямую", function()
+        local img = fake_images()
+        local view = image_view.new({ images = img, direct = true, cell_size = CELL, send = function() end })
+        view:open({ "/нет/такого.svg", png_file() }, nil, "a3f9")
+        assert.equals(1, #img.shown, "svg рисует image.nvim")
+
+        view:get_actions().image_next()
+
+        assert.equals(1, img.cleared)
+        assert.equals(1, #img.shown)
+        assert.truthy(view.direct_id)
+    end)
+
+    it("терминал не дал размер ячейки — рисует image.nvim, не напрямую", function()
+        local img, sent = fake_images(), {}
+        local view = image_view.new({
+            images = img,
+            direct = true,
+            cell_size = function() return nil end,
+            send = function(s) table.insert(sent, s) end,
+        })
+
+        view:open({ png_file() }, nil, "a3f9")
+
+        assert.equals(1, #img.shown)
+        assert.equals(0, #sent)
+    end)
+
     it("напрямую не png — рисует image.nvim", function()
         local img = fake_images()
-        local view = image_view.new({ images = img, direct = true, send = function() end })
+        local view = image_view.new({ images = img, direct = true, cell_size = CELL, send = function() end })
 
         view:open({ "/нет/такого.svg" }, nil, "a3f9")
 

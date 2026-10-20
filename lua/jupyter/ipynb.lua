@@ -254,12 +254,13 @@ function M.kernelspec(name)
     return { name = name, display_name = name, language = "python" }
 end
 
-local function seed(path)
+---@param buf integer буфер ноутбука: по нему kernel_name-функция и узнаёт, чей это ноутбук
+---@param path string куда писать
+local function seed(buf, path)
     -- тем же правилом, что и ядро сессии: ноутбук в проекте с .venv помечается python3,
     -- и Jupyter Lab в этом проекте откроет его ядром из того же окружения
     local python = require("jupyter.python")
-    local dir = vim.fn.fnamemodify(path, ":p:h")
-    local choice = python.resolve_kernel(config(), { buf = 0, dir = dir, venv = (python.find_venv(dir)) })
+    local choice = python.resolve_kernel(config(), python.context(buf))
     local spec = M.kernelspec(choice.name)
     local text = ('{"cells": [], "metadata": {"kernelspec": %s, "language_info": {"name": %s}}, '
         .. '"nbformat": 4, "nbformat_minor": 5}'):format(vim.json.encode(spec), vim.json.encode(spec.language))
@@ -314,7 +315,7 @@ function M.write(buf, path, range)
         if not M.blank(target) then
             ok, err = vim.uv.fs_copyfile(target, tmp)
         else
-            ok = seed(tmp)
+            ok = seed(buf, tmp)
             err = not ok and "не удалось записать временный файл" or nil
         end
         if ok then

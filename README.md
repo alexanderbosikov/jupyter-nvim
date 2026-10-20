@@ -176,7 +176,7 @@ again.
 opens the cell's images in a separate tab, one at a time, fitted to the window: full width or
 full height, whichever is reached first, and always whole. Small figures are scaled up;
 image.nvim's `max_*_window_percentage`, which in the output window often halves a figure,
-does not apply here. Resizing the window fits the image again. In kitty, Ghostty and WezTerm
+does not apply here. Resizing the window fits the image again. In kitty, Ghostty (also under herdr) and WezTerm
 (not under tmux) the tab draws the image itself over the kitty protocol and lets the terminal
 scale it, so opening and stepping are instant; elsewhere it goes through image.nvim, which
 resizes with ImageMagick and takes about half a second per image. `<Tab>`/`<S-Tab>` go through the cell's images and,

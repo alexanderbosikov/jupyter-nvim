@@ -281,6 +281,15 @@ function Exec:_apply_result(run, data)
                     image.line = image.line - removed
                 end
             end
+            -- и строки, которые перепишет следующий \r: иначе он затрёт чужую строку
+            local tail = self._stream_tail[run.cell_id] or {}
+            for stream, line in pairs(tail) do
+                if line > run.text_range.to then
+                    tail[stream] = line - removed
+                elseif line >= run.text_range.from then
+                    tail[stream] = nil
+                end
+            end
             run.text_range = nil
             run.has_text_result = false
         end
