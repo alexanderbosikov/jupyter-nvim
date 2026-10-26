@@ -163,6 +163,7 @@ function Exec:run(buf, cell, opts)
         -- та же формула, что в сайдкаре (hashlib.sha256(code)[:8]): по ней видно,
         -- что показанный вывод получен не из того кода, который сейчас в ячейке
         code_sha = vim.fn.sha256(code):sub(1, 8),
+        kernel_generation = self.kernel.generation, -- в каком ядре (Kernel.generation)
     }
     self.runs[cell_id] = run
     self._stream_tail[cell_id] = {}

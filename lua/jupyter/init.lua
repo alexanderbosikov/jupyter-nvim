@@ -2451,6 +2451,32 @@ function M.edit_replace_files(old_path, new_path, opts)
     return M.edit_replace(old, new, opts)
 end
 
+---Ячейки выше `cell`, не выполнявшиеся в текущем ядре: их переменных в памяти нет.
+---
+---Без этого агент узнавал о перезапущенном ядре по NameError из своей ячейки — когда
+---человек переоткрыл ноутбук, а ядро поднялось заново. Ячейка без id — `row:N`. У
+---подхваченного живым ядра (attach) список значит «не выполнялись с подключения»:
+---что выполнялось в нём раньше, nvim не знает. Пусто — nil: пустая таблица ушла бы в json
+---объектом `{}`, а не списком.
+---@return string[]|nil
+local function not_run_above(s, buf, cell)
+    local gen = s.kernel.generation
+    local list = {}
+    for _, c in ipairs(cells.list(buf)) do
+        if c.start_row >= cell.start_row then
+            break
+        end
+        if cells.is_code_lang(cells.lang_of(buf, c)) and cells.text(buf, c):match("%S") then
+            local id = cellid.of(buf, c)
+            local run = id and s.exec:run_for(id)
+            if not (run and run.kernel_generation == gen) then
+                table.insert(list, id or ("row:" .. c.start_row))
+            end
+        end
+    end
+    return #list > 0 and list or nil
+end
+
 ---Запустить ячейку по просьбе агента — так же, как своей клавишей её запустил бы человек:
 ---статус под ячейкой, окно вывода (если ноутбук на экране).
 ---
@@ -2460,7 +2486,7 @@ end
 ---`run_at` не находит там ячейки и молча возвращает nil, а агент видит свой `"sent"`.
 ---Поэтому и ответ здесь — что случилось на самом деле, с причиной отказа.
 ---@param opts table notebook — путь ноутбука (или buf); cell — id ячейки (или row — строка в ней)
----@return table { ok, cell_id, run_id } | { ok = false, reason, msg }
+---@return table { ok, cell_id, run_id, kernel = { since, attached }, not_run_above } | { ok = false, reason, msg }
 function M.agent_run(opts)
     opts = opts or {}
     local buf = target_buf(opts)
@@ -2500,7 +2526,14 @@ function M.agent_run(opts)
     if not run then
         return { ok = false, reason = "not_started", msg = "запуск не начался, причина в :JupyterLog" }
     end
-    return { ok = true, buf = buf, cell_id = run.cell_id, run_id = run.run_id }
+    return {
+        ok = true,
+        buf = buf,
+        cell_id = run.cell_id,
+        run_id = run.run_id,
+        kernel = { since = s.kernel.since, attached = s.kernel.attached },
+        not_run_above = not_run_above(s, buf, cell),
+    }
 end
 
 ---Открыть ноутбук агента в этом nvim скрытым буфером и поднять ему ядро.

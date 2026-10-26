@@ -52,6 +52,20 @@ describe("запуск ячейки агентом", function()
         assert.equals("aa01", res.cell_id)
     end)
 
+    it("ячейки выше, не выполнявшиеся в этом ядре, — в ответе", function()
+        local res = jupyter.agent_run({ notebook = path, cell = "bb02" })
+        assert.same({ "aa01" }, res.not_run_above)
+        assert.is_false(res.kernel.attached)
+
+        jupyter.agent_run({ notebook = path, cell = "aa01" })
+        assert.is_nil(jupyter.agent_run({ notebook = path, cell = "bb02" }).not_run_above)
+
+        -- рестарт: всё, что выполнялось, осталось в прошлом ядре
+        s.kernel.sidecar.request = function() end
+        s.kernel:restart()
+        assert.same({ "aa01" }, jupyter.agent_run({ notebook = path, cell = "bb02" }).not_run_above)
+    end)
+
     it("нет ячейки — причина, а не молчание", function()
         local res = jupyter.agent_run({ notebook = path, cell = "zz99" })
         assert.is_false(res.ok)

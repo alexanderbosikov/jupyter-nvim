@@ -39,6 +39,12 @@ function M.new(opts)
         _reason = nil,
         _queue = {},
         _info = {},
+        -- какое по счёту ядро у сессии: start, attach и restart начинают новое. Прогон
+        -- помечается номером (Exec:run), и по нему видно, что ячейка выполнялась не в
+        -- этом ядре — её переменных в памяти нет
+        generation = 0,
+        attached = false, -- текущее ядро подхвачено живым: что в нём выполнялось раньше, не знаем
+        since = nil, -- когда оно началось, HH:MM:SS
     }, Kernel)
 
     self.sidecar:on("kernel.state", function(msg)
@@ -95,6 +101,15 @@ end
 
 -- --- жизненный цикл ---
 
+---Началось новое ядро. Номер растёт сразу, а не по ответу: запуски, поставленные в
+---очередь до готовности, уже идут в него.
+---@param attached boolean
+function Kernel:_new_generation(attached)
+    self.generation = self.generation + 1
+    self.attached = attached
+    self.since = os.date("%H:%M:%S")
+end
+
 ---@param opts? table notebook, cwd, kernel_name, out_dir, history_limit
 ---@param cb? fun(err: table|nil, started: table|nil)
 ---Поднять сайдкар, если надо, и позвать на нём операцию про ядро.
@@ -127,6 +142,7 @@ end
 
 function Kernel:start(opts, cb)
     opts = opts or {}
+    self:_new_generation(false)
     self:_boot("kernel.start", {
         kernel_name = opts.kernel_name or self.kernel_name,
         kernel_python = opts.kernel_python or self.kernel_python,
@@ -159,6 +175,7 @@ end
 ---@param cb? fun(err: table|nil, data: table|nil)
 function Kernel:attach(opts, cb)
     opts = opts or {}
+    self:_new_generation(true)
     self:_boot("kernel.attach", {
         connection_file = opts.connection_file,
         pid = opts.pid,
@@ -178,6 +195,7 @@ end
 ---@param cb? fun(err: table|nil, data: table|nil)
 function Kernel:restart(cb)
     self:_drop_queue({ code = "kernel_restart", msg = "рестарт ядра, запуск отменён" })
+    self:_new_generation(false)
     self.sidecar:request("kernel.restart", {}, cb)
 end
 
