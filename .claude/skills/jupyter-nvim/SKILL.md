@@ -22,62 +22,64 @@ matters — the number of a claim that is **already open and already visible to 
 The notebook's full path and the nvim socket are in your pane's file. Read "A prompt sent
 from the notebook" below before you touch anything.
 
-**Never rely on nvim's current buffer or the user's cursor.** Over `--remote-expr` the
-current buffer is wherever the user happens to be — the output window, a picker, a file
-tree. Every call below takes the notebook's path (`notebook = "$NB"`); calls without one
-(`snapshot_json()`, buffer `0`, `ensure_started()`, `s.exec:run_at(...)`) act on the wrong
-buffer and can fail silently.
-
-Two steps, the same whether the notebook is already open or not:
+**Everything goes through `jn`** — `~/Projects/jupyter.nvim/bin/jn`, stdlib only, any
+`python3`. Every command takes the notebook's path, finds the user's nvim by itself (where
+the notebook is open, on screen first; else the one in your herdr tab / tmux window; else by
+cwd) and passes arguments to nvim as a JSON file, so there is nothing to escape. Exit 4 —
+no nvim found, or a tie (candidates on stderr): ask the user, do not pick at random.
+`--sock "$SOCK"` (before the command) skips the search when you already know the socket.
 
 ```sh
-NB=~/work/analysis/.../01_eda.ipynb          # absolute path
+JN=~/Projects/jupyter.nvim/bin/jn
+NB=~/work/analysis/.../01_eda.ipynb          # path to the notebook
 
-# 1. the user's nvim for this notebook: where it is already open (on screen first), else
-#    the one in the same herdr tab / tmux window as your pane, else by cwd.
-#    Exit 1 = none or a tie (candidates on stderr) — ask the user, do not pick at random.
-SOCK=$(PYTHONPATH=~/Projects/jupyter.nvim/sidecar python3 -m jupyter_nvim.find_nvim "$NB")
-
-# 2. make sure it is open there and the kernel is up — idempotent, call it every time
-nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").agent_open({notebook = \"$NB\"}))')"
-# → {"ok":true,"buf":7,"opened":true,"kernel":true}
+# make sure it is open in the user's nvim and the kernel is up — idempotent, call it every time
+$JN open "$NB"
+# → {"ok": true, "buf": 7, "opened": true, "kernel": true}
 ```
 
-`agent_open` loads the notebook as a **hidden** buffer in the user's nvim: no window, cursor
+Answers are one line of JSON; exit 1 means the answer is a refusal (`ok: false`, `reason`).
+Do not hand-roll `nvim --remote-expr "luaeval(...)"` — the quoting breaks on the first
+quote or newline in your text, and calls without the notebook's path act on whatever buffer
+the user's cursor is in. Never the current buffer: `snapshot_json()`, buffer `0`,
+`ensure_started()`, `s.exec:run_at(...)` from outside all fail silently.
+
+`jn open` loads the notebook as a **hidden** buffer in the user's nvim: no window, cursor
 or current buffer changes; it just appears in their buffer list (`:ls`). Do not wait for the
 user to open it, and never start your own nvim: buffers are per process, the user would not
 see yours, and opening it themselves would make a second copy.
 
 - `opened: false` — it was already open there; nothing changed.
 - `opened: true` — you opened it: tell the user in one line that it is in their buffer list.
-- `kernel: true` — the kernel is up or starting; the first `agent_run` + `jn-wait` waits for it.
+- `kernel: true` — the kernel is up or starting; the first `jn run` waits for it.
 - `reason: "other_instance"` — open in another nvim: `others[1].socket` is where to work.
-- `attempt to call field 'agent_open'` (or `snapshot_json`, `agent_run`) `(a nil value)` —
-  that nvim runs an older build of the plugin: ask the user to restart nvim. Do not work around it (parsing fences by hand,
+- `jn: в этом nvim старая сборка плагина` (exit 4) — that nvim runs an older build of the
+  plugin: ask the user to restart nvim. Do not work around it (parsing fences by hand,
   sending keys).
 
-Read `SOCK` again after the user restarts nvim — the socket is new each time. While the
-kernel is alive, `.jupyter-out/<name>/runtime.json` also carries it (`socket`, plus
-`owner_pid`, `kernel_pid`, `connection_file`, `started_at`).
+The socket is new after every nvim restart — another reason to let `jn` find it instead of
+keeping one from earlier. While the kernel is alive, `.jupyter-out/<name>/runtime.json`
+also carries it (`socket`, plus `owner_pid`, `kernel_pid`, `connection_file`, `started_at`).
 
 ### A new notebook
 
 1. Create the `.ipynb` on disk (it is not open anywhere yet, so writing it is allowed) — e.g.
    write it as jupytext markdown and `jupytext --to ipynb`, or write the json directly.
-   Do not `agent_open` a path that does not exist: you get an unsaved template buffer
+   Do not `jn open` a path that does not exist: you get an unsaved template buffer
    instead of your file.
-2. `jn-nvim` + `agent_open` as above.
-3. Run by **row**: cells you wrote outside the plugin have no `jncell` yet. The first run
-   assigns one and returns it in `agent_run`'s answer (`cell_id`) — use it from then on.
+2. `jn open` as above.
+3. Run by **row** (`jn run "$NB" row:12`): cells you wrote outside the plugin have no
+   `jncell` yet. The first run assigns one and prints it (`e9ec #1 …`) — use it from then on.
    Take the rows from the snapshot (`start_row` of each cell). After a run that assigned an
    id the buffer is modified (the fence line changed); that is expected.
 
 **Two copies.** The same notebook can be open in two nvims (the kernel lives in the one
-named by `owner_pid`), and `jn-nvim` prefers the one where it is on screen, but check anyway. Check two fields of the snapshot before you
+named by `owner_pid`), and `jn` prefers the one where it is on screen, but check anyway. Check two fields of the snapshot before you
 edit: `visible` (is the buffer shown in a window of this nvim) and `other_instances`
 (`[{pid, socket, at}]` — other live nvims with this notebook open). If `visible` is false and
 `other_instances` is not empty, the user is most likely looking at the other one: take the
-snapshot from that socket, and if it is `visible` there, work there. Unsure — ask; an edit
+snapshot from that socket (`$JN --sock <socket> snapshot "$NB"`), and if it is `visible`
+there, work there (`--sock` on every call). Unsure — ask; an edit
 made in the hidden copy is invisible to the user and can overwrite the file on `:wa`.
 
 ## Reading
@@ -86,22 +88,16 @@ Order: **snapshot and buffer from nvim, the contents of results from disk.** The
 never moves, and unsaved edits are read as well.
 
 ```sh
-# snapshot: the cells, their ids, boundaries, language and the last run of each
-nvim --server "$SOCK" --remote-expr "luaeval('require(\"jupyter\").snapshot_json(\"$NB\")')"
-
-# the whole notebook text (including anything unsaved)
-nvim --server "$SOCK" --remote-expr "luaeval('table.concat(vim.api.nvim_buf_get_lines(require(\"jupyter\").snapshot(\"$NB\").buf, 0, -1, false), \"\\n\")')"
+$JN snapshot "$NB" --brief        # one line per cell: id, lang, rows, last run, stale
+$JN snapshot "$NB"                # the full snapshot, JSON (--cell e93d f5a8 — only those)
+$JN text "$NB"                    # the whole notebook text, including anything unsaved
 ```
 
-**Always address the notebook by its path (`$NB`), never by "the current buffer"** —
-`snapshot_json()` without an argument, buffer `0`, `ensure_started()`. Over `--remote-expr`
-the current buffer is wherever the user's cursor happens to be: the output window, a
-picker, a file tree. A snapshot by path answers `{"ok":false,"reason":"no_buffer"}` when
-the notebook is not open in that nvim — `agent_open` it (Step 0).
+`no_buffer` — the notebook is not open in that nvim: `jn open` it (Step 0).
 
 Per cell the snapshot gives: `id` (the `jncell` from the fence — a cell made by the plugin's
-insert/split/to-code commands or by your `edit_replace` has one from the start; one the user
-typed or pasted by hand gets it at its first run or at your first `edit_replace` touching
+insert/split/to-code commands or by your `jn replace`/`jn insert` has one from the start; one the user
+typed or pasted by hand gets it at its first run or at your first `jn replace` touching
 it), `lang`,
 `start_row`/`end_row` (the body), `span_start`/`span_end` (with the marker), `runs`,
 `stale`, `running`, `live`, `last`. Inside `last`: `run_id`, `status`, `ename`, `kind`
@@ -131,7 +127,7 @@ df = pl.read_parquet(path)     # kind == "table" — the whole frame, not a slic
 `kind == "image"` — a png.
 
 Read parquet with **`~/work/jupyter-utils/.venv/bin/python`** — the system `python3` has no
-polars. `jn-wait` and `jn-nvim` need nothing beyond the stdlib and run on any `python3`.
+polars. `jn` needs nothing beyond the stdlib and runs on any `python3`.
 
 `last.kind`/`last.path` is the run's **main** output (table, else the first image, else
 text). **All** of them are in `last.outputs` — `[{kind, path, rows?, cols?}]`, absolute
@@ -164,31 +160,36 @@ arrives with a header like this:
 The first line names the notebook as `<its directory>/<file>` and the piece of it the
 prompt is about — what the user pointed at:
 
-| first line ends with | the user | what is claimed |
-|---|---|---|
-| `ячейка a3f9 · python · строки 67–74` | had the cursor in that cell | the cell |
-| `… · выделено 70–72 — речь про этот кусок` | selected part of the cell | the cell (whole) |
-| `строки 40–74: проза и ячейка a3f9` | selected text, cells, or both; or had the cursor in a paragraph (`проза`) | those lines, cells widened to whole |
-| `весь ноутбук` | asked about the whole notebook, or the cursor was on a blank line | nothing |
+| first line ends with                       | the user                 | what is claimed    |
+|--------------------------------------------|--------------------------|--------------------|
+| `ячейка a3f9 · python · строки 67–74`      | had the cursor in that   | the cell           |
+|                                            | cell                     |                    |
+|                                            |                          |                    |
+| `… · выделено 70–72 — речь про этот кусок` | selected part of the     | the cell (whole)   |
+|                                            | cell                     |                    |
+|                                            |                          |                    |
+| `строки 40–74: проза и ячейка a3f9`        | selected text, cells, or | those lines, cells |
+|                                            | both; or had the cursor  | widened to whole   |
+|                                            | in a paragraph (`проза`) |                    |
+|                                            |                          |                    |
+| `весь ноутбук`                             | asked about the whole    | nothing            |
+|                                            | notebook, or the cursor  |                    |
+|                                            | was on a blank line      |                    |
 
 `вывод:` lines (`вывод a3f9:` when there are several cells) are relative to the notebook's
 directory; at most three, the rest are in the snapshot.
 
 **The full path, the socket and the claim's number are in your pane's file**, not in the
 prompt. The plugin writes them to `~/.local/state/nvim/jupyter/panes/<pane>.json` on every
-send, and the pane is yours — its id is in your environment. One entry per notebook
-(several nvims may send to one pane): take the one whose path ends with the name from the
-header, the latest `at` on a tie. Read it again for every `[jupyter.nvim]` prompt, do not
-reuse a socket or a claim from earlier in the session — nvim may have been restarted since.
+send, and the pane is yours — its id is in your environment. `jn pane` reads it, with the
+name from the header; read it again for every `[jupyter.nvim]` prompt, do not reuse a socket
+or a claim from earlier in the session — nvim may have been restarted since.
 
 ```sh
-F="${XDG_STATE_HOME:-$HOME/.local/state}/nvim/jupyter/panes/${TMUX_PANE:-$HERDR_PANE_ID}.json"
-{ read -r NB; read -r SOCK; read -r CLAIM; } < <(python3 -c '
-import json, sys
-entries = json.load(open(sys.argv[1]))
-at, nb, e = max((e["at"], nb, e) for nb, e in entries.items() if nb.endswith("/" + sys.argv[2]))
-print(nb); print(e["socket"]); print(e.get("claim") or "")' "$F" "mda-3957-review/01_eda.ipynb")
+eval "$($JN pane mda-3957-review/01_eda.ipynb)"    # sets NB, SOCK, CLAIM
 ```
+
+Then `--sock "$SOCK"` on the calls below: it is the nvim the prompt came from.
 
 If the header itself carries `ноутбук:`, `сокет nvim:` (and `заявка:`) lines, the plugin
 could not write that file — use them as they are. No file and no such lines: fall back to
@@ -196,14 +197,14 @@ Step 0.
 
 **The claim is already open — do not open another one.** The plugin put the mark on that
 piece the moment the user pressed the key: it has been visible since before you read the
-prompt, and the cells inside will not run while it is there. Edit with `edit_replace`
+prompt, and the cells inside will not run while it is there. Edit with `jn replace`
 (below) — edits that land inside the claim keep it alive and turn its label from
-`отправлено` to `агент`. **When you are done, `edit_done($CLAIM)`** — that is what removes
+`отправлено` to `агент`. **When you are done, `jn done`** — that is what removes
 the mark and lets the cells run again. Done includes "nothing to change" and "I answered in
 words": the mark goes either way.
 
 ```sh
-nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").edit_done($CLAIM))')"
+$JN --sock "$SOCK" done "$NB" "$CLAIM"
 ```
 
 Whether the user wants the cell rewritten, a new cell after it, prose fixed, or nothing
@@ -211,16 +212,15 @@ changed at all — that is in the prompt, not in the claim. The claim only says 
 
 ## Editing
 
-**One operation for everything: `edit_replace(old, new)`.** Prose, a cell's code, several
+**One operation for everything: `jn replace <nb> <old> <new>`.** Prose, a cell's code, several
 cells with text between them, a new cell, a deleted cell — all the same: find `old` in the
 buffer, put `new` in its place. It works like your own Edit tool:
 
 - `old` must occur in the buffer **exactly once** — `not_found` / `ambiguous` otherwise,
   and nothing is written. That match is also the check that the user did not change this
   text while you were thinking: if they did, `old` is no longer there. Re-read and redo.
-- `old` and `new` go in **files**, not inline in the command — no escaping of quotes and
-  newlines. A trailing newline at the end of the file is dropped.
-- Always pass `notebook = "$NB"`: the current buffer is whatever the user is looking at.
+- `old` and `new` go in **files** (heredocs with a quoted `'TXT'`): quotes, backslashes and
+  newlines arrive as they are. A trailing newline at the end of the file is dropped.
 
 ```sh
 cat > /tmp/jn-old <<'TXT'
@@ -229,11 +229,11 @@ TXT
 cat > /tmp/jn-new <<'TXT'
 Вывод: расходится на 3% — разница в часовом поясе.
 TXT
-nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").edit_replace_files(\"/tmp/jn-old\", \"/tmp/jn-new\", {notebook = \"$NB\"}))')"
-# → {"ok":true,"start_row":42,"end_row":42}
+$JN replace "$NB" /tmp/jn-old /tmp/jn-new
+# → {"ok": true, "start_row": 42, "end_row": 42}
 ```
 
-**Adding new cells or text — `edit_insert`, by place, not by an anchor text.** Do not use
+**Adding new cells or text — `jn insert`, by place, not by an anchor text.** Do not use
 the tail of the previous cell as `old` for an append: that is how the structure slides.
 
 ~~~sh
@@ -243,13 +243,12 @@ df_dups = run_query("queries/25_dups.sql")
 ```
 TXT
 # before a heading (outside cells, must occur once): the end of a section
-nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").edit_insert({notebook = \"$NB\", before_heading = \"## Ручные запросы\", file = \"/tmp/jn-ins\"}))')"
-# → {"ok":true,"start_row":176,"end_row":178,"cell_ids":["13ca"]}
+$JN insert "$NB" /tmp/jn-ins --before-heading "## Ручные запросы"
+# → {"ok": true, "start_row": 176, "end_row": 178, "cell_ids": ["13ca"]}
 ~~~
 
-Place: `before_heading` (the whole heading line), `after_cell = "<id>"`, or `at_end = true`;
-text: `file` (preferred — no escaping) or `text`. Blank lines around the piece are added
-when missing; the new cells' ids come back in `cell_ids` — run them by those. Refusals:
+Place: `--before-heading` (the whole heading line), `--after-cell <id>`, or `--at-end`.
+Blank lines around the piece are added when missing; the new cells' ids come back in `cell_ids` — run them by those. Refusals:
 `not_found` / `ambiguous` (heading), `no_cell`, plus the checks below.
 
 **The plugin checks the document before writing** and refuses (nothing written) if after the
@@ -276,12 +275,13 @@ effect of "cleaning up".
 
 **Your own claim, when you started the edit yourself** (no `[jupyter.nvim]` prompt): open it
 before you start thinking about the change, so the user sees the mark before the write, not
-at it. `text` is a piece that occurs once — the claim covers its lines, widened to whole cells.
+at it. The file holds a piece that occurs once — the claim covers its lines, widened to whole
+cells.
 
 ```sh
-nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").edit_claim({text = \"Вывод: всё сходится.\", label = \"Claude\", title = \"переписываю вывод\", notebook = \"$NB\"}))')"
-# → {"ok":true,"token":3,"kind":"range","start_row":42,"end_row":42,"cells":[]}
-# … edit_replace …, then edit_done(3)
+$JN claim "$NB" /tmp/jn-old --title "переписываю вывод"
+# → {"ok": true, "token": 3, "kind": "range", "start_row": 42, "end_row": 42, "cells": []}
+# … jn replace …, then: $JN done "$NB" 3
 ```
 
 `claimed` means that piece already has a claim (its `token` is in the answer) — usually the
@@ -289,14 +289,14 @@ one the plugin opened for the user's prompt: work in it, do not open another.
 
 **A claim has a lifetime.** The mark counts its own age, and after five minutes with no
 word it is dropped by itself — an agent that crashed or went off to ask a question never
-sends `done`, and a mark that outlives it lies to the user. Every `edit_replace` inside the
-claim restarts the countdown; thinking longer without editing, `edit_touch(token)`.
+sends `done`, and a mark that outlives it lies to the user. Every `jn replace` inside the
+claim restarts the countdown; thinking longer without editing, `jn touch "$NB" <token>`.
 **A Stop hook checks this** (`.claude/hooks/jupyter_claim.py`): end your turn with the prompt's claim still open and you are sent back to close it; the second time the hook closes it itself and tells the user.
-**Asking the user something, or dropping the task: `edit_done` first** — your question may
+**Asking the user something, or dropping the task: `jn done` first** — your question may
 hang there for an hour; the mark must not.
 
 **Cells inside a claim will not run** (`запуск отклонён`): their code is about to change.
-Finish the edits, `edit_done`, then run.
+Finish the edits, `jn done`, then run.
 
 **Rejections must not be worked around.** Never push a rejected edit through
 `nvim_buf_set_lines` / `nvim_buf_set_text` yourself: that is exactly the case the rejection
@@ -306,7 +306,7 @@ An agent's edit is a separate undo step (with the ids it assigned), and it moves
 cursor nor insert mode. Open claims — `:JupyterEdits`; clear them all with `!`.
 
 The older cell-only calls (`edit_begin`, `edit_adopt`, `edit_apply`, `edit_delete`) still
-work, but `edit_replace` does everything they do; do not mix the two on one piece.
+work, but `jn replace` does everything they do; do not mix the two on one piece.
 
 **Never write magics into the body.** The fence carries the language, and the magic's
 parameters live in its info string: ```` ```sql magic_args="df_name=orders" ````. The plugin
@@ -318,49 +318,51 @@ and the `.ipynb` ends up with `%%sql` twice. Do not edit `magic_args` in a fence
 ## Running
 
 ```sh
-# run cell af4b of this notebook; the cursor is left alone
-nvim --server "$SOCK" --remote-expr "luaeval('vim.json.encode(require(\"jupyter\").agent_run({notebook = \"$NB\", cell = \"af4b\"}))')"
-# → {"ok":true,"cell_id":"af4b","run_id":3,"buf":3}
+# run cells af4b and 13ca of this notebook and wait for both; the cursor is left alone
+$JN run "$NB" af4b 13ca
+# af4b #3 ok · text · 1.2s · /w/.jupyter-out/01_eda/af4b/3.txt
+# 13ca #4 ok · table 1204×8 · 0.0s · cache · /w/.jupyter-out/01_eda/13ca/4.parquet · print: /w/.jupyter-out/01_eda/13ca/4.txt
 ```
 
-Address the cell by **id** (`cell`), not by line: your own edits shift the lines. `row = N`
-works too (any line inside the cell). Several cells: one call per cell, back to back; they
-queue in the kernel and run in order, no need to wait between them.
+Paths are absolute — read them as they are. `cache` means nb_utils served the query from
+its cache (`✓ из кэша` in the output), which is why it took 0.0s; the data is as old as that
+cache entry (the age is in the printed text).
 
-**Read the answer.** `ok: false` comes with a `reason`: `no_buffer` (notebook not open in
-this nvim — `agent_open` it, see Step 0), `no_cell`, `empty`, `claimed` (a claim holds the cell: `edit_done(token)` first),
-`no_python`. Do not report a run you did not get `ok: true` for.
+Address the cell by **id**, not by line: your own edits shift the lines. `row:N` works too
+(any line inside the cell). Several cells in one call queue in the kernel and run in order.
+**Run it in the background** (Bash `run_in_background`) when the cells query Redshift: it
+blocks until the runs are on disk, and you are woken when it exits — no polling loop of
+your own. `--no-wait` only starts them and prints the pairs (`af4b:3 13ca:4`) for a later
+`$JN wait "$NB" af4b:3 13ca:4`.
 
-**Only `agent_run`.** Never `ensure_started()` / `s.exec:run_at(...)` from outside: they take
-nvim's *current* buffer (Step 0), the run goes to a wrong session, finds no cell, and returns
-nothing, while a wrapper's `return "sent"` tells you it went fine.
+**Read the outcome.** A refusal stops the batch (exit 1, the reason on stderr): `no_buffer`
+(notebook not open in this nvim — `jn open` it, see Step 0), `no_cell`, `empty`, `claimed`
+(a claim holds the cell: `jn done` it first), `no_python`. Do not report a run you did not
+see a line for. Exit codes after the start: 0 all ok, 1 some `error`/`aborted` (the line
+carries `ename`), 2 timeout (`--timeout`, default 3600 s), 3 the kernel is gone and the run
+never reached disk. Paths are relative to `.jupyter-out/<notebook>/`; take the result from
+there, as above.
+
+**`в этом ядре … не выполнялись ячейки выше: e93d 345e`** (stderr) — code cells above the
+ones you ran that have not run in the current kernel (`row:N` for a cell without an id).
+The kernel restarts when the user reopens the notebook or presses restart, and their
+variables are gone. If your cell needs one of them, run those first, in the same call
+before yours (`$JN run "$NB" e93d 345e af4b`), rather than learning it from a `NameError`.
+`ядро подхвачено живым` — the kernel was picked up alive, and the list only means "not run
+since nvim attached": the variables may well be there.
 
 What the user sees is the same as for their own key: the status under the cell («в очереди»
 → «выполняется» → ✓) and the output window opening with the run, if the notebook is on
 screen (`visible`). The buffer is not saved before the run (their key does `:w`; you do not).
 
-**Then wait with `jn-wait`, in the background** (Bash `run_in_background`): it blocks until
-the runs are on disk and prints one line per cell, so you are woken when it exits — no
-polling loop of your own.
-
-```sh
-PYTHONPATH=~/Projects/jupyter.nvim/sidecar python3 -m jupyter_nvim.wait "$NB" af4b:3 13ca:4
-# af4b #3 ok · text · 1.2s · af4b/3.txt
-# 13ca #4 ok · table 1204×8 · 12.3s · 13ca/4.parquet · print: 13ca/4.txt
-```
-
-`cell:run_id` — the pairs `agent_run` returned. Exit code: 0 all ok, 1 some `error`/`aborted`
-(the line carries `ename`), 2 timeout (`--timeout`, default 3600 s), 3 the kernel is gone
-and the run never reached disk. Run numbers restart with every nvim restart; `jn-wait`
-only counts runs started under the current kernel, so an old `af4b #3` from another day
-does not satisfy it. Without `:run_id` it waits for the cell's next new run (the user's own
-run included). Paths are relative to `.jupyter-out/<notebook>/`; take the result from
-there, as above.
+`jn wait` counts only runs started under the current kernel (run numbers restart with
+every nvim restart), so an old `af4b #3` from another day does not satisfy it. Without
+`:run_id` it waits for the cell's next new run — the user's own run included.
 
 The first run of a cell that has no `jncell` yet — one the user typed or pasted by hand —
 **modifies the document**: the plugin writes `jncell="…"` into the marker. That is expected,
 but it means "just running it" is a buffer change too. Cells made by the plugin's commands or
-by your `edit_replace` already carry their id, and running them writes nothing.
+by your `jn replace`/`jn insert` already carry their id, and running them writes nothing.
 
 The commands in full (for a human, not for you): `:JupyterRun`, `:JupyterRunAll`,
 `:JupyterRunBelow`, `:JupyterInterrupt`, `:JupyterRestart`, `:JupyterTable`,
@@ -375,12 +377,12 @@ client code and the rules are in `reference.md`.
 
 - **Do not write to the notebook file** (`.ipynb` or the jupytext `.md`) while it is open
   in nvim: their `:w` will overwrite your edit, and your write will overwrite what they
-  have not saved. Edits go through `edit_replace`.
+  have not saved. Edits go through `jn replace` / `jn insert`.
 - **A write to the `.ipynb` never reaches the open buffer** (it was converted by jupytext
   when opened), so it looks like it worked and is gone at the next save. Prose is edited
-  with `edit_replace` like everything else.
+  with `jn replace` like everything else.
 - **Do not use `--remote-send`** (sending keys): it moves the cursor, and it turns into
-  garbage if the user is in insert mode. Only `--remote-expr` and the API by buffer number.
+  garbage if the user is in insert mode. Only `jn`.
 - **Do not move the cursor.** Everything you need takes a buffer and a line; read the
   cursor to see where the user is, but never reposition it.
 - **Do not reason away a `stale` output.** If the snapshot says the code changed after the

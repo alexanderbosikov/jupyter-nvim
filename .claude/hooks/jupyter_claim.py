@@ -18,6 +18,7 @@ Stop: заявка сессии ещё открыта в nvim — не даём 
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -89,7 +90,7 @@ def on_prompt(event: dict) -> None:
                     "additionalContext": (
                         f"Промпт отправлен из jupyter.nvim ({notebook}). Сначала загрузи скилл jupyter-nvim. "
                         f"На ячейке у человека стоит метка заявки {claim}: до конца ответа ОБЯЗАТЕЛЬНО сними её — "
-                        f"edit_done({claim}) по сокету {socket}. Это нужно сделать и когда правки не было, "
+                        f"`~/Projects/jupyter.nvim/bin/jn --sock {shlex.quote(socket)} done {shlex.quote(notebook)} {claim}`. Это нужно сделать и когда правки не было, "
                         "и перед тем, как задать человеку вопрос."
                     ),
                 }
@@ -117,8 +118,8 @@ def on_stop(event: dict) -> None:
                     "decision": "block",
                     "reason": (
                         f"Заявка {claim} из промпта jupyter.nvim всё ещё открыта — метка висит на ячейке "
-                        f"у человека, и ячейка не запускается. Сними её: nvim --server {socket} --remote-expr "
-                        f"\"luaeval('vim.json.encode(require(\\\"jupyter\\\").edit_done({claim}))')\" "
+                        f"у человека, и ячейка не запускается. Сними её: ~/Projects/jupyter.nvim/bin/jn "
+                        f"--sock {shlex.quote(socket)} done {shlex.quote(state.get('notebook') or '-')} {claim} "
                         "(скилл jupyter-nvim) и закончи ответ."
                     ),
                 },

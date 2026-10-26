@@ -13,6 +13,7 @@ dev = ["pytest>=8", "ipykernel>=6"]
 jupyter-out = "jupyter_nvim.cli:main"
 jn-wait = "jupyter_nvim.wait:main"
 jn-nvim = "jupyter_nvim.find_nvim:main"
+jn = "jupyter_nvim.jn:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

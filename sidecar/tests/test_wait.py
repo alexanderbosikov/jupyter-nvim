@@ -46,7 +46,21 @@ def test_waits_for_the_run_and_prints_it(out, capsys):
     later(lambda: out.append(rec("af4b", 3, kind="table", rows=5, cols=2, path="af4b/3.parquet", text="af4b/3.out.txt")))
     assert run(out, "af4b:3") == OK
     line = capsys.readouterr().out.strip()
-    assert line == "af4b #3 ok · table 5×2 · 1.2s · af4b/3.parquet · print: af4b/3.out.txt"
+    b = out.base
+    assert line == f"af4b #3 ok · table 5×2 · 1.2s · {b}/af4b/3.parquet · print: {b}/af4b/3.out.txt"
+
+
+def test_cache_hit_is_marked(out, capsys):
+    # 0.0s у запроса из кэша nb_utils иначе читается как «запрос не выполнялся»
+    alive_kernel(out)
+    (out.base / "af4b").mkdir()
+    (out.base / "af4b" / "3.out.txt").write_text("✓ из кэша: 167 строк (только что); cache=False — заново\n")
+    out.append(rec("af4b", 3, duration_ms=10, kind="table", rows=167, cols=2, path="af4b/3.parquet", text="af4b/3.out.txt"))
+    out.append(rec("13ca", 1))
+    assert run(out, "af4b:3", "13ca:1") == OK
+    lines = capsys.readouterr().out.splitlines()
+    assert " · 0.0s · cache · " in lines[0]
+    assert " · cache · " not in lines[1]
 
 
 def test_same_run_id_from_before_the_kernel_started_does_not_count(out):

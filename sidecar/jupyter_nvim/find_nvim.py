@@ -115,13 +115,10 @@ def pick(found: dict[str, dict[str, Any]], me: dict[str, Any], notebook: str) ->
     return ranked[0][2], ranked
 
 
-def main(argv: list[str] | None = None, ask: Callable[[str, str], dict | None] = query) -> int:
-    ap = argparse.ArgumentParser(prog="jn-nvim", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("notebook", nargs="?", default="")
-    ap.add_argument("--sockets", nargs="*", help=argparse.SUPPRESS)
-    args = ap.parse_args(argv)
-
-    notebook = str(Path(args.notebook).expanduser().resolve()) if args.notebook else ""
+def locate(notebook: str, socks: list[str] | None = None,
+           ask: Callable[[str, str], dict | None] = query) -> tuple[str | None, list]:
+    """Сокет nvim для ноутбука и кандидаты по очкам — то, что печатает `main`."""
+    notebook = str(Path(notebook).expanduser().resolve()) if notebook else ""
     me = {
         "cwd": os.getcwd(),
         "htab": os.environ.get("HERDR_TAB_ID"),
@@ -129,21 +126,35 @@ def main(argv: list[str] | None = None, ask: Callable[[str, str], dict | None] =
         "tmux": tmux_where(os.environ.get("TMUX_PANE")),
     }
     found = {}
-    for sock in args.sockets if args.sockets is not None else sockets():
+    for sock in socks if socks is not None else sockets():
         nv = ask(sock, notebook)
         if nv:
             nv["tmux"] = tmux_where(nv.get("tmux_pane")) if me["tmux"] else None
             found[sock] = nv
-    best, ranked = pick(found, me, notebook)
+    return pick(found, me, notebook)
+
+
+def explain(ranked: list) -> str:
+    """Почему сокета нет: для stderr, агенту — спросить человека."""
+    if not ranked:
+        return "нет nvim ни в этой вкладке, ни с этим cwd — спроси у человека (:echo v:servername)"
+    lines = ["несколько nvim подходят одинаково — спроси у человека (:echo v:servername):"]
+    for pts, why, sock, nv in ranked:
+        lines.append(f"  {sock}  pid {nv.get('pid')}  cwd {nv.get('cwd')}  [{pts}: {', '.join(why)}]")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None, ask: Callable[[str, str], dict | None] = query) -> int:
+    ap = argparse.ArgumentParser(prog="jn-nvim", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("notebook", nargs="?", default="")
+    ap.add_argument("--sockets", nargs="*", help=argparse.SUPPRESS)
+    args = ap.parse_args(argv)
+
+    best, ranked = locate(args.notebook, args.sockets, ask)
     if best:
         print(best)
         return 0
-    if not ranked:
-        print("нет nvim ни в этой вкладке, ни с этим cwd — спроси у человека (:echo v:servername)", file=sys.stderr)
-    else:
-        print("несколько nvim подходят одинаково — спроси у человека (:echo v:servername):", file=sys.stderr)
-        for pts, why, sock, nv in ranked:
-            print(f"  {sock}  pid {nv.get('pid')}  cwd {nv.get('cwd')}  [{pts}: {', '.join(why)}]", file=sys.stderr)
+    print(explain(ranked), file=sys.stderr)
     return 1
 
 

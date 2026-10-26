@@ -6,9 +6,12 @@
 
 На каждую ячейку одна строка, по мере того как они заканчиваются:
 
-    af4b #3 ok · text · 1.2s · af4b/3.txt
-    13ca #4 ok · table 1204×8 · 12.3s · 13ca/4.parquet · print: 13ca/4.txt
-    5e1d #5 error ProgrammingError · 0.4s · 5e1d/5.txt
+    af4b #3 ok · text · 1.2s · /w/.jupyter-out/01_eda/af4b/3.txt
+    13ca #4 ok · table 1204×8 · 0.0s · cache · /w/.jupyter-out/01_eda/13ca/4.parquet · print: …/13ca/4.txt
+    5e1d #5 error ProgrammingError · 0.4s · /w/.jupyter-out/01_eda/5e1d/5.txt
+
+Пути абсолютные. `cache` — запрос взят из кэша nb_utils (в выводе есть «✓ из кэша»): 0.0s
+не значит, что запрос пустой или не выполнялся.
 
 Код возврата: 0 — все ok; 1 — хоть одна error/aborted; 2 — истёк таймаут; 3 — ядро
 умерло (или так и не поднялось за `--start-grace`), а прогона на диске так и нет.
@@ -67,7 +70,23 @@ def _key(rec: dict[str, Any]) -> tuple:
     return rec.get("cell_id"), rec.get("run_id"), rec.get("started_at")
 
 
-def summary(rec: dict[str, Any]) -> str:
+# что печатает nb_utils, когда run_query отдаёт результат из кэша, а не из базы
+CACHE_MARK = "✓ из кэша"
+
+
+def _cached(out: OutDir, rec: dict[str, Any]) -> bool:
+    rels = [rec.get("text"), rec.get("path") if rec.get("kind") == "text" else None]
+    for rel in filter(None, rels):
+        try:
+            with open(out.base / rel, encoding="utf-8", errors="replace") as f:
+                if CACHE_MARK in f.read(8192):
+                    return True
+        except OSError:
+            pass
+    return False
+
+
+def summary(rec: dict[str, Any], out: OutDir) -> str:
     head = f"{rec.get('cell_id')} #{rec.get('run_id')} {rec.get('status')}"
     if rec.get("ename"):
         head += f" {rec['ename']}"
@@ -79,10 +98,12 @@ def summary(rec: dict[str, Any]) -> str:
         parts.append(kind)
     if rec.get("duration_ms") is not None:
         parts.append(f"{rec['duration_ms'] / 1000:.1f}s")
+    if _cached(out, rec):
+        parts.append("cache")
     if rec.get("path"):
-        parts.append(str(rec["path"]))
+        parts.append(str(out.base / rec["path"]))
     if rec.get("text"):
-        parts.append(f"print: {rec['text']}")
+        parts.append(f"print: {out.base / rec['text']}")
     return " · ".join(parts)
 
 
@@ -125,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
                 started = _time(rec.get("started_at"))
                 if since and started and started < since:
                     continue  # тот же номер из прошлой жизни nvim
-            print(summary(rec), flush=True)
+            print(summary(rec, out), flush=True)
             if rec.get("status") != "ok":
                 code = FAILED
             del want[cell]

@@ -1,0 +1,5 @@
+#!/bin/sh
+# jn — агентский API jupyter.nvim из shell (sidecar/jupyter_nvim/jn.py). Только stdlib:
+# годится любой python3, окружение сайдкара не нужно.
+root=$(cd "$(dirname "$0")/.." && pwd -P)
+PYTHONPATH="$root/sidecar${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m jupyter_nvim.jn "$@"

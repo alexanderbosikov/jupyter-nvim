@@ -438,6 +438,14 @@ From a script, without entering the editor (for the socket address, `:echo v:ser
 nvim --server "$SOCK" --remote-expr 'luaeval("require(\"jupyter\").snapshot_json()")'
 ```
 
+Or with `bin/jn`, which finds the nvim that has the notebook open by itself and covers
+the rest of the agent API as well (`open`, `run` with waiting, `replace`, `insert`,
+`claim`/`done`; `bin/jn --help`):
+
+```sh
+bin/jn snapshot ~/work/analysis/.../01_eda.ipynb --brief
+```
+
 ```json
 {"notebook": "/…/01_eda.md", "representation": "fence", "modified": false, "lines": 99,
  "out_dir": "/…/.jupyter-out/01_eda",
