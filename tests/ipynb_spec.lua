@@ -259,6 +259,64 @@ describe("ipynb: свои BufReadCmd и BufWriteCmd", function()
     end)
 end)
 
+describe("ipynb: id ячеек при cell_metadata_filter: -all", function()
+    local dir, path
+
+    before_each(function()
+        dir = vim.fn.tempname()
+        vim.fn.mkdir(dir, "p")
+        path = dir .. "/nb.ipynb"
+    end)
+
+    after_each(function()
+        vim.cmd("silent! %bwipeout!")
+        vim.fn.delete(dir, "rf")
+    end)
+
+    -- так выглядит ноутбук, собранный `jupytext --to ipynb` из markdown без шапки
+    local function filtered()
+        notebook(path, {
+            {
+                cell_type = "code",
+                id = "c1",
+                execution_count = 1,
+                metadata = { jncell = "e93d", lines_to_next_cell = 2 },
+                outputs = {},
+                source = { "x = 1" },
+            },
+        })
+        local nb = decode(path)
+        nb.metadata.jupytext = { cell_metadata_filter = "-all", notebook_metadata_filter = "-all" }
+        vim.fn.writefile({ vim.json.encode(nb) }, path)
+    end
+
+    it("id доходит до буфера, а новый id — до файла", function()
+        if not available then
+            return
+        end
+        filtered()
+
+        vim.cmd.edit(path)
+
+        assert.is_true(vim.tbl_contains(lines(), '```python jncell="e93d"'))
+        local row = vim.fn.index(lines(), '```python jncell="e93d"')
+        vim.api.nvim_buf_set_lines(0, row, row + 1, false, { '```python jncell="beef"' })
+        vim.cmd("silent write")
+        assert.equals("beef", decode(path).cells[1].metadata.jncell)
+    end)
+end)
+
+describe("ipynb.cell_filter", function()
+    it("дописывает jncell к белому списку, остальное не трогает", function()
+        assert.equals("jncell,-all", ipynb.cell_filter("-all"))
+        assert.equals("jncell,tags,-all", ipynb.cell_filter("tags,-all"))
+        assert.is_nil(ipynb.cell_filter("jncell,-all"))
+        assert.is_nil(ipynb.cell_filter("-lines_to_next_cell"))
+        assert.equals("all", ipynb.cell_filter("-jncell,all"))
+        assert.is_nil(ipynb.cell_filter(nil))
+    end)
+end)
+
 describe("ipynb.strip_header", function()
     it("срезает только шапку jupytext", function()
         assert.same({ "x" }, ipynb.strip_header({ "---", "jupyter:", "  a: 1", "---", "", "x" }))

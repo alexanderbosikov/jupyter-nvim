@@ -162,6 +162,47 @@ function M.strip_header(lines)
     return vim.list_slice(lines, first)
 end
 
+---Фильтр метаданных ячеек, который пропускает `jncell` (cellid.lua). nil — менять нечего.
+---
+---Ноутбук, собранный `jupytext --to ipynb` из markdown без шапки, получает
+---`cell_metadata_filter: -all`: jupytext выкидывает из фенсов все метаданные ячеек, и id
+---тоже. Буфер открывается без них, первый запуск выдаёт ячейкам новые, а `--update` на
+---записи возвращает в файл старые — фильтр говорит ему, что в тексте их и не было. Так
+---id не переживали переоткрытие. Дописываем `jncell` к белому списку: остальное
+---фильтр прячет, как и прятал.
+---@param filter string|nil `metadata.jupytext.cell_metadata_filter` ноутбука
+---@return string|nil
+function M.cell_filter(filter)
+    if type(filter) ~= "string" then
+        return nil
+    end
+    local keys, changed = {}, false
+    for key in filter:gmatch("[^,]+") do
+        if key == "-jncell" then
+            changed = true
+        else
+            table.insert(keys, key)
+        end
+    end
+    if vim.list_contains(keys, "-all") and not vim.list_contains(keys, "jncell") then
+        table.insert(keys, 1, "jncell")
+        changed = true
+    end
+    return changed and table.concat(keys, ",") or nil
+end
+
+---Аргументы jupytext, чтобы `jncell` доходил до буфера и обратно (M.cell_filter).
+---@param path string ноутбук на диске
+---@return string[]
+local function keep_ids(path)
+    local ok, nb = pcall(function()
+        return vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
+    end)
+    local jt = ok and type(nb) == "table" and type(nb.metadata) == "table" and nb.metadata.jupytext
+    local filter = type(jt) == "table" and M.cell_filter(jt.cell_metadata_filter)
+    return filter and { "--opt", "cell_metadata_filter=" .. filter } or {}
+end
+
 ---@param text string
 ---@return string[]
 local function split(text)
@@ -185,7 +226,8 @@ function M.read(buf, path)
         -- метаданные появятся при первой записи (seed)
         lines = M.template(path)
     else
-        local out, err = jupytext({ "--quiet", "--from", "ipynb", "--to", M.FORMAT, "--output", "-", path })
+        local args = vim.list_extend({ "--quiet", "--from", "ipynb", "--to", M.FORMAT }, keep_ids(path))
+        local out, err = jupytext(vim.list_extend(args, { "--output", "-", path }))
         if out then
             lines = M.strip_header(split(out))
         else
@@ -320,8 +362,9 @@ function M.write(buf, path, range)
         end
         if ok then
             local text = table.concat(M.trim(lines), "\n") .. "\n"
+            local args = vim.list_extend({ "--quiet", "--from", M.FORMAT, "--to", "ipynb", "--update" }, keep_ids(tmp))
             local _
-            _, err = jupytext({ "--quiet", "--from", M.FORMAT, "--to", "ipynb", "--update", "--output", tmp, "-" }, text)
+            _, err = jupytext(vim.list_extend(args, { "--output", tmp, "-" }), text)
             ok = err == nil
         end
     end
