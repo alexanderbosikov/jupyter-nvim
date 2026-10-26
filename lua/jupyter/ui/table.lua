@@ -264,6 +264,26 @@ function M.format(header, rows, opts)
     return out, layout
 end
 
+---Отрезать слева `cols` экранных колонок: заголовок в winbar сдвигается вместе с таблицей.
+---Широкий символ, разрезанный краем, заменяется пробелом — иначе колонки разъедутся.
+---@param text string
+---@param cols integer
+---@return string
+function M.drop_cols(text, cols)
+    if cols <= 0 then
+        return text
+    end
+    local x, n = 0, vim.fn.strchars(text)
+    for i = 0, n - 1 do
+        local ch = vim.fn.strcharpart(text, i, 1)
+        x = x + vim.fn.strdisplaywidth(ch)
+        if x >= cols then
+            return string.rep(" ", x - cols) .. vim.fn.strcharpart(text, i + 1)
+        end
+    end
+    return ""
+end
+
 ---@class jupyter.TableView
 local View = {}
 View.__index = View
@@ -291,6 +311,7 @@ function M.new(opts)
         header = {},
         rows = {},
         layout = {},
+        head_line = nil, -- нарисованная строка заголовка: её держит winbar, когда шапка уехала вверх
         -- стек сортировки: первый элемент — главный ключ, остальные разрешают равенство
         order = {},
     }, View)
@@ -335,6 +356,17 @@ function View:open(path, label, cell_id)
         vim.wo[self.win].relativenumber = false
         vim.wo[self.win].signcolumn = "no"
         vim.wo[self.win].cursorline = true
+        -- шапка уехала из окна или таблицу сдвинули вбок — winbar держит заголовок
+        local win = self.win
+        vim.api.nvim_create_autocmd("WinScrolled", {
+            pattern = tostring(win),
+            callback = function()
+                if self.win ~= win or not self:is_open() then
+                    return true
+                end
+                self:_render_winbar()
+            end,
+        })
     end
     self:page(0)
 end
@@ -377,11 +409,12 @@ function View:page(offset)
             first_row = page.offset + 1,
         })
         self.layout = layout
+        self.head_line = #layout > 0 and lines[1] or nil
         common.set_lines(self:_ensure_buf(), lines)
-        self:_render_winbar()
         if self:is_open() then
             pcall(vim.api.nvim_win_set_cursor, self.win, { 1, 0 })
         end
+        self:_render_winbar() -- после курсора: от верхней строки окна зависит, что в winbar
     end)
 end
 
@@ -545,8 +578,21 @@ function View:status()
     return sort ~= "" and (sort .. " · " .. base) or base
 end
 
+---Что в winbar. Пока шапка таблицы видна — название и статус. Уехала вверх — сама шапка,
+---сдвинутая по горизонтали вместе с таблицей: так заголовки колонок всегда над колонками.
+---Высота winbar при этом не меняется, и таблица не прыгает.
 function View:_render_winbar()
     if not self:is_open() then
+        return
+    end
+    local view = vim.api.nvim_win_call(self.win, vim.fn.winsaveview)
+    if self.head_line and view.topline > 1 then
+        local textoff = vim.fn.getwininfo(self.win)[1].textoff
+        -- %< в конце: не влезает — режется правый край (по умолчанию winbar режет левый)
+        vim.wo[self.win].winbar = hl.wrap(
+            "JupyterWinBar",
+            common.escape_status(string.rep(" ", textoff) .. M.drop_cols(self.head_line, view.leftcol))
+        ) .. "%<"
         return
     end
     vim.wo[self.win].winbar = table.concat({

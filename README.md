@@ -164,6 +164,11 @@ order by platform preserved inside each day. The current order is visible in the
 line; the sorting is done by the sidecar on the parquet side, so paging stays consistent:
 page 2 continues page 1.
 
+Once the header scrolls out of view, the winbar holds the column names instead of the
+title and the status, shifted together with the table when it scrolls sideways, so every
+name stays above its column. Back at the top, the title and the status return. The winbar
+keeps its height either way, so the table does not jump.
+
 `<Tab>` and `<S-Tab>` swap the table for the one of the nearest cell below or above that has
 a table result, in the same tab; cells without one are skipped, and at the edge of the
 notebook the plugin says there are no more. The run taken is the one `:JupyterTable` would

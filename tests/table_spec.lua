@@ -573,3 +573,82 @@ describe("значение клетки целиком", function()
         view:close()
     end)
 end)
+
+describe("заголовок над колонками", function()
+    local view
+
+    after_each(function()
+        if view then
+            view:close()
+        end
+    end)
+
+    it("drop_cols отрезает экранные колонки, а не байты", function()
+        assert.equals("bc", table_view.drop_cols("abc", 1))
+        assert.equals("мя", table_view.drop_cols("имя", 1))
+        assert.equals(" b", table_view.drop_cols("日b", 1), "разрезанный широкий символ — пробел")
+        assert.equals("", table_view.drop_cols("ab", 5))
+        assert.equals("ab", table_view.drop_cols("ab", 0))
+    end)
+
+    it("шапка уехала вверх — winbar держит заголовки, сдвинутые вместе с таблицей", function()
+        local rows = {}
+        for i = 1, 200 do
+            rows[i] = { tostring(i), "значение" }
+        end
+        view = table_view.new({
+            sidecar = {
+                request = function(_, _, _, cb)
+                    cb(nil, { header = { "id", "колонка" }, rows = rows, offset = 0, total_rows = 200 })
+                end,
+            },
+            page_size = 200,
+        })
+        view:open("/tmp/df.parquet", "a3f9")
+        local head = vim.api.nvim_buf_get_lines(view.buf, 0, 1, false)[1]
+
+        assert.matches("строки 1", vim.wo[view.win].winbar, "шапка видна — в winbar статус")
+
+        vim.api.nvim_win_call(view.win, function()
+            vim.fn.winrestview({ topline = 50, lnum = 60 })
+        end)
+        view:_render_winbar()
+        assert.truthy(vim.wo[view.win].winbar:find(head, 1, true), "уехала — в winbar шапка")
+
+        vim.api.nvim_win_call(view.win, function()
+            vim.fn.winrestview({ topline = 50, lnum = 60, leftcol = 3 })
+        end)
+        view:_render_winbar()
+        assert.truthy(vim.wo[view.win].winbar:find(table_view.drop_cols(head, 3), 1, true))
+        assert.falsy(vim.wo[view.win].winbar:find(head, 1, true), "сдвинута вместе с колонками")
+
+        vim.api.nvim_win_call(view.win, function()
+            vim.fn.winrestview({ topline = 1, lnum = 1, leftcol = 0 })
+        end)
+        view:_render_winbar()
+        assert.matches("строки 1", vim.wo[view.win].winbar, "вернулись наверх — снова статус")
+    end)
+
+    it("WinScrolled перерисовывает winbar сам", function()
+        local rows = {}
+        for i = 1, 200 do
+            rows[i] = { tostring(i) }
+        end
+        view = table_view.new({
+            sidecar = {
+                request = function(_, _, _, cb)
+                    cb(nil, { header = { "id" }, rows = rows, offset = 0, total_rows = 200 })
+                end,
+            },
+            page_size = 200,
+        })
+        view:open("/tmp/df.parquet")
+
+        vim.api.nvim_win_call(view.win, function()
+            vim.cmd("normal! 100G")
+        end)
+        vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(view.win) })
+
+        assert.falsy(vim.wo[view.win].winbar:find("строки", 1, true))
+    end)
+end)
