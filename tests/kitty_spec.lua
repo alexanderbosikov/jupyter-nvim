@@ -80,6 +80,14 @@ describe("kitty: последовательности", function()
             assert.is_true(kitty.available())
         end)
 
+        it("под herdr крупные картинки не напрямую: предел по пикселям", function()
+            assert.is_nil(kitty.max_pixels())
+            vim.env.TERM_PROGRAM = "herdr"
+            local limit = kitty.max_pixels()
+            assert.is_true(2383 * 1379 <= limit) -- такие доходили
+            assert.is_true(3170 * 3399 > limit) -- такая пропала
+        end)
+
         it("herdr не в Ghostty — через image.nvim", function()
             vim.env.TERM_PROGRAM = "herdr"
             assert.is_false(kitty.available())

@@ -31,15 +31,21 @@ local View = {}
 View.__index = View
 
 ---@param opts table images (jupyter.Images), keys, on_step, on_close,
----  direct (рисовать по kitty напрямую; nil — где терминал позволяет), send и cell_size (для тестов)
+---  direct (рисовать по kitty напрямую; nil — где терминал позволяет), send и cell_size (для тестов),
+---  max_pixels (крупнее — через image.nvim; nil — по терминалу, false — без предела)
 function M.new(opts)
     local direct = opts.direct
     if direct == nil then
         direct = kitty.available()
     end
+    local max_pixels = opts.max_pixels
+    if max_pixels == nil then
+        max_pixels = kitty.max_pixels() or false
+    end
     return setmetatable({
         images = opts.images,
         direct = direct,
+        max_pixels = max_pixels,
         send = opts.send or kitty.send,
         cell_size = opts.cell_size or kitty.cell_size,
         direct_id = nil, -- id картинки, нарисованной напрямую и ещё не удалённой
@@ -186,6 +192,9 @@ function View:_direct_show(path)
     local w, h = kitty.png_size(path)
     if not w then
         return false -- не png (svg, битый файл): это image.nvim умеет, мы нет
+    end
+    if self.max_pixels and w * h > self.max_pixels then
+        return false -- терминал такую не донесёт (kitty.max_pixels): image.nvim ужмёт под окно
     end
     local cw, ch = self.cell_size()
     if not cw then

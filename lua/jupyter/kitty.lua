@@ -29,6 +29,20 @@ function M.available()
     return vim.env.KITTY_WINDOW_ID ~= nil or program == "ghostty" or program == "WezTerm"
 end
 
+---Сколько пикселей картинки можно отдать напрямую; nil — без предела.
+---
+---herdr (0.9.5) крупную картинку принимает — отвечает OK и на передачу, и на размещение, —
+---но до Ghostty не доносит: на экране пусто. Проверено на графике 3170×3399 (43 МБ
+---RGBA); всё до 2383×1379 доходило. Крупнее предела рисует image.nvim — он ужимает файл
+---под окно, и такая доходит. 4 Мп — 16 МБ RGBA, с запасом над проверенным.
+---@return integer|nil
+function M.max_pixels()
+    if vim.env.TERM_PROGRAM == "herdr" then
+        return 4 * 1024 * 1024
+    end
+    return nil
+end
+
 -- Куда писать: в tty тем же путём, что image.nvim (fd 1). Через vim.v.stderr размещение
 -- картинки до herdr не доходило — проверено.
 local tty

@@ -245,6 +245,22 @@ describe("картинки во всю вкладку", function()
         assert.equals(0, #sent)
     end)
 
+    it("картинка крупнее предела терминала — рисует image.nvim, не напрямую", function()
+        local img, sent = fake_images(), {}
+        local view = image_view.new({
+            images = img,
+            direct = true,
+            cell_size = CELL,
+            max_pixels = 0, -- png 1×1 уже крупнее
+            send = function(s) table.insert(sent, s) end,
+        })
+
+        view:open({ png_file() }, nil, "a3f9")
+
+        assert.equals(1, #img.shown)
+        assert.equals(0, #sent)
+    end)
+
     it("напрямую не png — рисует image.nvim", function()
         local img = fake_images()
         local view = image_view.new({ images = img, direct = true, cell_size = CELL, send = function() end })
