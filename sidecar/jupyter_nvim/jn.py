@@ -2,10 +2,11 @@
 
     jn open     <nb>                         открыть в nvim человека и поднять ядро
     jn snapshot <nb> [--brief] [--cell ID…]  снимок: ячейки, id, прогоны
-    jn text     <nb>                         текст ноутбука из буфера (с несохранённым)
+    jn text     <nb> [--cell ID]             текст ноутбука (или тело ячейки) из буфера
     jn run      <nb> <ячейка>… [--no-wait]   запустить по id (или row:N) и дождаться
     jn wait     <nb> <ячейка>[:<прогон>]…    дождаться прогонов (как jn-wait)
     jn replace  <nb> <old-файл> <new-файл>   заменить кусок, встречающийся ровно раз
+    jn replace  <nb> --old ТЕКСТ --new ТЕКСТ  то же для коротких строк
     jn insert   <nb> <файл> (--before-heading H | --after-cell ID | --at-end)
     jn claim    <nb> <файл> [--title T]      заявка на кусок из файла
     jn done     <nb> <заявка>                снять заявку
@@ -31,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable
 
@@ -110,6 +112,40 @@ def brief(snap: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _warned_path(notebook: str) -> Path:
+    return Path(tempfile.gettempdir(), "jn-warned", sha256(notebook.encode()).hexdigest()[:16] + ".json")
+
+
+def unwarned(notebook: str, kernel_key: str, missing: list[str]) -> list[str]:
+    """Из невыполненных ячеек — те, о которых в этом ядре ещё не предупреждали.
+
+    Иначе каждый `jn run` подряд повторяет один и тот же список, хотя агенту эти ячейки
+    не нужны. Ядро сменилось (`kernel_key` другой) — предупреждаем заново.
+    """
+    path = _warned_path(notebook)
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    shown = set(state.get("shown", [])) if state.get("kernel") == kernel_key else set()
+    new = [c for c in missing if c not in shown]
+    if new:
+        try:
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(json.dumps({"kernel": kernel_key, "shown": sorted(shown | set(new))}), encoding="utf-8")
+        except OSError:
+            pass
+    return new
+
+
+def cell_text(snap: dict[str, Any], text: str, cell: str) -> str | None:
+    """Тело ячейки как в буфере — готовый `old` для `jn replace`."""
+    for c in snap.get("cells", []):
+        if c.get("id") == cell:
+            return "\n".join(text.split("\n")[c["start_row"] - 1:c["end_row"]])
+    return None
+
+
 def pane(name: str) -> tuple[str, dict[str, Any]] | None:
     """Запись панели агента про ноутбук `<каталог>/<файл>` из шапки [jupyter.nvim]-промпта."""
     pane_id = os.environ.get("TMUX_PANE") or os.environ.get("HERDR_PANE_ID")
@@ -142,7 +178,7 @@ def main(argv: list[str] | None = None, call: Call = remote,
     p = nb_cmd("snapshot")
     p.add_argument("--brief", action="store_true", help="по строке на ячейку")
     p.add_argument("--cell", nargs="+", default=None, help="только эти ячейки")
-    nb_cmd("text")
+    nb_cmd("text").add_argument("--cell", default=None, help="только тело этой ячейки")
     p = nb_cmd("run")
     p.add_argument("cells", nargs="+", metavar="ячейка", help="id или row:N")
     p.add_argument("--no-wait", action="store_true", help="только запустить: печатает пары для jn wait")
@@ -151,8 +187,10 @@ def main(argv: list[str] | None = None, call: Call = remote,
     p.add_argument("cells", nargs="+", metavar="ячейка[:прогон]")
     p.add_argument("--timeout", type=float, default=3600)
     p = nb_cmd("replace")
-    p.add_argument("old", help="файл с текущим текстом куска ('-' — stdin)")
-    p.add_argument("new", help="файл с новым текстом")
+    p.add_argument("old", nargs="?", help="файл с текущим текстом куска ('-' — stdin)")
+    p.add_argument("new", nargs="?", help="файл с новым текстом")
+    p.add_argument("--old", dest="old_text", help="текущий текст строкой, вместо файла")
+    p.add_argument("--new", dest="new_text", help="новый текст строкой, вместо файла")
     p = nb_cmd("insert")
     p.add_argument("file", help="файл с вставкой ('-' — stdin)")
     where = p.add_mutually_exclusive_group(required=True)
@@ -167,6 +205,12 @@ def main(argv: list[str] | None = None, call: Call = remote,
         nb_cmd(name).add_argument("token", type=int)
     sub.add_parser("pane").add_argument("name", help="ноутбук как в шапке: <каталог>/<файл>")
     args = ap.parse_args(argv)
+    if args.cmd == "replace":
+        files = (args.old, args.new)
+        flags = (args.old_text, args.new_text)
+        if not (all(f is not None for f in files) and flags == (None, None)
+                or all(f is not None for f in flags) and files == (None, None)):
+            ap.error("replace: два файла (old new) или --old ТЕКСТ --new ТЕКСТ")
 
     if args.cmd == "pane":
         hit = pane(args.name)
@@ -209,12 +253,20 @@ def main(argv: list[str] | None = None, call: Call = remote,
             res = nv("text", notebook)
             if res.get("ok") is False:
                 return _print(res)
+            if args.cell:
+                body = cell_text(nv("snapshot", notebook), res["text"], args.cell)
+                if body is None:
+                    return _print({"ok": False, "reason": "no_cell", "msg": f"нет ячейки {args.cell}"})
+                print(body)
+                return 0
             print(res["text"])
             return 0
         if args.cmd == "run":
             return run(nv, notebook, args)
         if args.cmd == "replace":
-            return _print(nv("edit_replace", _read(args.old), _read(args.new), {"notebook": notebook}))
+            old = args.old_text if args.old_text is not None else _read(args.old)
+            new = args.new_text if args.new_text is not None else _read(args.new)
+            return _print(nv("edit_replace", old, new, {"notebook": notebook}))
         if args.cmd == "insert":
             opts = {"notebook": notebook, "text": _read(args.file)}
             if args.before_heading:
@@ -258,9 +310,9 @@ def run(nv: Callable[..., dict[str, Any]], notebook: str, args: argparse.Namespa
         pairs.append(f"{res['cell_id']}:{res['run_id']}")
         missing += [c for c in res.get("not_run_above") or [] if c not in missing]
         kernel = res.get("kernel") or {}
-    missing = [c for c in missing if c not in asked]
+    since = kernel.get("since")
+    missing = unwarned(notebook, f"{since}|{kernel.get('attached')}", [c for c in missing if c not in asked])
     if missing:
-        since = kernel.get("since")
         note = " (ядро подхвачено живым: переменные могут быть)" if kernel.get("attached") else ""
         print(f"в этом ядре{f' (с {since})' if since else ''} не выполнялись ячейки выше: "
               f"{' '.join(missing)}{note}", file=sys.stderr)

@@ -91,6 +91,7 @@ never moves, and unsaved edits are read as well.
 $JN snapshot "$NB" --brief        # one line per cell: id, lang, rows, last run, stale
 $JN snapshot "$NB"                # the full snapshot, JSON (--cell e93d f5a8 — only those)
 $JN text "$NB"                    # the whole notebook text, including anything unsaved
+$JN text "$NB" --cell e93d        # one cell's body, exactly as in the buffer — a ready `old`
 ```
 
 `no_buffer` — the notebook is not open in that nvim: `jn open` it (Step 0).
@@ -231,7 +232,13 @@ cat > /tmp/jn-new <<'TXT'
 TXT
 $JN replace "$NB" /tmp/jn-old /tmp/jn-new
 # → {"ok": true, "start_row": 42, "end_row": 42}
+
+# a one-line change: inline, no files
+$JN replace "$NB" --old 'limit = 100' --new 'limit = 1000'
 ```
+
+Inline `--old`/`--new` only for a single line without tricky quoting; anything multi-line
+goes through files.
 
 **Adding new cells or text — `jn insert`, by place, not by an anchor text.** Do not use
 the tail of the previous cell as `old` for an append: that is how the structure slides.
@@ -340,11 +347,12 @@ your own. `--no-wait` only starts them and prints the pairs (`af4b:3 13ca:4`) fo
 (a claim holds the cell: `jn done` it first), `no_python`. Do not report a run you did not
 see a line for. Exit codes after the start: 0 all ok, 1 some `error`/`aborted` (the line
 carries `ename`), 2 timeout (`--timeout`, default 3600 s), 3 the kernel is gone and the run
-never reached disk. Paths are relative to `.jupyter-out/<notebook>/`; take the result from
-there, as above.
+never reached disk. Paths are absolute; take the result from there, as above.
 
 **`в этом ядре … не выполнялись ячейки выше: e93d 345e`** (stderr) — code cells above the
 ones you ran that have not run in the current kernel (`row:N` for a cell without an id).
+Printed once per kernel: a later `jn run` names only cells not listed before, so silence
+does not mean they have run since.
 The kernel restarts when the user reopens the notebook or presses restart, and their
 variables are gone. If your cell needs one of them, run those first, in the same call
 before yours (`$JN run "$NB" e93d 345e af4b`), rather than learning it from a `NameError`.

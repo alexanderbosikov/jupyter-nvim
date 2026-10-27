@@ -18,6 +18,12 @@ class Nvim:
         return answer(args) if callable(answer) else answer
 
 
+@pytest.fixture(autouse=True)
+def warned_dir(tmp_path, monkeypatch):
+    # память «о чём уже предупредили» — в каталоге теста, а не в общем /tmp
+    monkeypatch.setattr(jn, "_warned_path", lambda nb: tmp_path / "warned" / "nb.json")
+
+
 def found(sock="/s"):
     return lambda nb: (sock, [])
 
@@ -135,3 +141,44 @@ def test_nvim_error_is_exit_4(tmp_path, capsys):
 def test_no_buffer_is_refusal(tmp_path, capsys, cmd):
     nv = Nvim(text={"ok": False, "reason": "no_buffer"}, snapshot={"ok": False, "reason": "no_buffer"})
     assert jn.main([cmd[0], str(tmp_path / "a.ipynb")], call=nv, locate=found()) == 1
+
+
+def test_not_run_warning_once_per_kernel(tmp_path, capsys):
+    answers = {"since": "15:07:58"}
+
+    def agent_run(args):
+        return {"ok": True, "cell_id": "f5a8", "run_id": 2, "kernel": {"since": answers["since"]},
+                "not_run_above": answers.get("missing", ["345e"])}
+
+    nv = Nvim(agent_run=agent_run)
+    nb = str(tmp_path / "a.ipynb")
+    run = lambda: (jn.main(["run", nb, "f5a8", "--no-wait"], call=nv, locate=found()), capsys.readouterr().err)[1]
+
+    assert "345e" in run()
+    assert run() == "", "второй прогон в том же ядре — без повтора"
+    answers["missing"] = ["345e", "77aa"]
+    assert run().strip().endswith("выше: 77aa"), "новая ячейка в списке — только она"
+    answers["since"] = "16:00:00"
+    assert "345e 77aa" in run(), "ядро перезапущено — заново"
+
+
+def test_replace_with_inline_text(tmp_path):
+    nv = Nvim()
+    nb = tmp_path / "a.ipynb"
+    jn.main(["replace", str(nb), "--old", "x = 1", "--new", 'x = "2"'], call=nv, locate=found())
+    assert nv.calls[0][2][:2] == ["x = 1", 'x = "2"']
+
+
+@pytest.mark.parametrize("argv", [["--old", "x"], ["old-file"], ["old-file", "--new", "y"]])
+def test_replace_needs_both_of_one_kind(tmp_path, argv):
+    with pytest.raises(SystemExit):
+        jn.main(["replace", str(tmp_path / "a.ipynb"), *argv], call=Nvim(), locate=found())
+
+
+def test_text_of_one_cell(tmp_path, capsys):
+    text = "# t\n\n```python jncell=\"e93d\"\nx = 1\ny = 2\n```\n"
+    snap = {"cells": [{"id": "e93d", "start_row": 4, "end_row": 5}]}
+    nv = Nvim(text={"ok": True, "text": text}, snapshot=snap)
+    assert jn.main(["text", str(tmp_path / "a.ipynb"), "--cell", "e93d"], call=nv, locate=found()) == 0
+    assert capsys.readouterr().out == "x = 1\ny = 2\n"
+    assert jn.main(["text", str(tmp_path / "a.ipynb"), "--cell", "zzzz"], call=nv, locate=found()) == 1
