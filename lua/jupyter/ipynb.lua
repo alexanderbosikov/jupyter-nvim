@@ -329,6 +329,12 @@ local function temp_for(target)
     return ("%s/.%s.jupyter-nvim-%d.ipynb"):format(dir, name, vim.uv.os_getpid())
 end
 
+---Что этот nvim последним записал в каждый ноутбук: `{sec, nsec, ino}` по пути.
+---Хук агента (`~/.claude/hooks/guard_open_notebooks.py`) откатывает запись в открытый
+---ноутбук мимо буфера, а по этой отметке отличает от неё `:w` самого человека.
+---@type table<string, {sec: integer, nsec: integer, ino: integer}>
+M.written = {}
+
 ---BufWriteCmd / FileWriteCmd: буфер в ноутбук.
 ---
 ---`modified` снимается только после `rename`: не записалось — буфер остаётся изменённым,
@@ -383,6 +389,10 @@ function M.write(buf, path, range)
         return false
     end
 
+    local st = vim.uv.fs_stat(target)
+    if st then
+        M.written[target] = { sec = st.mtime.sec, nsec = st.mtime.nsec, ino = st.ino }
+    end
     if whole and vim.fn.resolve(vim.api.nvim_buf_get_name(buf)) == target then
         vim.bo[buf].modified = false
     end

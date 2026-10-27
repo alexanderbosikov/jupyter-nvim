@@ -94,6 +94,18 @@ describe("ipynb: свои BufReadCmd и BufWriteCmd", function()
         assert.equals("python3", nb.metadata.kernelspec.name)
     end)
 
+    it(":w оставляет отметку своей записи — по ней хук агента узнаёт :w человека", function()
+        if not available then
+            return
+        end
+        notebook(path)
+        vim.cmd.edit(path)
+        vim.cmd("silent write")
+        local st = vim.uv.fs_stat(path)
+        local mark = require("jupyter.ipynb").written[vim.fn.resolve(path)]
+        assert.same({ sec = st.mtime.sec, nsec = st.mtime.nsec, ino = st.ino }, mark)
+    end)
+
     it("пустые строки в конце буфера не становятся лишней ячейкой", function()
         if not available then
             return

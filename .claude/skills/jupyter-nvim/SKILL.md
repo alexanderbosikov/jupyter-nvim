@@ -385,7 +385,10 @@ client code and the rules are in `reference.md`.
 
 - **Do not write to the notebook file** (`.ipynb` or the jupytext `.md`) while it is open
   in nvim: their `:w` will overwrite your edit, and your write will overwrite what they
-  have not saved. Edits go through `jn replace` / `jn insert`.
+  have not saved. Edits go through `jn replace` / `jn insert`. A hook
+  (`.claude/hooks/guard_open_notebooks.py`) denies Edit/Write on an open `.ipynb` and
+  reverts a Bash command's write to one (`git checkout` included) right after the command,
+  telling you so: redo that change through `jn`, do not repeat the command.
 - **A write to the `.ipynb` never reaches the open buffer** (it was converted by jupytext
   when opened), so it looks like it worked and is gone at the next save. Prose is edited
   with `jn replace` like everything else.
