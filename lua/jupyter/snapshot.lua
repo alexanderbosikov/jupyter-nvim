@@ -71,6 +71,30 @@ local function last_run(store, record)
     }
 end
 
+---Ближайший markdown-заголовок над каждой строкой: `### 02. Конверсия` для ячейки в разделе.
+---
+---Агенту по нему ячейка сопоставляется с разделом, о котором говорит человек, без чтения
+---всего текста. Только для fence-представления: в percent `#` — это комментарий кода.
+---Строки внутри любых фенсов (и не-кодовых: ```text, ```bash) заголовками не считаются.
+---@param buf integer
+---@return table<integer, string> строка (1-based) → заголовок
+local function headings(buf)
+    local at, current, fence = {}, nil, nil
+    for i, line in ipairs(vim.api.nvim_buf_get_lines(buf, 0, -1, false)) do
+        local mark = line:match("^%s*(```+)") or line:match("^%s*(~~~+)")
+        if mark and (not fence or mark:sub(1, 1) == fence:sub(1, 1) and #mark >= #fence) then
+            fence = not fence and mark or nil
+        elseif not fence then
+            local h = line:match("^#+%s+%S.*$")
+            if h then
+                current = vim.trim(h)
+            end
+        end
+        at[i] = current
+    end
+    return at
+end
+
 ---@param buf integer
 ---@param opts? table store: jupyter.Store, kernel: jupyter.Kernel, exec: jupyter.Exec
 ---@return table
@@ -82,6 +106,7 @@ function M.build(buf, opts)
     end
 
     local list = {}
+    local heading = cells.representation(buf) == "fence" and headings(buf) or {}
     for _, cell in ipairs(cells.list(buf)) do
         -- только чтение: в документ ничего не пишем. nil здесь — нормальный ответ
         -- «ячейку ещё не запускали»: в JSON поля id тогда просто нет, а вместе с ним
@@ -120,6 +145,7 @@ function M.build(buf, opts)
             end_row = cell.end_row,
             span_start = cell.span_start,
             span_end = cell.span_end,
+            heading = heading[cell.span_start - 1],
             runs = store and #store:records_of(id) or 0,
             -- прогон идёт прямо сейчас: вывод на диске ещё от прошлого раза, и читатель,
             -- не знающий об этом, объявил бы его свежим

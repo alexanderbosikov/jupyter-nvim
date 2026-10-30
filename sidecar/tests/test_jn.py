@@ -22,6 +22,7 @@ class Nvim:
 def warned_dir(tmp_path, monkeypatch):
     # память «о чём уже предупредили» — в каталоге теста, а не в общем /tmp
     monkeypatch.setattr(jn, "_warned_path", lambda nb: tmp_path / "warned" / "nb.json")
+    monkeypatch.setattr(jn, "_unsaved_path", lambda nb: tmp_path / "warned" / "nb.unsaved")
 
 
 def found(sock="/s"):
@@ -102,7 +103,7 @@ def test_snapshot_brief_and_cell_filter(tmp_path, capsys):
     snap = {
         "notebook": "/w/a.ipynb", "kernel": {"state": "ready"}, "visible": True,
         "cells": [
-            {"id": "e93d", "lang": "python", "start_row": 3, "end_row": 9,
+            {"id": "e93d", "lang": "python", "start_row": 3, "end_row": 9, "heading": "### 02. Конверсия",
              "last": {"run_id": 4, "status": "ok", "kind": "table", "rows": 10, "cols": 2}, "stale": True},
             {"id": "f5a8", "lang": "python", "start_row": 12, "end_row": 14, "last": None},
         ],
@@ -110,7 +111,7 @@ def test_snapshot_brief_and_cell_filter(tmp_path, capsys):
     nv = Nvim(snapshot=snap)
     jn.main(["snapshot", str(tmp_path / "a.ipynb"), "--brief", "--cell", "e93d"], call=nv, locate=found())
     out = capsys.readouterr().out
-    assert "e93d python 3–9 · #4 ok · table 10×2 · устарел" in out
+    assert "e93d python 3–9 · ### 02. Конверсия · #4 ok · table 10×2 · устарел" in out
     assert "f5a8" not in out
 
 
@@ -182,3 +183,40 @@ def test_text_of_one_cell(tmp_path, capsys):
     assert jn.main(["text", str(tmp_path / "a.ipynb"), "--cell", "e93d"], call=nv, locate=found()) == 0
     assert capsys.readouterr().out == "x = 1\ny = 2\n"
     assert jn.main(["text", str(tmp_path / "a.ipynb"), "--cell", "zzzz"], call=nv, locate=found()) == 1
+
+
+def test_unsaved_buffer_warned_once_per_edit_and_on_done(tmp_path, capsys):
+    state = {"modified": True}
+    nv = Nvim(modified=lambda args: {"ok": True, "modified": state["modified"]})
+    nb = str(tmp_path / "a.ipynb")
+
+    def edit():
+        jn.main(["replace", nb, "--old", "a", "--new", "b"], call=nv, locate=found())
+        return capsys.readouterr().err
+
+    assert "буфер не сохранён" in edit()
+    assert edit() == "", "вторая правка подряд — без повтора"
+    jn.main(["done", nb, "3"], call=nv, locate=found())
+    assert "буфер не сохранён" in capsys.readouterr().err, "после done — всегда"
+    state["modified"] = False
+    assert edit() == "", "сохранили — молчим"
+    state["modified"] = True
+    assert "буфер не сохранён" in edit(), "после :w новая правка — снова"
+
+
+def test_history_lists_runs_oldest_first(tmp_path, capsys):
+    from jupyter_nvim.outdir import OutDir
+
+    nb = tmp_path / "a.ipynb"
+    out = OutDir(nb)
+    out.base.mkdir(parents=True)
+    for run, status, ename in [(6, "error", "ProgrammingError"), (7, "ok", None)]:
+        out.append({"cell_id": "e93d", "run_id": run, "status": status, "ename": ename, "kind": "text",
+                    "path": f"e93d/{run}.txt", "duration_ms": 400, "started_at": "2026-10-28T07:00:00+00:00"})
+    out.append({"cell_id": "f5a8", "run_id": 8, "status": "ok", "kind": "none"})
+
+    assert jn.main(["history", str(nb), "e93d"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2
+    assert "e93d #6 error ProgrammingError" in lines[0] and "e93d #7 ok" in lines[1]
+    assert jn.main(["history", str(nb), "zzzz"]) == 1

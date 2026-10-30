@@ -5,6 +5,7 @@
     jn text     <nb> [--cell ID]             текст ноутбука (или тело ячейки) из буфера
     jn run      <nb> <ячейка>… [--no-wait]   запустить по id (или row:N) и дождаться
     jn wait     <nb> <ячейка>[:<прогон>]…    дождаться прогонов (как jn-wait)
+    jn history  <nb> <ячейка>                последние прогоны ячейки: статус, ошибка, пути
     jn replace  <nb> <old-файл> <new-файл>   заменить кусок, встречающийся ровно раз
     jn replace  <nb> --old ТЕКСТ --new ТЕКСТ  то же для коротких строк
     jn insert   <nb> <файл> (--before-heading H | --after-cell ID | --at-end)
@@ -37,6 +38,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import find_nvim, wait
+from .outdir import OutDir
 
 NO_NVIM = 4
 
@@ -94,6 +96,9 @@ def brief(snap: dict[str, Any]) -> str:
     for c in snap.get("cells", []):
         last = c.get("last") or {}
         parts = [f"{c.get('id') or '----'} {c.get('lang', '?'):6} {c.get('start_row')}–{c.get('end_row')}"]
+        if c.get("heading"):
+            h = c["heading"]
+            parts.append(h if len(h) <= 60 else h[:59] + "…")
         if c.get("running"):
             parts.append((c.get("live") or {}).get("status", "running"))
         elif last:
@@ -146,6 +151,51 @@ def cell_text(snap: dict[str, Any], text: str, cell: str) -> str | None:
     return None
 
 
+UNSAVED = ("буфер не сохранён: правки только в nvim, в .ipynb на диске их нет (Lab, git, "
+           "передача файла их не увидят) — когда закончишь, попроси человека сохранить (:w)")
+
+
+def _unsaved_path(notebook: str) -> Path:
+    return Path(tempfile.gettempdir(), "jn-warned", sha256(notebook.encode()).hexdigest()[:16] + ".unsaved")
+
+
+def warn_unsaved(nv: Callable[..., dict[str, Any]], notebook: str, always: bool = False) -> None:
+    """Сказать агенту, что его правки ещё не на диске.
+
+    После `done` — всегда: работа закончена, пора напомнить человеку. После правки — раз,
+    пока буфер не сохранят: иначе каждый `replace` повторял бы одно и то же.
+    """
+    try:
+        res = nv("modified", notebook)
+    except NvimError:
+        return
+    flag = _unsaved_path(notebook)
+    if not res.get("modified"):
+        flag.unlink(missing_ok=True)
+        return
+    if always or not flag.exists():
+        print(UNSAVED, file=sys.stderr)
+        try:
+            flag.parent.mkdir(exist_ok=True)
+            flag.touch()
+        except OSError:
+            pass
+
+
+def history(notebook: str, cell: str) -> int:
+    """Прогоны ячейки с диска, старые сверху: снимок знает только последний."""
+    out = OutDir(Path(notebook))
+    recs = list(out.records(cell))
+    if not recs:
+        print(f"прогонов {cell} на диске нет ({out.base})", file=sys.stderr)
+        return 1
+    for rec in recs:
+        started = wait._time(rec.get("started_at"))
+        when = started.strftime("%d.%m %H:%M") if started else "?"
+        print(f"{when} · {wait.summary(rec, out)}")
+    return 0
+
+
 def pane(name: str) -> tuple[str, dict[str, Any]] | None:
     """Запись панели агента про ноутбук `<каталог>/<файл>` из шапки [jupyter.nvim]-промпта."""
     pane_id = os.environ.get("TMUX_PANE") or os.environ.get("HERDR_PANE_ID")
@@ -183,6 +233,7 @@ def main(argv: list[str] | None = None, call: Call = remote,
     p.add_argument("cells", nargs="+", metavar="ячейка", help="id или row:N")
     p.add_argument("--no-wait", action="store_true", help="только запустить: печатает пары для jn wait")
     p.add_argument("--timeout", type=float, default=3600)
+    nb_cmd("history").add_argument("cell", metavar="ячейка")
     p = nb_cmd("wait")
     p.add_argument("cells", nargs="+", metavar="ячейка[:прогон]")
     p.add_argument("--timeout", type=float, default=3600)
@@ -222,6 +273,8 @@ def main(argv: list[str] | None = None, call: Call = remote,
         return 0
 
     notebook = str(Path(args.notebook).expanduser().resolve())
+    if args.cmd == "history":
+        return history(notebook, args.cell)
     if args.cmd == "wait":
         return wait.main([notebook, *args.cells, "--timeout", str(args.timeout)])
 
@@ -266,7 +319,10 @@ def main(argv: list[str] | None = None, call: Call = remote,
         if args.cmd == "replace":
             old = args.old_text if args.old_text is not None else _read(args.old)
             new = args.new_text if args.new_text is not None else _read(args.new)
-            return _print(nv("edit_replace", old, new, {"notebook": notebook}))
+            code = _print(nv("edit_replace", old, new, {"notebook": notebook}))
+            if code == 0:
+                warn_unsaved(nv, notebook)
+            return code
         if args.cmd == "insert":
             opts = {"notebook": notebook, "text": _read(args.file)}
             if args.before_heading:
@@ -275,14 +331,20 @@ def main(argv: list[str] | None = None, call: Call = remote,
                 opts["after_cell"] = args.after_cell
             else:
                 opts["at_end"] = True
-            return _print(nv("edit_insert", opts))
+            code = _print(nv("edit_insert", opts))
+            if code == 0:
+                warn_unsaved(nv, notebook)
+            return code
         if args.cmd == "claim":
             opts = {"notebook": notebook, "text": _read(args.file), "label": args.label}
             if args.title:
                 opts["title"] = args.title
             return _print(nv("edit_claim", opts))
         if args.cmd == "done":
-            return _print(nv("edit_done", args.token))
+            code = _print(nv("edit_done", args.token))
+            if code == 0:
+                warn_unsaved(nv, notebook, always=True)
+            return code
         if args.cmd == "touch":
             return _print(nv("edit_touch", args.token))
     except NvimError as e:

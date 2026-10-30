@@ -81,6 +81,36 @@ describe("снимок ноутбука", function()
         assert.equals("fence", snap.representation)
     end)
 
+    it("у ячейки — ближайший заголовок над ней; # внутри фенсов не заголовок", function()
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+            "# Отчёт",
+            "",
+            "```python",
+            "# комментарий",
+            "```",
+            "",
+            "### 02. Конверсия",
+            "",
+            "```bash",
+            "# тоже не заголовок",
+            "```",
+            "",
+            "```python",
+            "y = 2",
+            "```",
+        })
+        local snap = snapshot.build(buf)
+
+        assert.equals("# Отчёт", snap.cells[1].heading)
+        assert.equals("### 02. Конверсия", snap.cells[2].heading)
+    end)
+
+    it("в percent-представлении заголовков нет: # там комментарий", function()
+        vim.bo[buf].filetype = "python"
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", "# ## не заголовок", "x = 1" })
+        assert.is_nil(snapshot.build(buf).cells[1].heading)
+    end)
+
     it("без истории ячейки всё равно видны, прогонов нет", function()
         local snap = snapshot.build(buf)
 

@@ -43,6 +43,16 @@ describe("jupyter.cli", function()
         assert.is_truthy(res.text:find("z = 1", 1, true))
     end)
 
+    it("modified — изменён ли буфер ноутбука", function()
+        local ask = function()
+            return vim.json.decode(cli.call(request({ fn = "modified", args = { path } })))
+        end
+        assert.is_false(ask().modified)
+        vim.api.nvim_buf_set_lines(buf, 2, 3, false, { "z = 1" })
+        assert.is_true(ask().modified)
+        assert.equals("no_buffer", vim.json.decode(cli.call(request({ fn = "modified", args = { "/nope.ipynb" } }))).reason)
+    end)
+
     it("чужие функции не зовутся", function()
         local res = vim.json.decode(cli.call(request({ fn = "restart", args = {} })))
         assert.equals("bad_request", res.reason)

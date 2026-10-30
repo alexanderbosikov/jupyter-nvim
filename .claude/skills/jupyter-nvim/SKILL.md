@@ -88,7 +88,8 @@ Order: **snapshot and buffer from nvim, the contents of results from disk.** The
 never moves, and unsaved edits are read as well.
 
 ```sh
-$JN snapshot "$NB" --brief        # one line per cell: id, lang, rows, last run, stale
+$JN snapshot "$NB" --brief        # one line per cell: id, lang, rows, section heading, last run, stale
+$JN history "$NB" e93d            # the cell's runs on disk, oldest first: when, status, ename, paths
 $JN snapshot "$NB"                # the full snapshot, JSON (--cell e93d f5a8 — only those)
 $JN text "$NB"                    # the whole notebook text, including anything unsaved
 $JN text "$NB" --cell e93d        # one cell's body, exactly as in the buffer — a ready `old`
@@ -141,7 +142,8 @@ Keep in mind:
 1. **`print()` next to a table or an image** is the `text` entry of `last.outputs`, also given
    as `last.text`; the parquet / png holds only the final value. Runs recorded before
    either existed lost it — re-run the cell if you need it.
-2. **History depth is 5 runs** per cell; older ones are trimmed.
+2. **History depth is 5 runs** per cell; older ones are trimmed. The snapshot shows only the
+   last one — "what was that error" about an earlier run is `$JN history "$NB" <cell>`.
 3. **No reason to read the output window (`jupyter://output`)**: it holds a rendering made
    for the screen (a table in pages of 100 rows, columns cut at 40 cells), not the data.
 
@@ -362,6 +364,12 @@ since nvim attached": the variables may well be there.
 What the user sees is the same as for their own key: the status under the cell («в очереди»
 → «выполняется» → ✓) and the output window opening with the run, if the notebook is on
 screen (`visible`). The buffer is not saved before the run (their key does `:w`; you do not).
+
+**Your edits stay in the buffer until the user saves.** Never save it yourself: `:w` would
+also write their own unsaved changes. `jn replace` / `jn insert` (once until it is saved)
+and `jn done` say `буфер не сохранён` on stderr; when you finish, tell the user in one line
+that the notebook needs `:w` — until then the `.ipynb` on disk (Lab, git, a file sent on)
+has none of your cells.
 
 `jn wait` counts only runs started under the current kernel (run numbers restart with
 every nvim restart), so an old `af4b #3` from another day does not satisfy it. Without

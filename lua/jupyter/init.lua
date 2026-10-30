@@ -2151,6 +2151,7 @@ local function buf_of_notebook(path)
         end
     end
 end
+M.buf_of_notebook = buf_of_notebook
 
 ---Снимок ноутбука одной структурой: ячейки, их id и последний прогон каждой.
 ---

@@ -30,6 +30,17 @@ local function text(notebook)
     return { ok = true, text = table.concat(vim.api.nvim_buf_get_lines(snap.buf, 0, -1, false), "\n") }
 end
 
+---Изменён ли буфер ноутбука: правки агента живут в нём до `:w` человека.
+---@param notebook string
+---@return table
+local function modified(notebook)
+    local buf = require("jupyter").buf_of_notebook(notebook)
+    if not buf then
+        return { ok = false, reason = "no_buffer" }
+    end
+    return { ok = true, modified = vim.bo[buf].modified }
+end
+
 ---@param path string JSON `{fn, args}`
 ---@return string JSON ответа
 function M.call(path)
@@ -43,6 +54,8 @@ function M.call(path)
     local res
     if req.fn == "text" then
         res = text(args[1])
+    elseif req.fn == "modified" then
+        res = modified(args[1])
     elseif CALLS[req.fn] then
         res = require("jupyter")[req.fn](unpack(args, 1, req.argc or #args))
     else
