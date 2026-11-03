@@ -390,6 +390,11 @@ jupyter.nvim: остался несохранённый черновик 14.09 1
 
 (An unsaved draft from 14.09 18:32, 214 lines, is still around.)
 
+It stays quiet when the notebook file was saved after the draft was written: the work went
+on from the file, and a warning on every open is noise. Such a draft is not deleted —
+whether nvim or Jupyter Lab wrote the file is not visible from here — and `:JupyterRecover`
+still lists it. Empty drafts are never written and are dropped when found.
+
 `:JupyterRecover` offers three actions: show the difference (an ordinary `diffsplit`
 against the draft), restore it into the buffer, discard it. Restoring puts the text **into
 the buffer** and stops there — the plugin does not write to the file, that call is yours:

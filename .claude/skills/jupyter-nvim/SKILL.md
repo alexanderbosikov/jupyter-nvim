@@ -389,6 +389,10 @@ The commands in full (for a human, not for you): `:JupyterRun`, `:JupyterRunAll`
 Needed when you want a slice of a variable already in memory that no cell outputs. It is the **user's working kernel**, so ask for permission first; the
 client code and the rules are in `reference.md`.
 
+A common case: `explain` of a jinja query with the notebook's own params. The `rs-explain`
+CLI does not see the notebook's variables (only `-p`), while `nb_utils.explain("queries/NN_x.sql")`
+in the kernel renders them from its namespace — details in the `nb-utils` skill.
+
 ## What not to do
 
 - **Do not write to the notebook file** (`.ipynb` or the jupytext `.md`) while it is open

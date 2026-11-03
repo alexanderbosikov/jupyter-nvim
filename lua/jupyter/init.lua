@@ -1897,10 +1897,18 @@ function M.watch_draft(buf)
     end
     local found = draft.check(buf)
     for _, item in ipairs(found) do
+        -- Ноутбук сохраняли позже черновика — значит, работу с тех пор продолжили от файла,
+        -- и кричать при каждом открытии незачем. Сам черновик не трогаем: кем записан файл,
+        -- nvim или Jupyter Lab, отсюда не видно. Он остаётся в :JupyterRecover.
+        if item.outside then
+            draft.note(draft.of(buf), "check.quiet", item.id .. ": ноутбук новее")
+            goto continue
+        end
         vim.notify(
             ("jupyter.nvim: остался несохранённый %s — :JupyterRecover"):format(draft.describe(item)),
             vim.log.levels.WARN
         )
+        ::continue::
     end
     return found
 end

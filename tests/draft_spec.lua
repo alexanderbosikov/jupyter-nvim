@@ -200,6 +200,27 @@ describe("черновик при буфере", function()
         assert.is_nil(draft.of(buf):read())
     end)
 
+    it("пустой буфер в черновик не пишет", function()
+        local path, buf = notebook()
+        local d = draft.new({ notebook = path })
+        edit(buf, {})
+
+        assert.is_false(d:save(buf))
+        assert.is_nil(d:read())
+    end)
+
+    it("пустой черновик от прошлой жизни убирает молча", function()
+        local path, buf = notebook()
+        local past = draft.new({ notebook = path })
+        vim.fn.mkdir(past.dir, "p")
+        vim.fn.writefile({}, past:path())
+        draft.attach(buf, { out_dir = ".jupyter-out" })
+        edit(buf, { "несохранённое" })
+
+        assert.same({}, draft.check(buf))
+        assert.equals(0, vim.fn.filereadable(past:path()))
+    end)
+
     it("совпавший с буфером черновик убирает молча", function()
         local path, buf = notebook()
         local past = draft.new({ notebook = path })
@@ -305,6 +326,33 @@ describe("черновик в плагине", function()
         local _, buf = open()
 
         assert.is_not_nil(draft.of(buf))
+    end)
+
+    it("молчит о черновике, если ноутбук сохраняли позже", function()
+        local path, buf = open()
+        local past = draft.new({ notebook = path, pid = 999999 }) -- процесса нет: сирота
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# %%", "старая правка" })
+        past:save(buf)
+        draft.detach(buf)
+        vim.fn.writefile({ "# %%", "x = 2" }, path) -- работу потом продолжили и сохранили
+        bump_mtime(path)
+        vim.cmd.edit({ args = { path }, bang = true })
+        buf = vim.api.nvim_get_current_buf()
+
+        local said = {}
+        local notify = vim.notify
+        vim.notify = function(msg)
+            table.insert(said, msg)
+        end
+        local found = jupyter.watch_draft(buf)
+        vim.notify = notify
+
+        -- в :JupyterRecover они есть (и сирота, и свой от закрытого несохранённым буфера)
+        assert.is_true(#found >= 1)
+        for _, item in ipairs(found) do
+            assert.is_true(item.outside)
+        end
+        assert.same({}, said)
     end)
 
     it("документ без ячеек под черновик не берёт", function()

@@ -71,6 +71,13 @@ end
 
 -- --- сам черновик ---
 
+---Нет текста — нечего и восстанавливать.
+---@param lines string[]
+---@return boolean
+function M.empty(lines)
+    return #lines == 0 or (#lines == 1 and lines[1] == "")
+end
+
 M.TRACE = "trace.log"
 
 ---Сколько строк журнала держим: он пишется при каждой правке и расти ему незачем.
@@ -170,6 +177,12 @@ function Draft:save(buf, force)
         return false
     end
     local lines = buf_lines(buf)
+    -- Пустой буфер восстанавливать нечем, а пишется такой при выгрузке: в `BufUnload`
+    -- строк у буфера уже может не быть. Такой черновик потом годами висел предупреждением.
+    if M.empty(lines) then
+        trace(self, "save.skip", "буфер пуст")
+        return false
+    end
     local sha = sha_of(lines)
     if sha == self.sha and not force then
         trace(self, "save.skip", "текст не менялся")
@@ -515,7 +528,10 @@ function M.check(buf)
     local current = sha_of(buf_lines(buf))
     local live = {}
     for _, found in ipairs(st.draft:candidates()) do
-        if saved and found.sha == current then
+        if M.empty(found.lines) then
+            M.note(st.draft, "check.empty", found.id)
+            st.draft:drop(found.id)
+        elseif saved and found.sha == current then
             M.note(st.draft, "check.same", found.id)
             st.draft:drop(found.id)
         else
@@ -598,7 +614,7 @@ function M.describe(found)
         table.insert(parts, "метаданные не сошлись — писался в момент падения")
     end
     if found.outside then
-        table.insert(parts, "ноутбук с тех пор изменился снаружи")
+        table.insert(parts, "ноутбук сохраняли позже")
     end
     return table.concat(parts, " · ")
 end
