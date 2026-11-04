@@ -1,7 +1,6 @@
 # jupyter-nvim — rare paths
 
-Loaded on demand from `SKILL.md`. Everything here is a once-in-a-while case; the hot path
-(snapshot, reading results, two-phase editing, running) stays in `SKILL.md`.
+Loaded on demand from `SKILL.md`. Everything here is a once-in-a-while case.
 
 ## Reading outputs with no nvim at all
 
@@ -33,3 +32,7 @@ This is the **user's working kernel**. Ask for permission; send `store_history=F
 not to shift `In [n]`; do not redefine variables; remember that your output reaches neither
 the buffer nor `.jupyter-out` — from the user's side the work happens invisibly. A long
 query from you holds up their cells: the channel is shared.
+
+A common case: `explain` of a jinja query with the notebook's own params. The `rs-explain`
+CLI does not see the notebook's variables (only `-p`), while `nb_utils.explain("queries/NN_x.sql")`
+in the kernel renders them from its namespace — details in the `nb-utils` skill.
