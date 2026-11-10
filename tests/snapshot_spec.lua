@@ -128,17 +128,23 @@ describe("снимок ноутбука", function()
         assert.equals(2, snap.cells[1].runs)
         assert.equals(7, last.run_id, "последний прогон — тот, что дописан в индекс позже")
         assert.equals("table", last.kind)
-        assert.equals(base .. "/a3f9/7.parquet", last.path)
-        assert.same({ 1240, 7, 12 }, { last.rows, last.cols, last.execution_count })
+        assert.equals(base .. "/a3f9/7.parquet", last.outputs[1].path)
+        assert.same({ 1240, 7 }, { last.outputs[1].rows, last.outputs[1].cols })
+        assert.equals(12, last.execution_count)
         assert.equals(base, snap.out_dir)
     end)
 
-    it("напечатанное рядом с таблицей — абсолютным путём в text", function()
-        local st, base = make_store({ record({ run_id = 7, text = "a3f9/7.out.txt" }) })
+    it("каждый вывод — один раз: без копий главного в полях прогона", function()
+        local st, base = make_store({ record({ run_id = 7, text = "a3f9/7.out.txt",
+            schema = { { "x", "Int64" } } }) })
         local last = snapshot.build(buf, { store = st }).cells[1].last
-        assert.equals(base .. "/a3f9/7.out.txt", last.text)
-        local plain = make_store({ record({ run_id = 7 }) })
-        assert.is_nil(snapshot.build(buf, { store = plain }).cells[1].last.text)
+        assert.same({
+            { kind = "text", path = base .. "/a3f9/7.out.txt" },
+            { kind = "table", path = base .. "/a3f9/7.parquet", rows = 1240, cols = 7, schema = { { "x", "Int64" } } },
+        }, last.outputs)
+        for _, dup in ipairs({ "path", "text", "rows", "cols", "schema" }) do
+            assert.is_nil(last[dup], dup)
+        end
     end)
 
     it("отдаёт все выводы прогона с абсолютными путями", function()
@@ -153,7 +159,7 @@ describe("снимок ноутбука", function()
 
         local last = snapshot.build(buf, { store = st }).cells[1].last
 
-        assert.equals(base .. "/a3f9/7.png", last.path, "главный вывод — как раньше")
+        assert.equals("image", last.kind, "главный вывод — картинка")
         assert.same({ "text", "image", "image" }, vim.tbl_map(function(o) return o.kind end, last.outputs))
         assert.equals(base .. "/a3f9/7-2.png", last.outputs[3].path)
     end)
@@ -163,7 +169,7 @@ describe("снимок ноутбука", function()
 
         local last = snapshot.build(buf, { store = st }).cells[1].last
 
-        assert.same({ { kind = "table", path = base .. "/a3f9/7.parquet" } }, last.outputs)
+        assert.same({ { kind = "table", path = base .. "/a3f9/7.parquet", rows = 1240, cols = 7 } }, last.outputs)
     end)
 
     it("устаревший вывод помечен, свежий — нет", function()
@@ -226,6 +232,62 @@ describe("снимок ноутбука", function()
 
         assert.is_false(snap.cells[1].running, "прервано — тоже конец прогона")
         assert.equals("aborted", snap.cells[1].live.status)
+    end)
+
+    it("записанный на диск прогон в live не дублируется", function()
+        -- было: у каждой ячейки, запущенной в этой сессии nvim, висел live с хвостом
+        -- `[таблица] 30 строк × 4 колонок` — повтором last.rows/cols
+        local fake_exec = {
+            run_for = function()
+                return { status = "ok", run_id = 7, lines = { "✓ 1,070 строк", "[таблица] 1240 строк × 7 колонок" } }
+            end,
+        }
+
+        local snap = snapshot.build(buf, { store = make_store({ record() }), exec = fake_exec })
+
+        assert.is_nil(snap.cells[1].live, "всё о прогоне уже есть в last")
+        assert.equals(7, snap.cells[1].last.run_id)
+        assert.is_false(snap.cells[1].running)
+    end)
+
+    it("кончившийся, но ещё не записанный прогон остаётся в live", function()
+        local fake_exec = {
+            run_for = function() return { status = "error", run_id = 8, lines = { "[ZeroDivisionError] division by zero" } } end,
+        }
+
+        local snap = snapshot.build(buf, { store = make_store({ record() }), exec = fake_exec })
+
+        assert.equals(8, snap.cells[1].live.run_id, "в индексе пока только #7")
+        assert.equals("[ZeroDivisionError] division by zero", snap.cells[1].live.tail)
+    end)
+
+    it("хвост — последняя содержательная строка, а не рамка таблицы", function()
+        local fake_exec = {
+            run_for = function()
+                return { status = "running", run_id = 8, lines = {
+                    "shape: (2, 2)",
+                    "┌─────┬─────┐",
+                    "│ a   ┆ b   │",
+                    "│ --- ┆ --- │",
+                    "╞═════╪═════╡",
+                    "│ 1   ┆ 2   │",
+                    "└─────┴─────┘",
+                    "",
+                } }
+            end,
+        }
+
+        local snap = snapshot.build(buf, { store = make_store({ record() }), exec = fake_exec })
+
+        assert.equals("│ 1   ┆ 2   │", snap.cells[1].live.tail)
+
+        -- рамки вырезаются символами, а не байтами: дефис U+2010 (E2 80 90) весь собран
+        -- из байтов рамок и побайтово исчезал бы целиком
+        fake_exec.run_for = function()
+            return { status = "running", run_id = 8, lines = { "‐", "└─────┘" } }
+        end
+        assert.equals("‐", snapshot.build(buf, { exec = fake_exec }).cells[1].live.tail)
+        assert.equals(8, snap.cells[1].live.lines, "размер — весь вывод, рамки тоже")
     end)
 
     it("кодируется в JSON: в такой форме его и забирают снаружи", function()

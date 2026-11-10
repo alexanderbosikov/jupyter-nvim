@@ -10,6 +10,10 @@
     13ca #4 ok · table 1204×8 · 0.0s · cache · /w/.jupyter-out/01_eda/13ca/4.parquet · print: …/13ca/4.txt
     5e1d #5 error ProgrammingError · 0.4s · /w/.jupyter-out/01_eda/5e1d/5.txt
 
+Под строкой итога, с отступом, — начало вывода (`--no-preview` — без него): голова
+таблицы CSV-ом, текст без пустых строк и рамок — первые строки и последние, где обычно итог
+или ошибка. Целиком — `jn show`.
+
 Пути абсолютные. `cache` — запрос взят из кэша nb_utils (в выводе есть «✓ из кэша»): 0.0s
 не значит, что запрос пустой или не выполнялся.
 
@@ -33,6 +37,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import peek
 from .outdir import DEFAULT_DIR, RUNTIME_FILE, OutDir
 
 OK, FAILED, TIMEOUT, GONE = 0, 1, 2, 3
@@ -86,7 +91,7 @@ def _cached(out: OutDir, rec: dict[str, Any]) -> bool:
     return False
 
 
-def summary(rec: dict[str, Any], out: OutDir) -> str:
+def summary(rec: dict[str, Any], out: OutDir, paths: bool = True) -> str:
     head = f"{rec.get('cell_id')} #{rec.get('run_id')} {rec.get('status')}"
     if rec.get("ename"):
         head += f" {rec['ename']}"
@@ -100,9 +105,9 @@ def summary(rec: dict[str, Any], out: OutDir) -> str:
         parts.append(f"{rec['duration_ms'] / 1000:.1f}s")
     if _cached(out, rec):
         parts.append("cache")
-    if rec.get("path"):
+    if paths and rec.get("path"):
         parts.append(str(out.base / rec["path"]))
-    if rec.get("text"):
+    if paths and rec.get("text"):
         parts.append(f"print: {out.base / rec['text']}")
     return " · ".join(parts)
 
@@ -114,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--timeout", type=float, default=3600, help="секунд, дефолт 3600")
     ap.add_argument("--dir", default=DEFAULT_DIR, help=f"каталог выводов (дефолт {DEFAULT_DIR})")
     ap.add_argument("--start-grace", type=float, default=120, help="секунд ждать, пока ядро поднимется; дефолт 120")
+    ap.add_argument("--no-preview", action="store_true", help="без начала вывода под строкой итога")
     ap.add_argument("--poll", type=float, default=1.0, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
@@ -147,6 +153,9 @@ def main(argv: list[str] | None = None) -> int:
                 if since and started and started < since:
                     continue  # тот же номер из прошлой жизни nvim
             print(summary(rec, out), flush=True)
+            if not args.no_preview:
+                for line in peek.preview_lines(out, rec):
+                    print(line, flush=True)
             if rec.get("status") != "ok":
                 code = FAILED
             del want[cell]

@@ -2597,6 +2597,67 @@ function M.agent_open(opts)
     return res
 end
 
+---Новый ноутбук агента из текста буфера (markdown с ```python-ячейками): создать, открыть
+---скрытым буфером, раздать ячейкам id и записать на диск — тем же конвертером, что `:w`.
+---
+---Без этого агенты собирали `.ipynb` сами — `json.dump` своих `md()`/`code()` или
+---`jupytext --to ipynb`, — и у ячеек не было id: первый запуск только по `row:N`.
+---Файл, где уже что-то есть, не трогается: это не «новый».
+---@param opts table notebook — путь; text — содержимое; kernel = false — ядро не поднимать
+---@return table { ok, buf, cell_ids, kernel } | { ok = false, reason, msg }
+function M.agent_new(opts)
+    opts = opts or {}
+    if not opts.notebook or opts.notebook == "" then
+        return { ok = false, reason = "no_path", msg = "нужен notebook — путь ноутбука" }
+    end
+    if type(opts.text) ~= "string" or not opts.text:match("%S") then
+        return { ok = false, reason = "empty", msg = "нужен text — содержимое ноутбука" }
+    end
+    local path = vim.fn.fnamemodify(opts.notebook, ":p")
+    if not path:match("%.ipynb$") then
+        return { ok = false, reason = "not_ipynb", msg = "путь должен кончаться на .ipynb: " .. path }
+    end
+    if not require("jupyter.ipynb").blank(path) then
+        return { ok = false, reason = "exists", msg = "ноутбук уже есть: " .. path .. " — jn open и jn insert" }
+    end
+    local existing = buf_of_notebook(path)
+    if existing and vim.api.nvim_buf_is_loaded(existing) and vim.bo[existing].modified then
+        return { ok = false, reason = "exists", msg = "ноутбук уже открыт и изменён: " .. path }
+    end
+    vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+
+    local res = M.agent_open({ notebook = path, kernel = false })
+    if not res.ok then
+        return res
+    end
+    local buf = res.buf
+    local lines = vim.split(opts.text, "\n", { plain = true })
+    while #lines > 0 and not lines[#lines]:match("%S") do
+        table.remove(lines)
+    end
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    local cellid = require("jupyter.cellid")
+    local ids = {}
+    for _, cell in ipairs(cells.list(buf)) do
+        -- id только дописывается в конец строки маркера: строки ячеек не сдвигаются
+        local id = cellid.ensure(buf, cell)
+        if id then
+            table.insert(ids, id)
+        end
+    end
+    local ok, err = pcall(vim.api.nvim_buf_call, buf, function()
+        vim.cmd("silent write")
+    end)
+    if not ok or vim.bo[buf].modified then
+        return { ok = false, reason = "write_failed", msg = "не записан: " .. tostring(err or "см. :messages") }
+    end
+    local out = { ok = true, buf = buf, cell_ids = ids, kernel = false }
+    if opts.kernel ~= false then
+        out.kernel = M.ensure_started(buf).started == true
+    end
+    return out
+end
+
 ---Поставить метку на кусок, который агент собирается править: человек видит её до
 ---записи, а ячейки внутри не запускаются.
 ---@param opts table text — кусок, встречающийся ровно один раз, или from/to; label, title,

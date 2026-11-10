@@ -345,3 +345,84 @@ describe("ipynb.trim", function()
         assert.same({ "a" }, ipynb.trim({ "a" }))
     end)
 end)
+
+describe("agent_new: новый ноутбук агента одним вызовом", function()
+    local jupyter = require("jupyter")
+    local dir, path
+
+    before_each(function()
+        jupyter.setup({})
+        dir = vim.fn.tempname()
+        vim.fn.mkdir(dir, "p")
+        path = dir .. "/sub/01_eda.ipynb"
+    end)
+
+    after_each(function()
+        vim.cmd("silent! %bwipeout!")
+        vim.fn.delete(dir, "rf")
+    end)
+
+    local TEXT = table.concat({
+        "# EDA",
+        "",
+        "```python",
+        "x = 1",
+        "```",
+        "",
+        "## Раздел",
+        "",
+        "```python",
+        "x + 1",
+        "```",
+        "",
+    }, "\n")
+
+    it("создаёт .ipynb с id у каждой ячейки, окна не трогает", function()
+        if not available then
+            return
+        end
+        local win, cur = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_buf()
+
+        local res = jupyter.agent_new({ notebook = path, text = TEXT, kernel = false })
+
+        assert.is_true(res.ok, res.msg)
+        assert.equals(2, #res.cell_ids)
+        assert.equals(win, vim.api.nvim_get_current_win())
+        assert.equals(cur, vim.api.nvim_get_current_buf())
+        assert.is_false(vim.bo[res.buf].modified, "записан")
+        local nb = decode(path)
+        local code = vim.tbl_filter(function(c) return c.cell_type == "code" end, nb.cells)
+        assert.same({ "x = 1", "x + 1" }, vim.tbl_map(function(c)
+            return type(c.source) == "table" and table.concat(c.source) or c.source
+        end, code))
+        local md = vim.tbl_filter(function(c) return c.cell_type == "markdown" end, nb.cells)
+        assert.is_true(#md >= 2, "проза — markdown-ячейки")
+        -- id переживает перечитывание: по нему агент сразу и запускает
+        vim.cmd("silent! %bwipeout!")
+        local again = jupyter.agent_open({ notebook = path, kernel = false })
+        local text = table.concat(vim.api.nvim_buf_get_lines(again.buf, 0, -1, false), "\n")
+        for _, id in ipairs(res.cell_ids) do
+            assert.is_truthy(text:find(('jncell="%s"'):format(id), 1, true), id)
+        end
+    end)
+
+    it("ноутбук с содержимым — отказ, файл не тронут", function()
+        if not available then
+            return
+        end
+        vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+        notebook(path)
+        local before = vim.fn.readfile(path)
+
+        local res = jupyter.agent_new({ notebook = path, text = TEXT, kernel = false })
+
+        assert.is_false(res.ok)
+        assert.equals("exists", res.reason)
+        assert.same(before, vim.fn.readfile(path))
+    end)
+
+    it("не .ipynb и пустой текст — отказ", function()
+        assert.equals("not_ipynb", jupyter.agent_new({ notebook = dir .. "/x.md", text = TEXT }).reason)
+        assert.equals("empty", jupyter.agent_new({ notebook = path, text = "  \n" }).reason)
+    end)
+end)

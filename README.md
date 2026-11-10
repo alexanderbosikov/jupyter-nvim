@@ -454,6 +454,9 @@ the rest of the agent API as well (`open`, `run` with waiting, `replace`, `inser
 
 ```sh
 bin/jn snapshot ~/work/analysis/.../01_eda.ipynb --brief
+bin/jn show ~/work/analysis/.../01_eda.ipynb 2c38    # outputs of the cell's last run, table as CSV
+bin/jn path ~/work/analysis/.../01_eda.ipynb 2c38    # path of that run's table
+bin/jn new  ~/work/analysis/.../02_new.ipynb cells.md # a new notebook: opened, ids, kernel
 ```
 
 ```json
@@ -463,19 +466,21 @@ bin/jn snapshot ~/work/analysis/.../01_eda.ipynb --brief
  "cells": [
    {"index": 2, "id": "2c38", "lang": "sql", "start_row": 23, "end_row": 37,
     "span_start": 22, "span_end": 38, "runs": 3, "stale": false,
-    "last": {"run_id": 4, "status": "ok", "kind": "table", "rows": 100, "cols": 3,
+    "last": {"run_id": 4, "status": "ok", "kind": "table",
              "execution_count": 4, "duration_ms": 13833,
              "started_at": "2026-09-11T12:51:27.991377+00:00",
-             "path": "/…/.jupyter-out/01_eda/2c38/4.parquet",
-             "schema": [["button_id", "String"], ["first_seen", "Date"],
-                        ["events_number", "Int64"]]}}]}
+             "outputs": [{"kind": "table", "path": "/…/.jupyter-out/01_eda/2c38/4.parquet",
+                          "rows": 100, "cols": 3,
+                          "schema": [["button_id", "String"], ["first_seen", "Date"],
+                                     ["events_number", "Int64"]]}]}}]}
 ```
 
 `kernel.kernel_python` is there when the kernel runs on the project's environment (see "The
 kernel"): imports and package versions are that environment's, not the sidecar's.
 
-`last.outputs` lists every output of the run with absolute paths — text, images, html,
-table, in that order; `last.kind`/`last.path` is the main one of them.
+`last.outputs` lists every output of the run once, with absolute paths — text, images,
+html, table, in that order; a table also carries `rows`, `cols`, `schema`. `last.kind` says
+which of them is the main one. `bin/jn snapshot --cell` adds a `preview` to each.
 
 A cell that has never been run has no `runs`, no `last` and no `stale`. It has an `id` if the
 plugin made it (the insert commands, a split, prose turned into code, an agent's insert —
@@ -490,9 +495,9 @@ it comes from the same sha comparison that draws `⚠ код изменился`
 time's output. Busy is not the same as being computed — "run all" sends every cell at once,
 and the kernel takes them one at a time — so the run itself comes as `live`: its `status`
 (`queued` or `running`), `run_id`, how many `lines` of output it has produced so far and
-`tail`, the last of them. Without that, fifteen cells waiting in the queue looked from
-outside exactly like fifteen cells being computed. The path in `last.path` is absolute — the parquet or the `.txt` is read
-straight away, with no joining to `out_dir`.
+`tail`, the last meaningful one. Without that, fifteen cells waiting in the queue looked from
+outside exactly like fifteen cells being computed. Paths in `last.outputs` are absolute —
+the parquet or the `.txt` is read straight away, with no joining to `out_dir`.
 
 The cells' text is deliberately absent from the snapshot: the whole buffer is taken with a
 single `nvim_buf_get_lines`, and the boundaries of every cell are in the snapshot already.

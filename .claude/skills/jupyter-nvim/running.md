@@ -4,10 +4,21 @@
 # run cells af4b and 13ca of this notebook and wait for both; the cursor is left alone
 $JN run "$NB" af4b 13ca
 # af4b #3 ok · text · 1.2s · /w/.jupyter-out/01_eda/af4b/3.txt
+#   conversion | 0.042
 # 13ca #4 ok · table 1204×8 · 0.0s · cache · /w/.jupyter-out/01_eda/13ca/4.parquet · print: /w/.jupyter-out/01_eda/13ca/4.txt
+#   ✓ из кэша · 1,204 строк
+#   # day:Date, users:Int64
+#   day,users
+#   2026-10-01,1843
+#   …
+#   # … ещё 1199 строк из 1204
 ```
 
-Paths are absolute — read them as they are. `cache` means nb_utils served the query from
+Under each status line, indented, comes the start of every output: the table's first 5
+rows as CSV (with a `name:dtype` line), the text without blank lines and table borders —
+the first lines and the last ones, where the total or the error usually is. Often that
+answers "what came out" already; the whole of it is `$JN show "$NB" 13ca`.
+`--no-preview` leaves the status lines only. Paths are absolute — read them as they are. `cache` means nb_utils served the query from
 its cache (`✓ из кэша` in the output), which is why it took 0.0s; the data is as old as that
 cache entry (the age is in the printed text).
 

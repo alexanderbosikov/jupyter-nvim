@@ -706,6 +706,12 @@ nothing was moving. `live` also carries the size and the last line of the output
 so far — the record in `index.jsonl` appears only when the run ends, so until then there is
 nothing else to tell a moving run from a stuck one.
 
+`live` carries only what is not on disk yet: a busy run, or a finished one whose record has
+not reached the index. Once the record is there, `live` is dropped — it used to stay for every
+cell run in the session, and its `tail` was the last line of the screen rendering: the bottom
+border of a polars table or `[таблица] 30 строк × 4 колонок`, a repeat of the table's `rows`/`cols` in `last.outputs`.
+For the same reason `tail` skips blank lines and table borders (`└──┴──┘`, `│ --- ┆ --- │`).
+
 The cells' text is not part of the snapshot: the reader has it already — the buffer is
 taken whole in one call, and the boundaries come from the snapshot. Duplicating it would
 mean handing out the same thing two ways and inviting the question "which one is right"

@@ -104,7 +104,8 @@ def test_snapshot_brief_and_cell_filter(tmp_path, capsys):
         "notebook": "/w/a.ipynb", "kernel": {"state": "ready"}, "visible": True,
         "cells": [
             {"id": "e93d", "lang": "python", "start_row": 3, "end_row": 9, "heading": "### 02. Конверсия",
-             "last": {"run_id": 4, "status": "ok", "kind": "table", "rows": 10, "cols": 2}, "stale": True},
+             "last": {"run_id": 4, "status": "ok", "kind": "table",
+                      "outputs": [{"kind": "table", "path": "/o/e93d/4.parquet", "rows": 10, "cols": 2}]}, "stale": True},
             {"id": "f5a8", "lang": "python", "start_row": 12, "end_row": 14, "last": None},
         ],
     }

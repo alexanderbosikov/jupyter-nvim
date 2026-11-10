@@ -42,7 +42,8 @@ $JN insert "$NB" /tmp/jn-ins --before-heading "## Ручные запросы"
 ~~~
 
 Place: `--before-heading` (the whole heading line), `--after-cell <id>`, or `--at-end`.
-Blank lines around the piece are added when missing; the new cells' ids come back in `cell_ids` — run them by those. Refusals:
+Blank lines around the piece are added when missing; the new cells' ids come back in `cell_ids` — run them by those; do not dig them out of
+the snapshot (`grep -A1`). Refusals:
 `not_found` / `ambiguous` (heading), `no_cell`, plus the checks below.
 
 **The plugin checks the document before writing** and refuses (nothing written) if after the

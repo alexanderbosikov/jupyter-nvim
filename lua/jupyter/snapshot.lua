@@ -33,8 +33,11 @@ end
 
 ---Последний прогон ячейки в виде, пригодном для чтения снаружи.
 ---
----Путь абсолютный: в индексе он относительный (§7), а читатель снимка не обязан знать,
----относительно чего именно.
+---Каждый вывод — один раз, в `outputs`, с абсолютным путём: в индексе он относительный
+---(§7), а читатель снимка не обязан знать, относительно чего именно. Раньше главный вывод
+---повторялся ещё и полями `path`/`text`/`rows`/`cols`/`schema` самого прогона — три копии
+---одного длинного пути на ячейку. `kind` остался: какой вывод главный (таблица, иначе
+---первая картинка, иначе текст).
 ---@param store jupyter.Store|nil
 ---@param record table|nil
 ---@return table|nil
@@ -45,30 +48,51 @@ local function last_run(store, record)
     -- все выводы прогона, а не только главный: print рядом с графиком тоже результат
     local outputs = {}
     for _, o in ipairs(require("jupyter.store").outputs_of(record)) do
+        -- у записей до `outputs` размер и схема — только у самой записи
+        local main = o.path == record.path
+        local is_table = o.kind == "table"
         table.insert(outputs, {
             kind = o.kind,
             path = store and store:path_of(o) or nil,
-            rows = o.rows,
-            cols = o.cols,
+            rows = is_table and (o.rows or main and record.rows) or nil,
+            cols = is_table and (o.cols or main and record.cols) or nil,
+            schema = is_table and (o.schema or main and record.schema) or nil,
         })
     end
     return {
         run_id = record.run_id,
         status = record.status,
         kind = record.kind,
-        path = store and store:path_of(record) or nil,
-        -- напечатанное рядом с таблицей или картинкой: у text-прогона оно уже в path
-        text = store and type(record.text) == "string" and store.base and vim.fs.joinpath(store.base, record.text)
-            or nil,
-        rows = record.rows,
-        cols = record.cols,
-        schema = record.schema,
         ename = record.ename,
         duration_ms = record.duration_ms,
         execution_count = record.execution_count,
         started_at = record.started_at,
         outputs = outputs,
     }
+end
+
+-- символы рамок по одному: многобайтные, в класс Lua-шаблона их не собрать
+local FRAME = vim.fn.split("─━│┃┆┊┌┐└┘├┤┬┴┼╞╡╪═╭╮╯╰", [[\zs]])
+
+---Последняя строка вывода, по которой что-то можно понять. Рамки и разделители
+---отрисовки polars (`└──┴──┘`, `╞══╪══╡`, `│ --- ┆ --- │`) и пустые строки пропускаются:
+---по ним не видно ни что посчитано, ни движется ли прогон.
+---@param lines string[]
+---@return string|nil
+local function live_tail(lines)
+    for i = #lines, 1, -1 do
+        local line = lines[i]
+        if type(line) == "string" then
+            local bare = line:gsub("[%s%-]", "")
+            for _, ch in ipairs(FRAME) do
+                bare = bare:gsub(ch, "")
+            end
+            if bare ~= "" then
+                return line
+            end
+        end
+    end
+    return nil
 end
 
 ---Ближайший markdown-заголовок над каждой строкой: `### 02. Конверсия` для ячейки в разделе.
@@ -128,13 +152,19 @@ function M.build(buf, opts)
             -- снаружи так, будто ядро считает все шестнадцать ячеек разом: в очереди
             -- стоит пятнадцать, а признак у них тот же, что у работающей.
             running = exec.is_busy(live)
+        end
+        -- `live` — только то, чего ещё нет на диске: прогон идёт или кончился, но в
+        -- индекс не лёг. Завершённый и записанный прогон весь есть в `last`, а его
+        -- `tail` был последней строкой экранной отрисовки — рамкой таблицы или
+        -- `[таблица] 30 строк × 4 колонок`, повтором `last.rows`/`cols`
+        if live and (running or not (record and record.run_id == live.run_id)) then
             live_run = {
                 status = live.status,
                 run_id = live.run_id,
                 lines = #live.lines,
-                -- последняя строка живого вывода: по ней видно, движется ли прогон.
-                -- В индексе на диске его ещё нет — запись туда идёт по завершении
-                tail = type(live.lines[#live.lines]) == "string" and live.lines[#live.lines] or nil,
+                -- последняя содержательная строка живого вывода: по ней видно, движется
+                -- ли прогон. В индексе на диске его ещё нет — запись туда идёт по завершении
+                tail = live_tail(live.lines),
             }
         end
         table.insert(list, {

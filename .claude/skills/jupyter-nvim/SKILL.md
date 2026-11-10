@@ -1,6 +1,6 @@
 ---
 name: jupyter-nvim
-description: Work with a .ipynb through the user's nvim (jupyter.nvim plugin) — one they have open, or one you created and need to run: open it there yourself and start the kernel, snapshot of cells and runs, results from .jupyter-out (parquet/txt/png), safe edits to the live buffer, running cells and waiting for them. Also any prompt that starts with `[jupyter.nvim]` — it was sent from that notebook. Do NOT use mcp__jupyter__* for these — it needs a Jupyter Server.
+description: Use whenever you create, edit, run or read any .ipynb — the user's notebooks live in nvim (jupyter.nvim plugin), not in Jupyter Lab, even when nothing is open yet. Covers one they have open and one you just created: open it there yourself and start the kernel, snapshot of cells and runs, results from .jupyter-out (parquet/txt/png), safe edits to the live buffer, running cells and waiting for them. Also any prompt that starts with `[jupyter.nvim]` — it was sent from that notebook. Do NOT use mcp__jupyter__* for these — it needs a Jupyter Server. Covers the notebook as a buffer (edit, run, read outputs); what the cells' code calls (run_query, %%sql, build, explain) is nb-utils — for task notebooks load both.
 ---
 
 # A notebook open in nvim (jupyter.nvim)
@@ -13,14 +13,30 @@ Server, where the plugin's kernels never show up.
 The everyday path is below. Topic files lie next to this file — **read the file before
 doing what its row names**; the rules marked ❗ apply even without reading it.
 
-| Read before… | File |
-|---|---|
-| answering a prompt that starts with `[jupyter.nvim]` | `prompt.md` |
-| a `jn` refusal you don't recognise (`other_instance`, exit 4), creating a new notebook, `visible: false` / `other_instances` in the snapshot | `session.md` |
-| interpreting snapshot fields (`stale`, `running`, `live`, `last.outputs`), reading parquet/png/text results, a cell's earlier runs | `reading.md` |
-| any edit: `jn replace`, `jn insert`, deleting cells, opening a claim yourself, magics / `magic_args` | `editing.md` |
-| `jn run` / `jn wait`, its exit codes and refusals, «не выполнялись ячейки выше», long (Redshift) runs | `running.md` |
-| reading outputs with no nvim at all; touching the user's kernel directly (`explain` with notebook params) | `reference.md` |
+| Read before…                                       | File           |
+|----------------------------------------------------|----------------|
+| answering a prompt that starts with                | `prompt.md`    |
+| `[jupyter.nvim]`                                   |                |
+|                                                    |                |
+| a `jn` refusal you don't recognise                 | `session.md`   |
+| (`other_instance`, exit 4), creating a new         |                |
+| notebook, `visible: false` / `other_instances` in  |                |
+| the snapshot                                       |                |
+|                                                    |                |
+| interpreting snapshot fields (`stale`, `running`,  | `reading.md`   |
+| `live`, `last.outputs`), reading parquet/png/text  |                |
+| results, a cell's earlier runs                     |                |
+|                                                    |                |
+| any edit: `jn replace`, `jn insert`, deleting      | `editing.md`   |
+| cells, opening a claim yourself, magics /          |                |
+| `magic_args`                                       |                |
+|                                                    |                |
+| `jn run` / `jn wait`, its exit codes and refusals, | `running.md`   |
+| «не выполнялись ячейки выше», long (Redshift) runs |                |
+|                                                    |                |
+| reading outputs with no nvim at all; touching the  | `reference.md` |
+| user's kernel directly (`explain` with notebook    |                |
+| params)                                            |                |
 
 ❗ Rules that hold everywhere:
 - **Everything goes through `jn`** (`~/Projects/jupyter.nvim/bin/jn`, any `python3`), always
@@ -66,11 +82,17 @@ $JN snapshot "$NB" --brief        # one line per cell: id, lang, rows, heading, 
 $JN text "$NB" --cell e93d        # a cell's body exactly as in the buffer — a ready `old`
 $JN replace "$NB" /tmp/jn-old /tmp/jn-new        # old must occur exactly once
 $JN replace "$NB" --old 'limit = 100' --new 'limit = 1000'   # one line, simple quoting only
-$JN insert "$NB" /tmp/jn-ins --after-cell e93d   # new cells by place, not by anchor text
-$JN run "$NB" af4b 13ca           # run by id and wait; prints status + absolute result paths
+$JN insert "$NB" /tmp/jn-ins --after-cell e93d   # new cells by place; ids in its `cell_ids`
+$JN run "$NB" af4b 13ca           # run by id and wait; status line + the start of each output
+$JN show "$NB" af4b               # all outputs of the last run: table as CSV, text as is
+$JN path "$NB" af4b               # absolute path of its table — for your own polars
+$JN new "$NB" /tmp/jn-new.md      # a new notebook: created, opened, ids given, kernel up
+$JN history "$NB" af4b            # earlier runs; `show --run N` for one of them
 $JN done "$NB" "$CLAIM"           # release a claim
 ```
 
-Results are on disk at the printed paths: `.parquet` (read with
-`~/work/jupyter-utils/.venv/bin/python` + polars — the system `python3` has none), `.txt`,
-`.png`. Details of each command — in its topic file above.
+**Read results with `jn show`, not by hand.** No `read_parquet`, `cat`/`tail` of
+`.jupyter-out`, `ls -t … | head -1` (picks the wrong run), `json.load` of the `.ipynb`
+(misses unsaved edits — `jn text`). Hand-written polars only for what `show` does not
+give: filtering, aggregating, joining — with the path from `jn path`, never a typed-in
+`d3b8/16.parquet` (the run number changes with every run). Details of each command — in its topic file above.

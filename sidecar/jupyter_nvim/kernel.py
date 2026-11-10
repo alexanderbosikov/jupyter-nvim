@@ -644,6 +644,8 @@ class KernelSession:
             return
         record = {
             "sidecar_pid": os.getpid(),
+            # питон с polars: им `jn show` и превью читают parquet, сами они — только stdlib
+            "sidecar_python": sys.executable,
             "owner_pid": os.getppid(),  # nvim
             "socket": self._nvim_socket,
             "kernel_pid": self.kernel_pid(),

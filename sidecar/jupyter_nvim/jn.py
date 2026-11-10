@@ -1,11 +1,14 @@
 """`jn <команда> <ноутбук> …` — агентский API jupyter.nvim без `--remote-expr` руками.
 
     jn open     <nb>                         открыть в nvim человека и поднять ядро
+    jn new      <nb> <файл>                  новый ноутбук из markdown с ```python-ячейками
     jn snapshot <nb> [--brief] [--cell ID…]  снимок: ячейки, id, прогоны
     jn text     <nb> [--cell ID]             текст ноутбука (или тело ячейки) из буфера
     jn run      <nb> <ячейка>… [--no-wait]   запустить по id (или row:N) и дождаться
     jn wait     <nb> <ячейка>[:<прогон>]…    дождаться прогонов (как jn-wait)
     jn history  <nb> <ячейка>                последние прогоны ячейки: статус, ошибка, пути
+    jn show     <nb> <ячейка> [--run N]      все выводы прогона: таблица CSV-ом, текст как есть
+    jn path     <nb> <ячейка> [--kind K]     путь к выводу последнего прогона — для своего polars
     jn replace  <nb> <old-файл> <new-файл>   заменить кусок, встречающийся ровно раз
     jn replace  <nb> --old ТЕКСТ --new ТЕКСТ  то же для коротких строк
     jn insert   <nb> <файл> (--before-heading H | --after-cell ID | --at-end)
@@ -37,7 +40,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable
 
-from . import find_nvim, wait
+from . import find_nvim, peek, wait
 from .outdir import OutDir
 
 NO_NVIM = 4
@@ -59,12 +62,14 @@ def remote(sock: str, fn: str, args: list[Any]) -> dict[str, Any]:
         req = f.name
     try:
         proc = subprocess.run([nvim, "--server", sock, "--remote-expr", EXPR.replace("{path}", json.dumps(req))],
-                              capture_output=True, text=True, timeout=60)
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise NvimError(f"nvim не ответил: {e}") from e
     finally:
         os.unlink(req)
     out = proc.stdout.strip()
+    # на случай, если перед ответом всё же оказались управляющие коды терминала
+    out = out[out.find("{"):] if "{" in out else out
     if not out.startswith("{"):
         err = (proc.stderr or proc.stdout).strip()
         if "jupyter.cli" in err and "not found" in err:
@@ -107,8 +112,9 @@ def brief(snap: dict[str, Any]) -> str:
                 st += f" {last['ename']}"
             parts.append(st)
             kind = last.get("kind")
-            if kind == "table":
-                parts.append(f"table {last.get('rows')}×{last.get('cols')}")
+            tbl = next((o for o in last.get("outputs") or [] if o.get("kind") == "table"), None)
+            if kind == "table" and tbl:
+                parts.append(f"table {tbl.get('rows')}×{tbl.get('cols')}")
             elif kind and kind != "none":
                 parts.append(kind)
         if c.get("stale"):
@@ -196,6 +202,54 @@ def history(notebook: str, cell: str) -> int:
     return 0
 
 
+def show(notebook: str, cell: str, run_id: int | None, rows: int, full: bool) -> int:
+    """Выводы прогона с диска: nvim не нужен, ядро тоже."""
+    out = OutDir(Path(notebook))
+    recs = [r for r in out.records(cell) if run_id is None or r.get("run_id") == run_id]
+    if not recs:
+        what = f"прогона {cell}#{run_id}" if run_id is not None else f"прогонов {cell}"
+        print(f"{what} на диске нет ({out.base}); jn history — какие есть", file=sys.stderr)
+        return 1
+    rec = recs[-1]
+    print(wait.summary(rec, out, paths=False))
+    body = peek.show(out, rec, rows=0 if full else rows, max_text=0 if full else 400)
+    if body:
+        print(body)
+    return 0
+
+
+def out_path(notebook: str, cell: str, kind: str, run_id: int | None) -> int:
+    """Абсолютный путь вывода ячейки: в коде агента вместо `'d3b8/16.parquet'` руками.
+
+    Номер прогона меняется с каждым запуском, и записанный в код путь молча читал бы старый
+    вывод. Картинок за прогон бывает несколько — тогда по пути на строку.
+    """
+    out = OutDir(Path(notebook))
+    recs = [r for r in out.records(cell) if run_id is None or r.get("run_id") == run_id]
+    if not recs:
+        print(f"прогонов {cell} на диске нет ({out.base})", file=sys.stderr)
+        return 1
+    rec = recs[-1]
+    paths = [out.base / o["path"] for o in peek.outputs_of(rec) if o.get("kind") == kind]
+    if not paths:
+        have = ", ".join(sorted({o.get("kind", "?") for o in peek.outputs_of(rec)})) or "ничего"
+        print(f"у {cell} #{rec.get('run_id')} нет вывода {kind} (есть: {have})", file=sys.stderr)
+        return 1
+    for p in paths:
+        print(p)
+    return 0
+
+
+def add_previews(snap: dict[str, Any]) -> None:
+    """Превью в `last.outputs[*].preview`: что получилось, без второго вызова."""
+    out = OutDir(Path(snap["notebook"]))
+    for c in snap.get("cells", []):
+        for item in (c.get("last") or {}).get("outputs") or []:
+            p = peek.preview(out, item)
+            if p is not None:
+                item["preview"] = p
+
+
 def pane(name: str) -> tuple[str, dict[str, Any]] | None:
     """Запись панели агента про ноутбук `<каталог>/<файл>` из шапки [jupyter.nvim]-промпта."""
     pane_id = os.environ.get("TMUX_PANE") or os.environ.get("HERDR_PANE_ID")
@@ -233,10 +287,24 @@ def main(argv: list[str] | None = None, call: Call = remote,
     p.add_argument("cells", nargs="+", metavar="ячейка", help="id или row:N")
     p.add_argument("--no-wait", action="store_true", help="только запустить: печатает пары для jn wait")
     p.add_argument("--timeout", type=float, default=3600)
+    p.add_argument("--no-preview", action="store_true", help="только строка итога, без начала вывода")
     nb_cmd("history").add_argument("cell", metavar="ячейка")
+    p = nb_cmd("path")
+    p.add_argument("cell", metavar="ячейка")
+    p.add_argument("--kind", default="table", choices=["table", "text", "image", "html"])
+    p.add_argument("--run", type=int, default=None, help="номер прогона; без него — последний")
+    p = nb_cmd("new")
+    p.add_argument("file", help="markdown с ```python-ячейками ('-' — stdin)")
+    p.add_argument("--no-kernel", action="store_true", help="ядро не поднимать")
+    p = nb_cmd("show")
+    p.add_argument("cell", metavar="ячейка")
+    p.add_argument("--run", type=int, default=None, help="номер прогона (jn history); без него — последний")
+    p.add_argument("--rows", type=int, default=50, help="строк таблицы, дефолт 50")
+    p.add_argument("--all", action="store_true", help="таблицу и текст целиком")
     p = nb_cmd("wait")
     p.add_argument("cells", nargs="+", metavar="ячейка[:прогон]")
     p.add_argument("--timeout", type=float, default=3600)
+    p.add_argument("--no-preview", action="store_true", help="только строка итога, без начала вывода")
     p = nb_cmd("replace")
     p.add_argument("old", nargs="?", help="файл с текущим текстом куска ('-' — stdin)")
     p.add_argument("new", nargs="?", help="файл с новым текстом")
@@ -275,8 +343,13 @@ def main(argv: list[str] | None = None, call: Call = remote,
     notebook = str(Path(args.notebook).expanduser().resolve())
     if args.cmd == "history":
         return history(notebook, args.cell)
+    if args.cmd == "path":
+        return out_path(notebook, args.cell, args.kind, args.run)
+    if args.cmd == "show":
+        return show(notebook, args.cell, args.run, args.rows, args.all)
     if args.cmd == "wait":
-        return wait.main([notebook, *args.cells, "--timeout", str(args.timeout)])
+        return wait.main([notebook, *args.cells, "--timeout", str(args.timeout),
+                          *(["--no-preview"] if args.no_preview else [])])
 
     sock = args.sock
     if not sock:
@@ -294,12 +367,18 @@ def main(argv: list[str] | None = None, call: Call = remote,
             if args.no_kernel:
                 opts["kernel"] = False
             return _print(nv("agent_open", opts))
+        if args.cmd == "new":
+            opts = {"notebook": notebook, "text": _read(args.file)}
+            if args.no_kernel:
+                opts["kernel"] = False
+            return _print(nv("agent_new", opts))
         if args.cmd == "snapshot":
             snap = nv("snapshot", notebook)
             if snap.get("ok") is False:
                 return _print(snap)
             if args.cell:
                 snap["cells"] = [c for c in snap.get("cells", []) if c.get("id") in args.cell]
+                add_previews(snap)
             print(brief(snap) if args.brief else json.dumps(snap, ensure_ascii=False))
             return 0
         if args.cmd == "text":
@@ -381,7 +460,8 @@ def run(nv: Callable[..., dict[str, Any]], notebook: str, args: argparse.Namespa
     if args.no_wait:
         print(" ".join(pairs))
         return 0
-    return wait.main([notebook, *pairs, "--timeout", str(args.timeout)])
+    return wait.main([notebook, *pairs, "--timeout", str(args.timeout),
+                      *(["--no-preview"] if args.no_preview else [])])
 
 
 if __name__ == "__main__":

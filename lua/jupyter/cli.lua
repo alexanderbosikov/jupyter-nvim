@@ -10,6 +10,7 @@ local M = {}
 ---Что можно позвать. Не весь `jupyter`: только то, что описано агенту в скилле.
 local CALLS = {
     agent_open = true,
+    agent_new = true,
     snapshot = true,
     agent_run = true,
     edit_replace = true,
